@@ -35,16 +35,16 @@ npm install react react-dom
 Wrap your app once near the React root.
 
 ```tsx
-import { AIAgentWeb } from "@mobileai/web";
+import { AIAgent } from "@mobileai/web";
 
 export function Root() {
   return (
-    <AIAgentWeb
+    <AIAgent
       analyticsKey="mobileai_pub_your_key"
       instructions="You are a helpful in-product support agent."
     >
       <App />
-    </AIAgentWeb>
+    </AIAgent>
   );
 }
 ```
@@ -57,15 +57,17 @@ The agent renders a web chat surface by default and builds screen context from t
 - "Export this report"
 - "I need a human"
 
+`AIAgentWeb` remains available as a compatibility alias, but new web apps should import `AIAgent`.
+
 ## Next.js App Router
 
-`AIAgentWeb` is a client component. In Next.js App Router, create a small client shell.
+`AIAgent` is a client component. In Next.js App Router, create a small client shell.
 
 ```tsx
 // app/mobileai-provider.tsx
 "use client";
 
-import { AIAgentWeb } from "@mobileai/web";
+import { AIAgent } from "@mobileai/web";
 import { usePathname, useRouter } from "next/navigation";
 
 export function MobileAIProvider({ children }: { children: React.ReactNode }) {
@@ -73,7 +75,7 @@ export function MobileAIProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   return (
-    <AIAgentWeb
+    <AIAgent
       analyticsKey={process.env.NEXT_PUBLIC_MOBILEAI_KEY}
       pathname={pathname}
       routerAdapter={{
@@ -90,7 +92,7 @@ export function MobileAIProvider({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
-    </AIAgentWeb>
+    </AIAgent>
   );
 }
 ```
@@ -119,9 +121,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 Use `analyticsKey` for the hosted MobileAI proxy, analytics, configured actions, knowledge retrieval, support tickets, escalation, and voice.
 
 ```tsx
-<AIAgentWeb analyticsKey="mobileai_pub_your_key">
+<AIAgent analyticsKey="mobileai_pub_your_key">
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 ### Self-hosted Proxy
@@ -129,12 +131,12 @@ Use `analyticsKey` for the hosted MobileAI proxy, analytics, configured actions,
 Use `proxyUrl` if your backend owns provider keys and model calls.
 
 ```tsx
-<AIAgentWeb
+<AIAgent
   proxyUrl="/api/mobileai/chat"
   proxyHeaders={{ "x-tenant-id": tenantId }}
 >
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 ### Local Prototype
@@ -142,15 +144,15 @@ Use `proxyUrl` if your backend owns provider keys and model calls.
 `apiKey` is supported for local experiments, but do not ship browser-visible provider keys in production.
 
 ```tsx
-<AIAgentWeb provider="gemini" apiKey={import.meta.env.VITE_GEMINI_API_KEY}>
+<AIAgent provider="gemini" apiKey={import.meta.env.VITE_GEMINI_API_KEY}>
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 ## Core Props
 
 ```tsx
-<AIAgentWeb
+<AIAgent
   analyticsKey="mobileai_pub_your_key"
   model="gemini-2.5-flash"
   instructions="Use concise, friendly product-support language."
@@ -168,7 +170,7 @@ Use `proxyUrl` if your backend owns provider keys and model calls.
   }}
 >
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 Common props:
@@ -310,10 +312,10 @@ function HelpButton() {
 You can also hide the default chat and ship a fully custom surface.
 
 ```tsx
-<AIAgentWeb analyticsKey="mobileai_pub_your_key" showChat={false}>
+<AIAgent analyticsKey="mobileai_pub_your_key" showChat={false}>
   <App />
   <CustomAssistantLauncher />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 ## AI Zones
@@ -364,7 +366,7 @@ import {
 Wire block actions back into your app with `blockActionHandlers`.
 
 ```tsx
-<AIAgentWeb
+<AIAgent
   analyticsKey="mobileai_pub_your_key"
   blockActionHandlers={{
     add_to_cart: async ({ productId }) => {
@@ -377,7 +379,7 @@ Wire block actions back into your app with `blockActionHandlers`.
   }}
 >
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 ## Routing
@@ -387,7 +389,7 @@ Give the agent your router API so it can navigate safely.
 ### React Router
 
 ```tsx
-import { AIAgentWeb, type WebRouterAdapter } from "@mobileai/web";
+import { AIAgent, type WebRouterAdapter } from "@mobileai/web";
 import { useLocation, useNavigate } from "react-router-dom";
 
 function MobileAIShell({ children }: { children: React.ReactNode }) {
@@ -403,9 +405,9 @@ function MobileAIShell({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AIAgentWeb routerAdapter={routerAdapter} pathname={location.pathname}>
+    <AIAgent routerAdapter={routerAdapter} pathname={location.pathname}>
       {children}
-    </AIAgentWeb>
+    </AIAgent>
   );
 }
 ```
@@ -431,7 +433,7 @@ const routerAdapter = {
 Support mode changes the assistant into an in-product customer support agent. With `analyticsKey`, it can create MobileAI tickets, restore open tickets, stream operator replies, report issues, and collect CSAT.
 
 ```tsx
-<AIAgentWeb
+<AIAgent
   analyticsKey="mobileai_pub_your_key"
   userContext={{
     userId: "user_123",
@@ -466,13 +468,13 @@ Support mode changes the assistant into an in-product customer support agent. Wi
   }}
 >
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 For Intercom, Zendesk, or your own support backend, use a custom escalation handler.
 
 ```tsx
-<AIAgentWeb
+<AIAgent
   supportMode={{
     enabled: true,
     escalation: {
@@ -488,7 +490,7 @@ For Intercom, Zendesk, or your own support backend, use a custom escalation hand
   }}
 >
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 ## Voice
@@ -496,22 +498,22 @@ For Intercom, Zendesk, or your own support backend, use a custom escalation hand
 Enable voice when your MobileAI project or proxy supports realtime voice.
 
 ```tsx
-<AIAgentWeb analyticsKey="mobileai_pub_your_key" enableVoice>
+<AIAgent analyticsKey="mobileai_pub_your_key" enableVoice>
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 For self-hosted voice traffic:
 
 ```tsx
-<AIAgentWeb
+<AIAgent
   proxyUrl="/api/mobileai/chat"
   voiceProxyUrl="/api/mobileai/voice"
   voiceProxyHeaders={{ "x-session-id": sessionId }}
   enableVoice
 >
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 ## Theming
@@ -519,7 +521,7 @@ For self-hosted voice traffic:
 Use `theme` for global rich UI overrides and `surfaceThemes` when chat, zones, and support should look different.
 
 ```tsx
-<AIAgentWeb
+<AIAgent
   theme={{
     colors: {
       primaryAccent: "#2563eb",
@@ -541,7 +543,7 @@ Use `theme` for global rich UI overrides and `surfaceThemes` when chat, zones, a
   }}
 >
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 ## Screenshots
@@ -549,14 +551,14 @@ Use `theme` for global rich UI overrides and `surfaceThemes` when chat, zones, a
 The web SDK can work from DOM structure alone. If you want to provide screenshots to the model, pass `captureScreenshot`.
 
 ```tsx
-<AIAgentWeb
+<AIAgent
   captureScreenshot={async () => {
     const canvas = await captureVisiblePage();
     return canvas.toDataURL("image/jpeg", 0.8);
   }}
 >
   <App />
-</AIAgentWeb>
+</AIAgent>
 ```
 
 Return a data URL or base64-compatible image string from your capture function.
@@ -585,11 +587,11 @@ Pass `routerAdapter` and `pathname`. Also provide `getAvailableScreens` if your 
 
 ### The package imports fail in SSR
 
-Render `AIAgentWeb` from a client-only boundary. In Next.js App Router, add `"use client"` to the provider component that imports `@mobileai/web`.
+Render `AIAgent` from a client-only boundary. In Next.js App Router, add `"use client"` to the provider component that imports `@mobileai/web`.
 
 ### Actions are not available
 
-`useAction` and `useData` must run inside the `AIAgentWeb` tree. Mount action/data registration components on pages where the actions should be available.
+`useAction` and `useData` must run inside the `AIAgent` tree. Mount action/data registration components on pages where the actions should be available.
 
 ### Human escalation does not create tickets
 
@@ -603,7 +605,7 @@ Check microphone permissions, `enableVoice`, and either `analyticsKey` or `voice
 
 ```ts
 import {
-  AIAgentWeb,
+  AIAgent,
   AIZoneWeb,
   AIZoneWebStateContext,
   RichContentRendererWeb,
