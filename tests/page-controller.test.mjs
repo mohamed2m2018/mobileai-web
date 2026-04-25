@@ -262,6 +262,51 @@ test("PageControllerWeb prioritizes the current viewport on long anchor pages", 
   }
 });
 
+test("PageControllerWeb lists viewport interactive elements before offscreen elements", () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`
+    <main>
+      <button id="old-button">Old offscreen action</button>
+      <button id="visible-button">Visible action</button>
+    </main>
+  `);
+  try {
+    const {
+      document
+    } = dom.window;
+    Object.defineProperty(dom.window, 'innerHeight', {
+      configurable: true,
+      value: 800
+    });
+    const oldButton = document.getElementById('old-button');
+    const visibleButton = document.getElementById('visible-button');
+    setRect(oldButton, {
+      top: -900,
+      left: 20,
+      width: 180,
+      height: 40
+    });
+    setRect(visibleButton, {
+      top: 120,
+      left: 20,
+      width: 180,
+      height: 40
+    });
+    document.elementFromPoint = (_x, y) => y >= 100 && y <= 180 ? visibleButton : null;
+    const controller = new PageControllerWeb(document);
+    const snapshot = controller.buildScreenSnapshot('/dashboard/docs', ['/dashboard/docs']);
+    const visibleLine = snapshot.elementsText.indexOf('Visible action');
+    const oldLine = snapshot.elementsText.indexOf('Old offscreen action');
+    assert.ok(visibleLine > -1, 'Expected visible action in snapshot');
+    assert.ok(oldLine > -1, 'Expected offscreen action in snapshot');
+    assert.ok(visibleLine < oldLine, 'Expected visible action before offscreen action');
+  } finally {
+    cleanup();
+  }
+});
+
 test("PageControllerWeb attaches nearby text and filters covered interactive elements", () => {
   const {
     dom,
@@ -517,6 +562,7 @@ test("WebPlatformAdapter executes tap, type, select, and container scroll action
     });
     scrollArea.scrollBy = options => {
       scrolledBy = options.top;
+      scrollArea.scrollTop += options.top;
     };
     const adapter = new WebPlatformAdapter({
       getRoot: () => document,
@@ -561,7 +607,81 @@ test("WebPlatformAdapter executes tap, type, select, and container scroll action
     assert.match(tapResult, /Tapped/);
     assert.match(typeResult, /Typed "Feedyum"/);
     assert.match(selectResult, /Selected "\/legal"/);
-    assert.match(scrollResult, /Scrolled down/);
+    assert.match(scrollResult, /Scrolled div#scroll-area by/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("WebPlatformAdapter reports when a scroll action does not move", async () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`
+    <main>
+      <div id="scroll-area" style="overflow:auto;height:120px">
+        <button id="deep-button">Deep action</button>
+      </div>
+    </main>
+  `);
+  try {
+    const {
+      document
+    } = dom.window;
+    const scrollArea = document.getElementById('scroll-area');
+    const button = document.getElementById('deep-button');
+    setRect(scrollArea, {
+      top: 10,
+      left: 10,
+      width: 260,
+      height: 120
+    });
+    setRect(button, {
+      top: 20,
+      left: 20,
+      width: 140,
+      height: 36
+    });
+    document.elementFromPoint = () => button;
+    const originalGetComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+    dom.window.getComputedStyle = element => {
+      const style = originalGetComputedStyle(element);
+      if (element === scrollArea) {
+        return {
+          ...style,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          display: 'block',
+          visibility: 'visible',
+          opacity: '1'
+        };
+      }
+      return style;
+    };
+    Object.defineProperty(scrollArea, 'scrollHeight', {
+      configurable: true,
+      value: 1200
+    });
+    Object.defineProperty(scrollArea, 'clientHeight', {
+      configurable: true,
+      value: 120
+    });
+    scrollArea.scrollTop = 1080;
+    scrollArea.scrollBy = () => {};
+    const adapter = new WebPlatformAdapter({
+      getRoot: () => document,
+      getCurrentScreenName: () => '/dashboard/docs',
+      getAvailableScreens: () => ['/dashboard/docs']
+    });
+    const snapshot = adapter.getScreenSnapshot();
+    const scrollable = snapshot.elements.find(element => element.type === 'scrollable');
+    assert.ok(scrollable, 'Expected scrollable area to be indexed');
+    const scrollResult = await adapter.executeAction({
+      type: 'scroll',
+      direction: 'down',
+      containerIndex: scrollable.index
+    });
+    assert.match(scrollResult, /Already at the bottom/);
   } finally {
     cleanup();
   }
