@@ -42,6 +42,30 @@ test('execution results do not expose raw rich content strings as chat text', ()
   assert.equal(result.message, 'Of course! Here are the pricing plans.');
 });
 
+test('normalizes serialized block replies without exposing raw JSON', () => {
+  const result = normalizeExecutionResult({
+    success: true,
+    message: "[{\"type\":\"block\",\"blockType\":\"FactCard\",\"props\":{\"title\":\"Pro Plan Details\",\"text\":\"The Pro plan is designed for startups shipping real support.\"}}]",
+  });
+
+  assert.equal(result.reply[0].type, 'block');
+  assert.equal(result.reply[0].props.body, 'The Pro plan is designed for startups shipping real support.');
+  assert.equal(result.previewText, 'Pro Plan Details\nThe Pro plan is designed for startups shipping real support.');
+  assert.equal(result.message, 'Pro Plan Details\nThe Pro plan is designed for startups shipping real support.');
+});
+
+test('falls back to readable text for loose block replies', () => {
+  const result = normalizeExecutionResult({
+    success: true,
+    message: "[{'type':'block','blockType':'FactCard','props':{'title':'Pro Plan Details','text':'The Pro plan is designed for startups shipping real support.'}}]",
+  });
+
+  assert.equal(result.reply[0].type, 'text');
+  assert.equal(result.reply[0].content, 'Pro Plan Details\nThe Pro plan is designed for startups shipping real support.');
+  assert.equal(result.message, 'Pro Plan Details\nThe Pro plan is designed for startups shipping real support.');
+  assert.equal(result.message.includes("[{"), false);
+});
+
 test('plain text extraction handles parsed rich content strings', () => {
   const text = richContentToPlainText('[{"type":"text","content":"No raw array here."}]');
 
