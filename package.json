@@ -1,0 +1,45 @@
+{
+  "name": "@mobileai/web",
+  "version": "0.9.37",
+  "description": "Embedded AI copilot for first-party web apps with rich chat content and DOM-first actions.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohamed2m2018/mobileai-web.git"
+  },
+  "homepage": "https://github.com/mohamed2m2018/mobileai-web#readme",
+  "bugs": {
+    "url": "https://github.com/mohamed2m2018/mobileai-web/issues"
+  },
+  "main": "index.mjs",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test tests/**/*.test.mjs"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-dom": "*"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": false
+    },
+    "react-dom": {
+      "optional": false
+    }
+  },
+  "dependencies": {
+    "@google/genai": "^1.50.1"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}

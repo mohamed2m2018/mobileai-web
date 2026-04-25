@@ -1,0 +1,25 @@
+import * as web from "./module/web/index.js";
+export const {
+  AIAgentWeb,
+  AIZoneWeb,
+  AIZoneWebStateContext,
+  RichContentRendererWeb,
+  WebPlatformAdapter,
+  ProductCardWeb,
+  FactCardWeb,
+  ActionCardWeb,
+  ComparisonCardWeb,
+  FormCardWeb,
+  webBlockDefinitions,
+  useAction,
+  useData,
+  useAI,
+  RichUIProvider,
+  VoiceService,
+  CSATSurvey,
+  buildSupportPrompt,
+  createEscalateTool,
+  createReportIssueTool,
+  EscalationSocket,
+} = web;
+export default web;

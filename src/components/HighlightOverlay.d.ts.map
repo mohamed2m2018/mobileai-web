@@ -1,0 +1,1 @@
+{"version":3,"file":"HighlightOverlay.d.ts","sourceRoot":"","sources":["../../../../src/components/HighlightOverlay.tsx"],"names":[],"mappings":"AAGA,MAAM,WAAW,kBAAkB;IACjC,KAAK,EAAE,MAAM,CAAC;IACd,KAAK,EAAE,MAAM,CAAC;IACd,KAAK,EAAE,MAAM,CAAC;IACd,MAAM,EAAE,MAAM,CAAC;IACf,OAAO,EAAE,MAAM,CAAC;IAChB,iBAAiB,CAAC,EAAE,MAAM,CAAC;CAC5B;AAED,wBAAgB,gBAAgB,mDAmE/B"}
