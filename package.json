@@ -1,7 +1,7 @@
 {
   "name": "@mobileai/web",
-  "version": "0.9.40",
-  "description": "Embedded AI copilot for first-party web apps with rich chat content and DOM-first actions.",
+  "version": "0.9.41",
+  "description": "React web SDK for MobileAI Cloud by Twomilia with DOM-first actions, rich chat content, and support escalation.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mohamed2m2018/mobileai-web.git"

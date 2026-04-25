@@ -1,14 +1,16 @@
 # @mobileai/web
 
-AI support that understands and acts inside your web app.
+React web SDK for MobileAI Cloud by Twomilia.
 
-`@mobileai/web` embeds a DOM-aware AI support agent in React applications. It can inspect the current page, explain what the user is seeing, guide them through workflows, fill forms, select controls, scroll containers, call app-owned actions, query live data sources, render rich UI blocks, and escalate to a human operator through MobileAI Cloud.
+`@mobileai/web` embeds a DOM-aware AI support agent in React applications. It can inspect the current page, explain what the user is seeing, guide them through workflows, fill forms, select controls, scroll containers, call app-owned actions, query live data sources, render rich UI blocks, and escalate to a human operator through MobileAI Cloud by Twomilia.
 
 Use it when a normal chatbot is not enough because the user needs help inside the actual product UI.
 
-## Why MobileAI Web
+The canonical product domain is `https://mobileai.cloud`. Use `MobileAI Cloud by Twomilia` for public copy, `MobileAI Cloud` for short product references, and `Twomilia` for the company name.
 
-Most support widgets sit beside your app. MobileAI works inside it.
+## Why MobileAI Cloud for Web
+
+Most support widgets sit beside your app. MobileAI Cloud works inside it.
 
 - Understands visible DOM structure, labels, forms, tables, buttons, links, iframes, and shadow roots
 - Executes UI actions such as tap, type, select, scroll, slider adjustment, date input, navigation, and guided highlights
@@ -114,9 +116,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
 ## Configuration Modes
 
-### MobileAI Cloud
+### MobileAI Cloud by Twomilia
 
-Use `analyticsKey` for the hosted MobileAI proxy, analytics, configured actions, knowledge retrieval, support tickets, escalation, and voice.
+Use `analyticsKey` for the hosted MobileAI Cloud proxy, analytics, configured actions, knowledge retrieval, support tickets, escalation, and voice.
 
 ```tsx
 <AIAgent analyticsKey="mobileai_pub_your_key">
@@ -175,7 +177,7 @@ Common props:
 
 | Prop | Purpose |
 | --- | --- |
-| `analyticsKey` | Enables MobileAI Cloud features and hosted proxy |
+| `analyticsKey` | Enables MobileAI Cloud by Twomilia features and hosted proxy |
 | `proxyUrl` | Self-hosted text proxy URL |
 | `voiceProxyUrl` | Self-hosted voice proxy URL |
 | `instructions` | Product-specific agent instructions |
@@ -428,7 +430,7 @@ const routerAdapter = {
 
 ## Support Mode
 
-Support mode changes the assistant into an in-product customer support agent. With `analyticsKey`, it can create MobileAI tickets, restore open tickets, stream operator replies, report issues, and collect CSAT.
+Support mode changes the assistant into an in-product customer support agent. With `analyticsKey`, it can create MobileAI Cloud tickets, restore open tickets, stream operator replies, report issues, and collect CSAT.
 
 ```tsx
 <AIAgent
@@ -593,7 +595,7 @@ Render `AIAgent` from a client-only boundary. In Next.js App Router, add `"use c
 
 ### Human escalation does not create tickets
 
-Check that `analyticsKey` is present, `supportMode.enabled` is true, and the project is configured in MobileAI Cloud.
+Check that `analyticsKey` is present, `supportMode.enabled` is true, and the project is configured in MobileAI Cloud by Twomilia.
 
 ### Voice does not connect
 
