@@ -30,6 +30,7 @@ const CLOSED_TICKET_STATUSES = new Set(['closed', 'resolved']);
 const DEFAULT_WEB_VOICE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
 const TRANSCRIPT_MERGE_WINDOW_MS = 3200;
 const VOICE_TRANSCRIPT_SETTLE_MS = 650;
+const COMPOSER_CANCEL_ARM_MS = 900;
 
 function WebAIBadge({
   size = 28
@@ -970,6 +971,7 @@ export function AIAgent({
   const conversationIdRef = useRef(persistedState?.conversationId || null);
   const syncedMessageCountRef = useRef(Array.isArray(persistedState?.messages) ? persistedState.messages.length : 0);
   const remoteConversationHydratedRef = useRef(false);
+  const requestStartedAtRef = useRef(0);
   const lastVoiceTranscriptRef = useRef({ role: null, roleLastAt: 0 });
   const voiceTranscriptDraftRef = useRef({ role: null, text: '', final: false, id: null, lastAt: 0 });
   const voiceTranscriptSettleTimerRef = useRef(null);
@@ -1710,6 +1712,7 @@ export function AIAgent({
     const userMessage = appendUserMessage(trimmed);
     if (!userMessage) return;
     setInput('');
+    requestStartedAtRef.current = Date.now();
     setIsLoading(true);
     setStatusText('Thinking...');
     setIsOpen(true);
@@ -1730,6 +1733,7 @@ export function AIAgent({
       setLastResult(result);
       options?.onResult?.(result);
     } finally {
+      requestStartedAtRef.current = 0;
       setIsLoading(false);
       setStatusText('');
     }
@@ -1763,7 +1767,14 @@ export function AIAgent({
     remoteConversationHydratedRef.current = true;
   }, []);
 
-  const cancel = useCallback(() => {
+  const cancel = useCallback(options => {
+    if (options?.source === 'composer') {
+      const elapsed = Date.now() - requestStartedAtRef.current;
+      if (requestStartedAtRef.current && elapsed < COMPOSER_CANCEL_ARM_MS) {
+        logger.warn('AIAgent', `Ignoring early composer cancel ${elapsed}ms after send`);
+        return;
+      }
+    }
     runtime.cancel();
     setIsLoading(false);
     setStatusText('');
@@ -3128,7 +3139,9 @@ export function AIAgent({
           children: [/*#__PURE__*/_jsx(WebAgentOverlay, {
             visible: isLoading,
             statusText: statusText,
-            onCancel: isLoading ? cancel : undefined
+            onCancel: isLoading ? () => cancel({
+              source: 'overlay'
+            }) : undefined
           }), /*#__PURE__*/_jsx("div", {
             style: {
               width: '100%',
@@ -3375,7 +3388,9 @@ export function AIAgent({
               type: "button",
               onClick: () => {
                 if (isLoading) {
-                  cancel();
+                  cancel({
+                    source: 'composer'
+                  });
                   return;
                 }
                 if (pendingPrompt?.kind === 'freeform') {
