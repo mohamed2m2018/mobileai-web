@@ -7,6 +7,33 @@ function makeTextNode(content, id) {
     id
   };
 }
+function decodeLooseStringValue(value) {
+  return value.replace(/\\u([0-9a-fA-F]{4})/g, (_, code) => String.fromCharCode(parseInt(code, 16))).replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t').replace(/\\(["'\\])/g, '$1');
+}
+function pushLooseTextNodes(input, nodes, seen) {
+  const valuePattern = `(?:"((?:\\\\.|[^"\\\\])*)"|'((?:\\\\.|[^'\\\\])*)')`;
+  const patterns = [new RegExp(`\\{[\\s\\S]*?["']type["']\\s*:\\s*["']text["'][\\s\\S]*?["']content["']\\s*:\\s*${valuePattern}[\\s\\S]*?\\}`, 'g'), new RegExp(`\\{[\\s\\S]*?["']content["']\\s*:\\s*${valuePattern}[\\s\\S]*?["']type["']\\s*:\\s*["']text["'][\\s\\S]*?\\}`, 'g')];
+  patterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(input)) !== null) {
+      const content = match[1] ?? match[2] ?? match[3] ?? match[4] ?? '';
+      const decoded = decodeLooseStringValue(content);
+      if (!seen.has(decoded)) {
+        seen.add(decoded);
+        nodes.push(makeTextNode(decoded, `text-${nodes.length}`));
+      }
+    }
+  });
+}
+function tryParseLooseRichContentString(candidate) {
+  if (!/["'](?:type|content|reply)["']\s*:/.test(candidate)) {
+    return null;
+  }
+  const nodes = [];
+  const seen = new Set();
+  pushLooseTextNodes(candidate, nodes, seen);
+  return nodes.length > 0 ? nodes : null;
+}
 function tryParseRichContentString(input) {
   if (typeof input !== 'string') return null;
   const trimmed = input.trim();
@@ -21,11 +48,12 @@ function tryParseRichContentString(input) {
       return parsed;
     }
     if (parsed && typeof parsed === 'object') {
+      if (typeof parsed.type === 'string') return [parsed];
       if (Array.isArray(parsed.content)) return parsed.content;
       if (Array.isArray(parsed.reply)) return parsed.reply;
     }
   } catch {
-    return null;
+    return tryParseLooseRichContentString(candidate);
   }
   return null;
 }
@@ -63,6 +91,12 @@ export function normalizeRichContent(input, fallbackText = '') {
     }
     return createTextContent(input);
   }
+  if (input && typeof input === 'object') {
+    const normalized = normalizeRichContent([input], fallbackText);
+    if (normalized.length > 0) {
+      return normalized;
+    }
+  }
   return createTextContent(fallbackText);
 }
 export function richContentToPlainText(input, fallbackText = '') {
@@ -96,7 +130,7 @@ export function normalizeExecutionResult(result) {
     ...result,
     reply,
     previewText,
-    message: result.message || previewText
+    message: previewText || result.message
   };
 }
 //# sourceMappingURL=richContent.js.map
