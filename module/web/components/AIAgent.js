@@ -31,6 +31,37 @@ const DEFAULT_WEB_VOICE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
 const TRANSCRIPT_MERGE_WINDOW_MS = 3200;
 const VOICE_TRANSCRIPT_SETTLE_MS = 650;
 const COMPOSER_CANCEL_ARM_MS = 900;
+const WEB_POPUP_WIDTH = 340;
+const WEB_LAUNCHER_SIZE = 60;
+const WEB_FLOATING_EDGE_PADDING = 12;
+
+function clampFloatingPosition(left, top, width, height) {
+  if (typeof window === 'undefined') {
+    return {
+      left,
+      top
+    };
+  }
+  const maxLeft = Math.max(WEB_FLOATING_EDGE_PADDING, window.innerWidth - width - WEB_FLOATING_EDGE_PADDING);
+  const maxTop = Math.max(WEB_FLOATING_EDGE_PADDING, window.innerHeight - height - WEB_FLOATING_EDGE_PADDING);
+  return {
+    left: Math.min(Math.max(WEB_FLOATING_EDGE_PADDING, left), maxLeft),
+    top: Math.min(Math.max(WEB_FLOATING_EDGE_PADDING, top), maxTop)
+  };
+}
+
+function getEstimatedPopupSize() {
+  if (typeof window === 'undefined') {
+    return {
+      width: WEB_POPUP_WIDTH,
+      height: 520
+    };
+  }
+  return {
+    width: Math.min(WEB_POPUP_WIDTH, window.innerWidth - 32),
+    height: Math.min(window.innerHeight * 0.65, 520)
+  };
+}
 
 function WebAIBadge({
   size = 28
@@ -1189,12 +1220,7 @@ export function AIAgent({
     }
     const panelWidth = dragState.width;
     const panelHeight = dragState.height;
-    const nextLeft = Math.min(Math.max(12, event.clientX - dragState.offsetX), Math.max(12, window.innerWidth - panelWidth - 12));
-    const nextTop = Math.min(Math.max(12, event.clientY - dragState.offsetY), Math.max(12, window.innerHeight - panelHeight - 12));
-    setPopupPosition({
-      left: nextLeft,
-      top: nextTop
-    });
+    setPopupPosition(clampFloatingPosition(event.clientX - dragState.offsetX, event.clientY - dragState.offsetY, panelWidth, panelHeight));
   }, []);
 
   const handleWindowPointerUp = useCallback(() => {
@@ -1226,10 +1252,6 @@ export function AIAgent({
       width: rect.width,
       height: rect.height
     };
-    setPopupPosition({
-      left: rect.left,
-      top: rect.top
-    });
     window.addEventListener('pointermove', handleWindowPointerMove);
     window.addEventListener('pointerup', handleWindowPointerUp);
   }, [handleWindowPointerMove, handleWindowPointerUp]);
@@ -1251,6 +1273,28 @@ export function AIAgent({
     const rect = event.currentTarget.getBoundingClientRect();
     startDragFromRect(rect, event.clientX, event.clientY, 'launcher');
   }, [startDragFromRect]);
+
+  const openFromLauncher = useCallback(event => {
+    if (suppressLauncherClickRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (popupPosition && event.currentTarget && typeof event.currentTarget.getBoundingClientRect === 'function' && typeof window !== 'undefined') {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const popupSize = getEstimatedPopupSize();
+      setPopupPosition(clampFloatingPosition(rect.right - popupSize.width, rect.bottom - popupSize.height, popupSize.width, popupSize.height));
+    }
+    setIsOpen(true);
+  }, [popupPosition]);
+
+  const minimizePopup = useCallback(() => {
+    if (popupPosition && popupRef.current && typeof window !== 'undefined') {
+      const rect = popupRef.current.getBoundingClientRect();
+      setPopupPosition(clampFloatingPosition(rect.right - WEB_LAUNCHER_SIZE, rect.bottom - WEB_LAUNCHER_SIZE, WEB_LAUNCHER_SIZE, WEB_LAUNCHER_SIZE));
+    }
+    setIsOpen(false);
+  }, [popupPosition]);
 
   useEffect(() => {
     persistChatState(persistenceKey, {
@@ -1293,10 +1337,10 @@ export function AIAgent({
   useEffect(() => {
     if (!isOpen || !popupPosition || !popupRef.current || typeof window === 'undefined') return;
     const rect = popupRef.current.getBoundingClientRect();
-    const maxLeft = Math.max(12, window.innerWidth - rect.width - 12);
-    const maxTop = Math.max(12, window.innerHeight - rect.height - 12);
-    const nextLeft = Math.min(Math.max(12, rect.left), maxLeft);
-    const nextTop = Math.min(Math.max(12, rect.top), maxTop);
+    const {
+      left: nextLeft,
+      top: nextTop
+    } = clampFloatingPosition(rect.left, rect.top, rect.width, rect.height);
     if (Math.abs(nextLeft - rect.left) > 1 || Math.abs(nextTop - rect.top) > 1) {
       setPopupPosition({
         left: nextLeft,
@@ -3201,7 +3245,8 @@ export function AIAgent({
           bottom: popupPosition ? 'auto' : 20,
           left: popupPosition?.left,
           top: popupPosition?.top,
-          width: 340,
+          width: WEB_POPUP_WIDTH,
+          height: 'min(65vh, 520px)',
           maxWidth: 'calc(100vw - 32px)',
           maxHeight: 'min(65vh, 520px)',
           zIndex: 9999,
@@ -3243,7 +3288,7 @@ export function AIAgent({
             })
           }), /*#__PURE__*/_jsx("button", {
             type: "button",
-            onClick: () => setIsOpen(false),
+            onClick: minimizePopup,
             "aria-label": "Minimize AI chat",
             style: {
               position: 'absolute',
@@ -3522,19 +3567,12 @@ export function AIAgent({
           },
           children: /*#__PURE__*/_jsx("button", {
             type: "button",
-            onClick: event => {
-              if (suppressLauncherClickRef.current) {
-                event.preventDefault();
-                event.stopPropagation();
-                return;
-              }
-              setIsOpen(true);
-            },
+            onClick: openFromLauncher,
             onPointerDown: handleLauncherPointerDown,
             "aria-label": "Open AI chat",
             style: {
-              width: 60,
-              height: 60,
+              width: WEB_LAUNCHER_SIZE,
+              height: WEB_LAUNCHER_SIZE,
               borderRadius: 999,
               border: 'none',
               background: '#7B68EE',
