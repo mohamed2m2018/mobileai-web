@@ -171,6 +171,97 @@ test("PageControllerWeb serializes visible table rows and status patterns for da
   }
 });
 
+test("PageControllerWeb prioritizes the current viewport on long anchor pages", () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`
+    <main>
+      <aside>
+        <a href="#why">Why MobileAI</a>
+        <a href="#code">Code Examples</a>
+      </aside>
+      <section id="why">
+        <h2>Why MobileAI</h2>
+        <p>Earlier documentation content that is no longer in the viewport.</p>
+      </section>
+      <section id="code">
+        <h2>Code Examples</h2>
+        <p>Production-ready snippets for the most common use cases.</p>
+        <pre><code>import { AIAgent } from 'experimental-stuff';</code></pre>
+      </section>
+    </main>
+  `, "https://example.com/dashboard/docs#code");
+  try {
+    const {
+      document
+    } = dom.window;
+    Object.defineProperty(dom.window, 'innerHeight', {
+      configurable: true,
+      value: 800
+    });
+    const why = document.getElementById('why');
+    const whyHeading = why.querySelector('h2');
+    const whyText = why.querySelector('p');
+    const code = document.getElementById('code');
+    const codeHeading = code.querySelector('h2');
+    const codeText = code.querySelector('p');
+    const codeBlock = code.querySelector('pre');
+    setRect(why, {
+      top: -1200,
+      left: 280,
+      width: 700,
+      height: 280
+    });
+    setRect(whyHeading, {
+      top: -1180,
+      left: 300,
+      width: 240,
+      height: 40
+    });
+    setRect(whyText, {
+      top: -1120,
+      left: 300,
+      width: 520,
+      height: 80
+    });
+    setRect(code, {
+      top: 90,
+      left: 280,
+      width: 700,
+      height: 520
+    });
+    setRect(codeHeading, {
+      top: 110,
+      left: 300,
+      width: 260,
+      height: 42
+    });
+    setRect(codeText, {
+      top: 165,
+      left: 300,
+      width: 580,
+      height: 50
+    });
+    setRect(codeBlock, {
+      top: 235,
+      left: 300,
+      width: 620,
+      height: 260
+    });
+
+    const controller = new PageControllerWeb(document);
+    const snapshot = controller.buildScreenSnapshot('/dashboard/docs', ['/dashboard/docs']);
+    const viewportBlock = snapshot.elementsText.split('Interactive elements:')[0];
+    assert.match(viewportBlock, /Visible viewport structure:/);
+    assert.match(viewportBlock, /Code Examples/);
+    assert.match(viewportBlock, /Production-ready snippets/);
+    assert.doesNotMatch(viewportBlock, /Earlier documentation content/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("PageControllerWeb attaches nearby text and filters covered interactive elements", () => {
   const {
     dom,

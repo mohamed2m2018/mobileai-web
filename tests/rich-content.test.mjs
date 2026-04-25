@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createAIMessage,
+  markdownToPlainText,
   normalizeExecutionResult,
   normalizeRichContent,
   richContentToPlainText,
@@ -70,4 +72,30 @@ test('plain text extraction handles parsed rich content strings', () => {
   const text = richContentToPlainText('[{"type":"text","content":"No raw array here."}]');
 
   assert.equal(text, 'No raw array here.');
+});
+
+test('markdown formatting is removed from previews and plain text', () => {
+  assert.equal(
+    markdownToPlainText('**AI support:** 92% handled\n- `Fast` replies\n*Human fallback*'),
+    'AI support: 92% handled\nFast replies\nHuman fallback'
+  );
+
+  const result = normalizeExecutionResult({
+    success: true,
+    message: 'Most useful: **AI is taking real load off your team.**',
+  });
+
+  assert.equal(result.message, 'Most useful: AI is taking real load off your team.');
+});
+
+test('explicit message previews are markdown-cleaned', () => {
+  const message = createAIMessage({
+    id: 'msg-1',
+    role: 'assistant',
+    content: 'Visible **bold** content',
+    previewText: '**Bold preview**',
+    timestamp: Date.now(),
+  });
+
+  assert.equal(message.previewText, 'Bold preview');
 });

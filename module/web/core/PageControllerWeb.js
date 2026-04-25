@@ -11,6 +11,12 @@ const DEFAULT_CONFIG = {
   traverseShadowRoots: true,
   traverseIframes: true
 };
+const STRUCTURE_VIEWPORT_CONFIG = {
+  ...DEFAULT_CONFIG,
+  viewportMode: 'expanded',
+  viewportExpansion: 240
+};
+const BROAD_CONTAINER_KINDS = new Set(['main', 'section', 'article', 'aside', 'dialog', 'header', 'footer']);
 function isHTMLElement(value) {
   return !!value && typeof value === 'object' && 'tagName' in value;
 }
@@ -92,6 +98,10 @@ function rectIntersectsViewport(rect, win, config) {
   if (mode === 'full') return true;
   const expansion = mode === 'expanded' ? getViewportExpansion(config) : 0;
   return !(rect.bottom < -expansion || rect.top > win.innerHeight + expansion || rect.right < -expansion || rect.left > win.innerWidth + expansion);
+}
+function elementIntersectsViewport(element, win, config = STRUCTURE_VIEWPORT_CONFIG) {
+  if (!win || !isHTMLElement(element)) return false;
+  return getClientRectsSafe(element).some(rect => rectIntersectsViewport(rect, win, config));
 }
 function isVisible(element, win, config = DEFAULT_CONFIG) {
   if (!win) return false;
@@ -817,26 +827,41 @@ export class PageControllerWeb {
     const title = normalizeText(this.doc.title);
     if (title) lines.push(`Page title: ${truncateText(title, 140)}`);
     const startNodeId = this.rootNodeId;
-    const structureLines = [];
+    const viewportStructureLines = [];
+    const fallbackStructureLines = [];
     const emitted = new Set();
-    const walk = (node, depth) => {
-      if (structureLines.length >= 44 || !node) return;
+    const emitStructureLine = (target, node, depth) => {
+      if (target.length >= 44 || emitted.has(node.id)) return;
+      emitted.add(node.id);
+      target.push(`${'  '.repeat(Math.max(0, depth))}- ${node.summary}`);
+    };
+    const walk = (node, depth, parentInViewport = false) => {
+      if ((viewportStructureLines.length >= 44 && fallbackStructureLines.length >= 44) || !node) return;
+      const nodeInViewport = node.kind === 'element' ? elementIntersectsViewport(node.element, getNodeWindow(node.element), STRUCTURE_VIEWPORT_CONFIG) : parentInViewport;
       if (node.kind === 'element') {
         const summary = node.summary;
         const shouldEmit = !!summary && (node.semanticKind !== 'generic' || node.interactiveIndex === undefined || summary.startsWith('Text:'));
-        if (shouldEmit && !emitted.has(node.id)) {
-          emitted.add(node.id);
-          structureLines.push(`${'  '.repeat(Math.max(0, depth))}- ${summary}`);
+        if (shouldEmit) {
+          if (nodeInViewport && !BROAD_CONTAINER_KINDS.has(node.semanticKind)) {
+            emitStructureLine(viewportStructureLines, node, depth);
+          } else if (fallbackStructureLines.length < 44 && !emitted.has(node.id)) {
+            fallbackStructureLines.push(`${'  '.repeat(Math.max(0, depth))}- ${summary}`);
+          }
         }
         if (node.semanticKind === 'metric-card') return;
-      } else if (node.kind === 'text' && node.text.length >= 48 && structureLines.length < 44) {
-        structureLines.push(`${'  '.repeat(Math.max(0, depth))}- Text: ${truncateText(node.text, 160)}`);
+      } else if (node.kind === 'text' && node.text.length >= 48) {
+        const line = `${'  '.repeat(Math.max(0, depth))}- Text: ${truncateText(node.text, 160)}`;
+        if (nodeInViewport && viewportStructureLines.length < 44) {
+          viewportStructureLines.push(line);
+        } else if (fallbackStructureLines.length < 44) {
+          fallbackStructureLines.push(line);
+        }
       }
       const children = this.flatTree.filter(candidate => candidate.parentId === node.id);
-      children.forEach(child => walk(child, node.kind === 'element' && node.semanticKind !== 'generic' ? depth + 1 : depth));
+      children.forEach(child => walk(child, node.kind === 'element' && node.semanticKind !== 'generic' ? depth + 1 : depth, nodeInViewport));
     };
     const roots = this.flatTree.filter(node => node.parentId === startNodeId);
-    roots.forEach(node => walk(node, 0));
+    roots.forEach(node => walk(node, 0, false));
     const standaloneMetrics = Array.from(this.base.querySelectorAll('.metric-card')).filter(element => isVisible(element, getNodeWindow(element), this.config)).slice(0, 8).map(card => getStructureSummary(card, this.doc, getNodeWindow(card)).replace(/^Metric card:\s*/, '')).filter(Boolean);
     if (standaloneMetrics.length > 0) {
       lines.push('');
@@ -845,9 +870,10 @@ export class PageControllerWeb {
         lines.push(`- ${metric}`);
       });
     }
+    const structureLines = viewportStructureLines.length > 0 ? viewportStructureLines : fallbackStructureLines;
     if (structureLines.length > 0) {
       lines.push('');
-      lines.push('Visible structure:');
+      lines.push(viewportStructureLines.length > 0 ? 'Visible viewport structure:' : 'Visible structure:');
       lines.push(...structureLines);
     }
     const interactiveLines = this.buildInteractiveLines();
