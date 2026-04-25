@@ -4,7 +4,7 @@ import type { AgentConfig } from '../../core/types';
 import type { SupportModeConfig } from '../../support/types';
 import type { RichUIThemeOverride } from '../../theme/RichUITheme';
 import { type WebRouterAdapter } from '../core/WebPlatformAdapter';
-export interface AIAgentWebProps extends Omit<AgentConfig, 'platformAdapter' | 'router' | 'pathname' | 'interceptNativeAlerts'> {
+export interface AIAgentProps extends Omit<AgentConfig, 'platformAdapter' | 'router' | 'pathname' | 'interceptNativeAlerts'> {
     children: React.ReactNode;
     routerAdapter?: WebRouterAdapter;
     pathname?: string;
@@ -33,5 +33,5 @@ export interface AIAgentWebProps extends Omit<AgentConfig, 'platformAdapter' | '
     pushToken?: string;
     pushTokenType?: 'fcm' | 'expo' | 'apns';
 }
-export declare function AIAgentWeb({ children, provider, apiKey, proxyUrl, proxyHeaders, voiceProxyUrl, voiceProxyHeaders, analyticsKey, userContext, pushToken, pushTokenType, supportMode, model, verifier, supportStyle, maxSteps, stepDelay, customTools, instructions, onBeforeStep, onAfterStep, onBeforeTask, onAfterTask, onTokenUsage, knowledgeBase, knowledgeMaxTokens, enableUIControl, enableVoice, allowedActionNames, screenMap, maxTokenBudget, maxCostUSD, interactionMode, mcpServerUrl, debug, showChat, defaultOpen, inputPlaceholder, theme, surfaceThemes, blockActionHandlers, routerAdapter, pathname, requireConsent, captureScreenshot, persistenceKey, }: AIAgentWebProps): import("react/jsx-runtime").JSX.Element;
-//# sourceMappingURL=AIAgentWeb.d.ts.map
+export declare function AIAgent({ children, provider, apiKey, proxyUrl, proxyHeaders, voiceProxyUrl, voiceProxyHeaders, analyticsKey, userContext, pushToken, pushTokenType, supportMode, model, verifier, supportStyle, maxSteps, stepDelay, customTools, instructions, onBeforeStep, onAfterStep, onBeforeTask, onAfterTask, onTokenUsage, knowledgeBase, knowledgeMaxTokens, enableUIControl, enableVoice, allowedActionNames, screenMap, maxTokenBudget, maxCostUSD, interactionMode, mcpServerUrl, debug, showChat, defaultOpen, inputPlaceholder, theme, surfaceThemes, blockActionHandlers, routerAdapter, pathname, requireConsent, captureScreenshot, persistenceKey, }: AIAgentProps): import("react/jsx-runtime").JSX.Element;
+//# sourceMappingURL=AIAgent.d.ts.map
