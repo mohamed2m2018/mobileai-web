@@ -287,6 +287,114 @@ test("PageControllerWeb auto-discovers page routes from live anchors", () => {
   }
 });
 
+test("PageControllerWeb route discovery handles common website patterns", () => {
+  const cases = [
+    {
+      name: "saas dashboard",
+      url: "https://example.com/dashboard",
+      body: `
+        <main>
+          <nav aria-label="Primary">
+            <a href="/dashboard/reports">Reports</a>
+            <a href="settings?tab=billing">Billing settings</a>
+            <a href="/docs#quick-start">Quick start</a>
+            <a href="/dashboard/reports">Duplicate reports</a>
+            <a href="javascript:void(0)">Do nothing</a>
+            <a href="mailto:support@example.com">Email support</a>
+            <a data-mobileai-ignore="true" href="/internal-overlay">Overlay route</a>
+          </nav>
+        </main>
+      `,
+      included: [
+        "/dashboard/reports (Reports)",
+        "/settings?tab=billing (Billing settings)",
+        "/docs#quick-start (Quick start)"
+      ],
+      excluded: ["javascript:", "mailto:", "/internal-overlay", "Duplicate reports"]
+    },
+    {
+      name: "commerce storefront",
+      url: "https://shop.example.com/store",
+      body: `
+        <main>
+          <a href="products/red-shoe?sku=1">Red running shoe</a>
+          <a href="/cart" aria-label="Cart"></a>
+          <a href="https://help.example.com/returns">Returns policy</a>
+        </main>
+      `,
+      included: [
+        "/products/red-shoe?sku=1 (Red running shoe)",
+        "/cart (Cart)",
+        "https://help.example.com/returns (Returns policy)"
+      ],
+      excluded: []
+    },
+    {
+      name: "docs hash navigation",
+      url: "https://docs.example.com/guide",
+      body: `
+        <main>
+          <aside>
+            <a href="#install">Install</a>
+            <a href="#api-reference">API reference</a>
+          </aside>
+        </main>
+      `,
+      included: ["#install (Install)", "#api-reference (API reference)"],
+      excluded: []
+    }
+  ];
+
+  for (const fixture of cases) {
+    const {
+      dom,
+      cleanup
+    } = createDom(fixture.body, fixture.url);
+    try {
+      const controller = new PageControllerWeb(dom.window.document);
+      const snapshot = controller.buildScreenSnapshot(new URL(fixture.url).pathname, []);
+      const routesLine = snapshot.elementsText.split('\n').find(line => line.startsWith('Page routes:')) || '';
+      fixture.included.forEach(expected => {
+        assert.ok(routesLine.includes(expected), `${fixture.name} should include ${expected}`);
+      });
+      fixture.excluded.forEach(unexpected => {
+        assert.ok(!routesLine.includes(unexpected), `${fixture.name} should exclude ${unexpected}`);
+      });
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test("PageControllerWeb discovers routes inside shadow roots and same-origin iframes", () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`<main><div id="web-component-host"></div><iframe id="embedded-app" title="Embedded app"></iframe></main>`, "https://example.com/app");
+  try {
+    const {
+      document
+    } = dom.window;
+    const host = document.getElementById('web-component-host');
+    const shadowRoot = host.attachShadow({
+      mode: 'open'
+    });
+    shadowRoot.innerHTML = `<nav><a href="/shadow/settings">Shadow settings</a></nav>`;
+    const iframe = document.getElementById('embedded-app');
+    const restoreIframePatch = patchWindowForTests(iframe.contentWindow);
+    iframe.contentDocument.body.innerHTML = `<nav><a href="/embedded/reports">Embedded reports</a></nav>`;
+
+    const controller = new PageControllerWeb(document);
+    const snapshot = controller.buildScreenSnapshot('/app', []);
+    const routesLine = snapshot.elementsText.split('\n').find(line => line.startsWith('Page routes:')) || '';
+    assert.match(routesLine, /\/shadow\/settings \(Shadow settings\)/);
+    assert.match(routesLine, /\/embedded\/reports \(Embedded reports\)/);
+    restoreIframePatch();
+  } finally {
+    cleanup();
+  }
+});
+
 test("PageControllerWeb lists viewport interactive elements before offscreen elements", () => {
   const {
     dom,
@@ -403,6 +511,51 @@ test("WebPlatformAdapter prefers live anchors over router fallback guesses", asy
     });
     assert.equal(pushedHref, '/dashboard/analytics/funnels');
     assert.match(result, /Navigated to "\/dashboard\/analytics\/funnels" for "Where people drop off"/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("WebPlatformAdapter resolves navigation labels inside shadow roots and same-origin iframes", async () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`<main><div id="web-component-host"></div><iframe id="embedded-app" title="Embedded app"></iframe></main>`, "https://example.com/app");
+  try {
+    const {
+      document
+    } = dom.window;
+    const host = document.getElementById('web-component-host');
+    host.attachShadow({
+      mode: 'open'
+    }).innerHTML = `<a href="/shadow/profile">Shadow profile</a>`;
+    const iframe = document.getElementById('embedded-app');
+    const restoreIframePatch = patchWindowForTests(iframe.contentWindow);
+    iframe.contentDocument.body.innerHTML = `<a href="/embedded/billing">Embedded billing</a>`;
+    const pushedHrefs = [];
+    const adapter = new WebPlatformAdapter({
+      getRoot: () => document,
+      router: {
+        resolveHref: screen => `/${String(screen).toLowerCase().replace(/\s+/g, '-')}`,
+        push: href => {
+          pushedHrefs.push(href);
+        }
+      },
+      getCurrentScreenName: () => '/app',
+      getAvailableScreens: () => []
+    });
+
+    await adapter.executeAction({
+      type: 'navigate',
+      screen: 'Shadow profile'
+    });
+    await adapter.executeAction({
+      type: 'navigate',
+      screen: 'Embedded billing'
+    });
+
+    assert.deepEqual(pushedHrefs, ['/shadow/profile', '/embedded/billing']);
+    restoreIframePatch();
   } finally {
     cleanup();
   }

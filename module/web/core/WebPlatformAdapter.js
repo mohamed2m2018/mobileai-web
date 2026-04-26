@@ -94,6 +94,32 @@ function normalizeHref(rawHref, win) {
     return rawHref.startsWith('/') || rawHref.startsWith('#') ? rawHref : null;
   }
 }
+function collectRouteAnchors(root) {
+  const anchors = [];
+  const seen = new Set();
+  const visitRoot = currentRoot => {
+    if (!currentRoot || typeof currentRoot.querySelectorAll !== 'function') return;
+    Array.from(currentRoot.querySelectorAll('a[href]')).forEach(anchor => {
+      if (isHTMLElementLike(anchor) && !seen.has(anchor)) {
+        seen.add(anchor);
+        anchors.push(anchor);
+      }
+    });
+    Array.from(currentRoot.querySelectorAll('*')).forEach(element => {
+      if (isHTMLElementLike(element) && element.shadowRoot) visitRoot(element.shadowRoot);
+    });
+    Array.from(currentRoot.querySelectorAll('iframe')).forEach(frame => {
+      try {
+        const iframeDoc = frame.contentDocument || frame.contentWindow?.document;
+        if (iframeDoc?.body) visitRoot(iframeDoc.body);
+      } catch {
+        // Cross-origin frames are intentionally opaque.
+      }
+    });
+  };
+  visitRoot(root);
+  return anchors;
+}
 function routeMatchScore(target, anchor, href) {
   const targetText = normalizeRouteText(target);
   if (!targetText) return 0;
@@ -592,9 +618,9 @@ export class WebPlatformAdapter {
     const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
     const queryRoot = isDocumentNode(root) ? root : root || doc;
     let best = null;
-    Array.from(queryRoot?.querySelectorAll?.('a[href]') || []).forEach(anchor => {
+    collectRouteAnchors(queryRoot).forEach(anchor => {
       if (!isHTMLElementLike(anchor) || anchor.closest?.('[data-mobileai-ignore="true"]')) return;
-      const href = normalizeHref(anchor.getAttribute('href') || '', win);
+      const href = normalizeHref(anchor.getAttribute('href') || '', anchor.ownerDocument?.defaultView || win);
       if (!href) return;
       const score = routeMatchScore(target, anchor, href);
       if (score > 0 && (!best || score > best.score)) {

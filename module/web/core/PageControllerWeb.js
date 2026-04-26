@@ -236,8 +236,35 @@ function collectPageRoutes(root, win, maxItems = 32) {
   const routes = [];
   const seen = new Set();
   if (!root || !win) return routes;
-  Array.from(root.querySelectorAll?.('a[href]') || []).filter(node => isHTMLElement(node) && !isIgnoredByAgent(node)).forEach(anchor => {
-    const href = getRouteHref(anchor, win);
+  const anchors = [];
+  const seenAnchors = new Set();
+  const visitRoot = currentRoot => {
+    if (!currentRoot || typeof currentRoot.querySelectorAll !== 'function') return;
+    Array.from(currentRoot.querySelectorAll('a[href]')).forEach(anchor => {
+      if (isHTMLElement(anchor) && !seenAnchors.has(anchor)) {
+        seenAnchors.add(anchor);
+        anchors.push(anchor);
+      }
+    });
+    if (DEFAULT_CONFIG.traverseShadowRoots) {
+      Array.from(currentRoot.querySelectorAll('*')).filter(isHTMLElement).forEach(element => {
+        if (element.shadowRoot) visitRoot(element.shadowRoot);
+      });
+    }
+    if (DEFAULT_CONFIG.traverseIframes) {
+      Array.from(currentRoot.querySelectorAll('iframe')).filter(isHTMLElement).forEach(frame => {
+        try {
+          const iframeDoc = frame.contentDocument || frame.contentWindow?.document;
+          if (iframeDoc?.body) visitRoot(iframeDoc.body);
+        } catch {
+          // Cross-origin frames are intentionally opaque.
+        }
+      });
+    }
+  };
+  visitRoot(root);
+  anchors.filter(node => !isIgnoredByAgent(node)).forEach(anchor => {
+    const href = getRouteHref(anchor, anchor.ownerDocument?.defaultView || win);
     if (!href || seen.has(href)) return;
     const label = getElementLabel(anchor, anchor.ownerDocument);
     const route = {
