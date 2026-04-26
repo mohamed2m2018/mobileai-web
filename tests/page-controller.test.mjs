@@ -262,6 +262,31 @@ test("PageControllerWeb prioritizes the current viewport on long anchor pages", 
   }
 });
 
+test("PageControllerWeb auto-discovers page routes from live anchors", () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`
+    <main>
+      <nav aria-label="Product">
+        <a href="/pricing">Pricing</a>
+        <a href="/analytics/funnels">Where people drop off</a>
+        <a href="mailto:support@example.com">Email support</a>
+      </nav>
+    </main>
+  `, "https://example.com/app");
+  try {
+    const controller = new PageControllerWeb(dom.window.document);
+    const snapshot = controller.buildScreenSnapshot('/app', []);
+    const routesLine = snapshot.elementsText.split('\n').find(line => line.startsWith('Page routes:')) || '';
+    assert.match(routesLine, /\/pricing \(Pricing\)/);
+    assert.match(routesLine, /\/analytics\/funnels \(Where people drop off\)/);
+    assert.doesNotMatch(routesLine, /mailto:/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("PageControllerWeb lists viewport interactive elements before offscreen elements", () => {
   const {
     dom,
@@ -302,6 +327,44 @@ test("PageControllerWeb lists viewport interactive elements before offscreen ele
     assert.ok(visibleLine > -1, 'Expected visible action in snapshot');
     assert.ok(oldLine > -1, 'Expected offscreen action in snapshot');
     assert.ok(visibleLine < oldLine, 'Expected visible action before offscreen action');
+  } finally {
+    cleanup();
+  }
+});
+
+test("WebPlatformAdapter resolves navigation targets from live anchor labels", async () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`
+    <main>
+      <nav>
+        <a href="/settings/profile">Account settings</a>
+        <a href="/analytics/funnels">Where people drop off</a>
+      </nav>
+    </main>
+  `, "https://example.com/app");
+  try {
+    const {
+      document
+    } = dom.window;
+    let pushedHref = null;
+    const adapter = new WebPlatformAdapter({
+      getRoot: () => document,
+      router: {
+        push: href => {
+          pushedHref = href;
+        }
+      },
+      getCurrentScreenName: () => '/app',
+      getAvailableScreens: () => []
+    });
+    const result = await adapter.executeAction({
+      type: 'navigate',
+      screen: 'Where people drop off'
+    });
+    assert.equal(pushedHref, '/analytics/funnels');
+    assert.match(result, /Navigated to "\/analytics\/funnels" for "Where people drop off"/);
   } finally {
     cleanup();
   }

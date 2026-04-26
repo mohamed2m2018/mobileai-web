@@ -215,6 +215,40 @@ function getElementLabel(element, doc) {
 function getElementName(element, doc) {
   return normalizeText(getLabelFromAria(element, doc) || element.getAttribute('title') || '');
 }
+function getRouteHref(element, win) {
+  if (!isAnchorElement(element)) return '';
+  const rawHref = element.getAttribute('href') || '';
+  if (!rawHref || rawHref.startsWith('javascript:') || rawHref.startsWith('mailto:') || rawHref.startsWith('tel:')) {
+    return '';
+  }
+  try {
+    const url = new URL(rawHref, win?.location?.href || 'https://example.com/');
+    const currentOrigin = win?.location?.origin;
+    if (currentOrigin && url.origin !== currentOrigin) {
+      return url.href;
+    }
+    return `${url.pathname}${url.search}${url.hash}` || '/';
+  } catch {
+    return rawHref.startsWith('/') || rawHref.startsWith('#') ? rawHref : '';
+  }
+}
+function collectPageRoutes(root, win, maxItems = 32) {
+  const routes = [];
+  const seen = new Set();
+  if (!root || !win) return routes;
+  Array.from(root.querySelectorAll?.('a[href]') || []).filter(node => isHTMLElement(node) && !isIgnoredByAgent(node)).forEach(anchor => {
+    const href = getRouteHref(anchor, win);
+    if (!href || seen.has(href)) return;
+    const label = getElementLabel(anchor, anchor.ownerDocument);
+    const route = {
+      href,
+      label: label && label !== href ? truncateText(label, 80) : ''
+    };
+    seen.add(href);
+    routes.push(route);
+  });
+  return routes.slice(0, maxItems);
+}
 function getScrollData(element, win) {
   if (!win?.getComputedStyle) return null;
   const style = win.getComputedStyle(element);
@@ -556,6 +590,10 @@ function buildPageStateLines(doc, win, screenName, availableScreens) {
   const lines = [`Current route: ${screenName}`, `Current URL: ${truncateText(win.location?.href || screenName, 160)}`];
   if (availableScreens?.length > 0) {
     lines.push(`Known routes: ${availableScreens.slice(0, 32).join(', ')}`);
+  }
+  const pageRoutes = collectPageRoutes(doc.body || doc.documentElement, win);
+  if (pageRoutes.length > 0) {
+    lines.push(`Page routes: ${pageRoutes.map(route => route.label ? `${route.href} (${route.label})` : route.href).join(', ')}`);
   }
   lines.push(`Viewport: ${win.innerWidth}x${win.innerHeight} | Page: ${pageWidth}x${pageHeight}`);
   lines.push(`Scroll position: ${pixelsAbove}px above, ${pixelsBelow}px below, page ${Math.max(1, Math.round(currentPage + 1))} of ${Math.max(1, Math.round(totalPages))}`);
