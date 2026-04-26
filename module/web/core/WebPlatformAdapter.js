@@ -586,8 +586,6 @@ export class WebPlatformAdapter {
   resolveNavigationHref(screen, params) {
     const target = typeof screen === 'string' ? screen.trim() : '';
     if (!target) return null;
-    const resolved = this.options.router?.resolveHref?.(target, params);
-    if (resolved) return resolved;
     if (target.startsWith('/') || target.startsWith('#')) return target;
     const root = this.options.getRoot?.();
     const doc = getDocumentFromRoot(root);
@@ -606,7 +604,10 @@ export class WebPlatformAdapter {
         };
       }
     });
-    return best?.href || null;
+    if (best?.href) return best.href;
+    const resolved = this.options.router?.resolveHref?.(target, params);
+    if (resolved) return resolved;
+    return null;
   }
 }
 //# sourceMappingURL=WebPlatformAdapter.js.map
