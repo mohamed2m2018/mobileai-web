@@ -364,6 +364,13 @@ function getElementSemanticKind(element) {
   if (element.matches(TEXT_CONTAINER_SELECTOR)) return 'text';
   return 'generic';
 }
+function escapeCssIdentifier(value) {
+  const cssEscape = globalThis.CSS?.escape;
+  if (typeof cssEscape === 'function') {
+    return cssEscape(String(value));
+  }
+  return String(value).replace(/^\d/, match => `\\3${match} `).replace(/[^a-zA-Z0-9_-]/g, match => `\\${match}`);
+}
 function buildElementSelector(element) {
   const parts = [];
   let current = element;
@@ -378,7 +385,7 @@ function buildElementSelector(element) {
       parts.unshift(`${tag}[data-id="${dataId}"]`);
       break;
     }
-    const className = typeof current.className === 'string' ? current.className.split(/\s+/).filter(Boolean).slice(0, 2).join('.') : '';
+    const className = typeof current.className === 'string' ? current.className.split(/\s+/).filter(Boolean).slice(0, 2).map(escapeCssIdentifier).join('.') : '';
     let segment = className ? `${tag}.${className}` : tag;
     const parent = current.parentElement;
     if (parent) {
@@ -502,7 +509,14 @@ function buildTableStatusPattern(element, headers, win) {
   return Array.from(counts.entries()).map(([status, count]) => `${count} ${status}`).join(', ');
 }
 function buildListSummary(element, win) {
-  const items = Array.from(element.querySelectorAll(':scope > li, [role="option"], [role="menuitem"]')).filter(node => isHTMLElement(node) && isVisible(node, win, DEFAULT_CONFIG)).slice(0, 5).map(node => truncateText(getTextContent(node), 100)).filter(Boolean);
+  const directItems = Array.from(element.children || []).filter(node => isHTMLElement(node) && node.tagName.toLowerCase() === 'li');
+  const roleItems = Array.from(element.querySelectorAll('[role="option"], [role="menuitem"]')).filter(isHTMLElement);
+  const seen = new Set();
+  const items = [...directItems, ...roleItems].filter(node => {
+    if (seen.has(node)) return false;
+    seen.add(node);
+    return isVisible(node, win, DEFAULT_CONFIG);
+  }).slice(0, 5).map(node => truncateText(getTextContent(node), 100)).filter(Boolean);
   return items.length > 0 ? `List: ${items.join(' | ')}` : '';
 }
 function getIframeSummary(element) {
