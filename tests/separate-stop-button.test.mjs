@@ -16,3 +16,12 @@ test('loading state uses a separate stop button instead of replacing send', () =
   assert.match(webChat, /"aria-label":\s*"Send message"/);
   assert.doesNotMatch(webChat, /children:\s*isLoading\s*\?\s*\/\*#__PURE__\*\/_jsx\(WebStopIcon/);
 });
+
+test('composer stop keeps loading state until the active runtime settles', () => {
+  const webChat = read('../module/web/components/AIAgent.js');
+  const cancelBody = webChat.slice(webChat.indexOf('const cancel = useCallback'), webChat.indexOf('const enterVoiceMode'));
+
+  assert.match(cancelBody, /runtime\.cancel\(\);/);
+  assert.match(cancelBody, /setStatusText\('Stopping\.\.\.'\);/);
+  assert.doesNotMatch(cancelBody, /setIsLoading\(false\);/);
+});
