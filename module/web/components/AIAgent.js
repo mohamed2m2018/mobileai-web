@@ -3563,15 +3563,35 @@ export function AIAgent({
                 overflowY: 'auto',
                 font: 'inherit'
               }
-            }), /*#__PURE__*/_jsx("button", {
+            }), isLoading ? /*#__PURE__*/_jsx("button", {
               type: "button",
+              onClick: () => cancel({
+                source: 'composer'
+              }),
+              "aria-label": "Stop AI request",
+              style: {
+                width: 44,
+                height: 44,
+                borderRadius: 999,
+                border: '1px solid rgba(255,255,255,0.14)',
+                background: 'rgba(255,255,255,0.1)',
+                color: '#fff',
+                cursor: 'pointer',
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0
+              },
+              children: /*#__PURE__*/_jsx(WebStopIcon, {
+                size: 18,
+                color: "#fff"
+              })
+            }) : null, /*#__PURE__*/_jsx("button", {
+              type: "button",
+              disabled: isLoading || !input.trim(),
+              "aria-label": "Send message",
               onClick: () => {
-                if (isLoading) {
-                  cancel({
-                    source: 'composer'
-                  });
-                  return;
-                }
                 if (pendingPrompt?.kind === 'freeform') {
                   const pending = pendingPrompt;
                   const answer = input.trim();
@@ -3594,17 +3614,15 @@ export function AIAgent({
                 fontSize: 13,
                 fontWeight: 800,
                 lineHeight: 1,
-                cursor: isLoading ? 'default' : 'pointer',
+                cursor: isLoading || !input.trim() ? 'default' : 'pointer',
+                opacity: isLoading || !input.trim() ? 0.5 : 1,
                 flexShrink: 0,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 padding: 0
               },
-              children: isLoading ? /*#__PURE__*/_jsx(WebStopIcon, {
-                size: 18,
-                color: "#fff"
-              }) : /*#__PURE__*/_jsx(WebSendArrowIcon, {
+              children: /*#__PURE__*/_jsx(WebSendArrowIcon, {
                 size: 18,
                 color: "#fff"
               })
