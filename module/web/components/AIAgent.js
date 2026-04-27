@@ -2350,13 +2350,17 @@ export function AIAgent({
         style: {
           alignSelf: isUser ? 'flex-end' : 'flex-start',
           maxWidth: '85%',
+          minWidth: 0,
           borderRadius: 16,
           padding: '12px 14px',
           background: isUser ? '#7B68EE' : 'rgba(255,255,255,0.08)',
           color: '#fff',
           borderBottomRightRadius: isUser ? 4 : 16,
           borderBottomLeftRadius: isUser ? 16 : 4,
-          marginBottom: 8
+          marginBottom: 8,
+          overflow: 'hidden',
+          overflowWrap: 'anywhere',
+          wordBreak: 'break-word'
         },
         children: /*#__PURE__*/_jsx(RichContentRendererWeb, {
           content: message.content,
@@ -2826,11 +2830,15 @@ export function AIAgent({
         style: {
           alignSelf: entry.role === 'user' ? 'flex-end' : 'stretch',
           maxWidth: entry.role === 'user' ? '82%' : '100%',
+          minWidth: 0,
           borderRadius: 20,
           padding: '12px 14px',
           background: entry.role === 'user' ? 'rgba(123, 104, 238, 0.22)' : 'rgba(255,255,255,0.08)',
           color: '#fff',
-          opacity: entry.final ? 1 : 0.72
+          opacity: entry.final ? 1 : 0.72,
+          overflow: 'hidden',
+          overflowWrap: 'anywhere',
+          wordBreak: 'break-word'
         },
         children: /*#__PURE__*/_jsx(RichContentRendererWeb, {
           content: entry.text,
@@ -2960,10 +2968,14 @@ export function AIAgent({
             style: {
               alignSelf: isUser ? 'flex-end' : 'stretch',
               maxWidth: isUser ? '82%' : '100%',
+              minWidth: 0,
               borderRadius: 20,
               padding: '12px 14px',
               background: isUser ? 'rgba(123, 104, 238, 0.22)' : 'rgba(255,255,255,0.08)',
-              color: '#fff'
+              color: '#fff',
+              overflow: 'hidden',
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word'
             },
             children: /*#__PURE__*/_jsx(RichContentRendererWeb, {
               content: message.content,
@@ -3054,6 +3066,10 @@ export function AIAgent({
             .mobileai-web-chat-bubble * {
               -webkit-user-select: text;
               user-select: text;
+              overflow-wrap: anywhere;
+              word-break: break-word;
+              min-width: 0;
+              max-width: 100%;
             }
             .mobileai-web-chat-bubble::selection,
             .mobileai-web-chat-bubble *::selection {
