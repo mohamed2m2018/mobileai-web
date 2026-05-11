@@ -2092,7 +2092,35 @@ export function AIAgent({
   // ─── Execute ──────────────────────────────────────────────────
 
   const handleSend = useCallback(async (message, options) => {
-    if (!message.trim() || isThinking) return;
+    // Extract images from options (passed by AgentChatBar as 2nd arg)
+    const userImages = Array.isArray(options) ? options : options?.images || undefined;
+    const hasImages = userImages && userImages.length > 0;
+
+    // When images are present and agent is thinking: cancel current execution, start fresh
+    if (hasImages && isThinking) {
+      logger.info('AIAgent', 'User sent images while thinking — cancelling current execution to start fresh');
+      if (askUserResolverRef.current) {
+        const resolver = askUserResolverRef.current;
+        askUserResolverRef.current = null;
+        pendingAskUserKindRef.current = null;
+        pendingAppApprovalRef.current = false;
+        setPendingApprovalQuestion(null);
+        resolver('__CANCELLED__');
+      }
+      runtime.cancel();
+      // Poll until runtime stops (cancelAndWait pattern)
+      const deadline = Date.now() + 5000;
+      while (runtime.getIsRunning() && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      setIsThinking(false);
+      setStatusText('');
+      // Fall through to fresh execution below
+    } else if (!message.trim() && !hasImages) {
+      return;
+    } else if (isThinking && !hasImages) {
+      return;
+    }
 
     // ── Apple Guideline 5.1.2(i): Consent gate ──────────────────
     // If consent is required but not yet granted, show the consent dialog
@@ -2149,12 +2177,21 @@ export function AIAgent({
       return;
     }
 
-    // Append user message to AI thread
+    // Append user message to AI thread (with image nodes if present)
+    const userContentNodes = [];
+    if (message.trim()) {
+      userContentNodes.push({ type: 'text', content: message.trim() });
+    }
+    if (hasImages) {
+      for (const img of userImages) {
+        userContentNodes.push({ type: 'image', uri: `data:${img.mimeType};base64,${img.base64}` });
+      }
+    }
     setMessages(prev => [...prev, createAIMessage({
       id: Date.now().toString() + Math.random(),
       role: 'user',
-      content: message.trim(),
-      previewText: message.trim(),
+      content: userContentNodes.length > 0 ? userContentNodes : message.trim(),
+      previewText: message.trim() || (hasImages ? `[${userImages.length} image(s)]` : ''),
       timestamp: Date.now()
     })]);
 
@@ -2326,7 +2363,7 @@ export function AIAgent({
       const result = await runtime.execute(message, messages.map(entry => ({
         role: entry.role,
         content: entry.previewText
-      })));
+      })), userImages);
       let normalizedResult = normalizeExecutionResult(result);
       const reportStep = result.steps?.find(step => step.action.name === 'report_issue');
       if (reportStep && typeof reportStep.action.output === 'string') {

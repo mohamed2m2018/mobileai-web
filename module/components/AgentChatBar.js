@@ -169,6 +169,58 @@ function DictationButton({
 
 // ─── Text Input Row ────────────────────────────────────────────
 
+// ─── Image Compression Helper (Web Canvas) ───────────────────
+
+function compressImageWeb(base64Data, mimeType) {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve({ base64: base64Data, mimeType });
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      const MAX_DIM = 1024;
+      let { width, height } = img;
+      if (width > MAX_DIM || height > MAX_DIM) {
+        const scale = MAX_DIM / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      const compressed = canvas.toDataURL('image/jpeg', 0.3);
+      const compressedBase64 = compressed.split(',')[1] || compressed;
+      resolve({ base64: compressedBase64, mimeType: 'image/jpeg' });
+    };
+    img.onerror = () => {
+      resolve({ base64: base64Data, mimeType });
+    };
+    const prefix = base64Data.startsWith('data:') ? base64Data : `data:${mimeType};base64,${base64Data}`;
+    img.src = prefix;
+  });
+}
+
+// ─── Attachment Icon ──────────────────────────────────────────
+
+function AttachmentIcon({ size = 18, color = '#fff' }) {
+  return /*#__PURE__*/_jsx("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: color,
+    strokeWidth: 2,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    children: /*#__PURE__*/_jsx("path", {
+      d: "M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"
+    })
+  });
+}
+
 function TextInputRow({
   text,
   setText,
@@ -176,9 +228,14 @@ function TextInputRow({
   onCancel,
   isThinking,
   isArabic,
-  theme
+  theme,
+  pendingImages,
+  setPendingImages
 }) {
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const hasImages = pendingImages && pendingImages.length > 0;
+  const canSend = text.trim() || hasImages;
   const handleSendWithClear = () => {
     onSend();
     // Imperatively clear the native TextInput — controlled `value=''` can be
@@ -187,52 +244,124 @@ function TextInputRow({
     inputRef.current?.clear();
   };
   const handlePrimaryAction = () => {
+    // Allow send with images even when isThinking (bypass like RN)
+    if (hasImages) {
+      handleSendWithClear();
+      return;
+    }
     if (!text.trim()) return;
     handleSendWithClear();
   };
+  const handleFileChange = async (event) => {
+    const files = event?.target?.files;
+    if (!files || files.length === 0) return;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file.type.startsWith('image/')) continue;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const dataUrl = e.target?.result;
+        if (typeof dataUrl !== 'string') return;
+        const rawBase64 = dataUrl.split(',')[1] || '';
+        const compressed = await compressImageWeb(rawBase64, file.type);
+        setPendingImages(prev => [...prev, compressed]);
+      };
+      reader.readAsDataURL(file);
+    }
+    // Reset file input so the same file can be picked again
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+  const removePendingImage = (idx) => {
+    setPendingImages(prev => prev.filter((_, i) => i !== idx));
+  };
+  const isWeb = Platform.OS === 'web';
   return /*#__PURE__*/_jsxs(View, {
-    style: styles.inputRow,
-    children: [/*#__PURE__*/_jsx(TextInput, {
-      ref: inputRef,
-      style: [styles.input, isArabic && styles.inputRTL, theme?.inputBackgroundColor ? {
-        backgroundColor: theme.inputBackgroundColor
-      } : undefined, theme?.textColor ? {
-        color: theme.textColor
-      } : undefined],
-      placeholder: isArabic ? 'اكتب طلبك...' : 'Ask AI...',
-      placeholderTextColor: theme?.textColor ? `${theme.textColor}66` : '#999',
-      value: text,
-      onChangeText: setText,
-      onSubmitEditing: handleSendWithClear,
-      returnKeyType: "default",
-      blurOnSubmit: false,
-      editable: !isThinking,
-      multiline: true
-    }), isThinking ? /*#__PURE__*/_jsx(Pressable, {
-      style: [styles.stopButton, theme?.primaryColor ? {
-        borderColor: theme.primaryColor
-      } : undefined],
-      onPress: onCancel,
-      accessibilityLabel: "Stop AI Agent request",
-      children: /*#__PURE__*/_jsx(StopIcon, {
-        size: 18,
-        color: theme?.textColor || '#fff'
-      })
-    }) : null, /*#__PURE__*/_jsx(DictationButton, {
-      language: isArabic ? 'ar' : 'en',
-      onTranscript: t => setText(t),
-      disabled: isThinking
-    }), /*#__PURE__*/_jsx(Pressable, {
-      style: [styles.sendButton, (!text.trim() || isThinking) && styles.sendButtonDisabled, theme?.primaryColor ? {
-        backgroundColor: theme.primaryColor
-      } : undefined],
-      onPress: handlePrimaryAction,
-      disabled: isThinking || !text.trim(),
-      accessibilityLabel: "Send request to AI Agent",
-      children: /*#__PURE__*/_jsx(SendArrowIcon, {
-        size: 18,
-        color: theme?.textColor || '#fff'
-      })
+    style: { gap: 8, flexShrink: 0 },
+    children: [hasImages && /*#__PURE__*/_jsx(View, {
+      style: styles.pendingImagesRow,
+      children: pendingImages.map((img, idx) => /*#__PURE__*/_jsxs(View, {
+        style: styles.pendingImageThumb,
+        children: [isWeb ? /*#__PURE__*/_jsx("img", {
+          src: `data:${img.mimeType};base64,${img.base64}`,
+          style: { width: 56, height: 56, borderRadius: 8, objectFit: 'cover' },
+          alt: "pending"
+        }) : /*#__PURE__*/_jsx(View, {
+          style: { width: 56, height: 56, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.1)' }
+        }), /*#__PURE__*/_jsx(Pressable, {
+          style: styles.pendingImageRemove,
+          onPress: () => removePendingImage(idx),
+          accessibilityLabel: "Remove image",
+          hitSlop: 6,
+          children: /*#__PURE__*/_jsx(Text, {
+            style: styles.pendingImageRemoveText,
+            children: "×"
+          })
+        })]
+      }, `pending-img-${idx}`))
+    }), /*#__PURE__*/_jsxs(View, {
+      style: styles.inputRow,
+      children: [isWeb && /*#__PURE__*/_jsx("input", {
+        ref: fileInputRef,
+        type: "file",
+        accept: "image/*",
+        multiple: true,
+        style: { display: 'none' },
+        onChange: handleFileChange
+      }), /*#__PURE__*/_jsx(Pressable, {
+        style: [styles.attachButton],
+        onPress: () => {
+          if (isWeb && fileInputRef.current) {
+            fileInputRef.current.click();
+          }
+        },
+        accessibilityLabel: "Attach image",
+        hitSlop: 8,
+        children: /*#__PURE__*/_jsx(AttachmentIcon, {
+          size: 18,
+          color: theme?.textColor || '#fff'
+        })
+      }), /*#__PURE__*/_jsx(TextInput, {
+        ref: inputRef,
+        style: [styles.input, isArabic && styles.inputRTL, theme?.inputBackgroundColor ? {
+          backgroundColor: theme.inputBackgroundColor
+        } : undefined, theme?.textColor ? {
+          color: theme.textColor
+        } : undefined],
+        placeholder: isArabic ? 'اكتب طلبك...' : 'Ask AI...',
+        placeholderTextColor: theme?.textColor ? `${theme.textColor}66` : '#999',
+        value: text,
+        onChangeText: setText,
+        onSubmitEditing: handleSendWithClear,
+        returnKeyType: "default",
+        blurOnSubmit: false,
+        editable: !isThinking || hasImages,
+        multiline: true
+      }), isThinking && !hasImages ? /*#__PURE__*/_jsx(Pressable, {
+        style: [styles.stopButton, theme?.primaryColor ? {
+          borderColor: theme.primaryColor
+        } : undefined],
+        onPress: onCancel,
+        accessibilityLabel: "Stop AI Agent request",
+        children: /*#__PURE__*/_jsx(StopIcon, {
+          size: 18,
+          color: theme?.textColor || '#fff'
+        })
+      }) : null, /*#__PURE__*/_jsx(DictationButton, {
+        language: isArabic ? 'ar' : 'en',
+        onTranscript: t => setText(t),
+        disabled: isThinking && !hasImages
+      }), /*#__PURE__*/_jsx(Pressable, {
+        style: [styles.sendButton, !canSend && styles.sendButtonDisabled, theme?.primaryColor ? {
+          backgroundColor: theme.primaryColor
+        } : undefined],
+        onPress: handlePrimaryAction,
+        disabled: !canSend && !hasImages,
+        accessibilityLabel: "Send request to AI Agent",
+        children: /*#__PURE__*/_jsx(SendArrowIcon, {
+          size: 18,
+          color: theme?.textColor || '#fff'
+        })
+      })]
     })]
   });
 }
@@ -346,6 +475,7 @@ export function AgentChatBar({
   onConsentDecline
 }) {
   const [text, setText] = useState('');
+  const [pendingImages, setPendingImages] = useState([]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [localUnread, setLocalUnread] = useState(0);
   const [fabX, setFabX] = useState(10);
@@ -453,14 +583,23 @@ export function AgentChatBar({
 
   // Auto-expand when triggered (e.g. on escalation)
   useEffect(() => {
-    if (autoExpandTrigger > 0) setIsExpanded(true);
+    if (autoExpandTrigger > 0) {
+      setLocalUnread(0);
+      setIsExpanded(true);
+    }
   }, [autoExpandTrigger]);
   useEffect(() => {
     if (!consentVisible) return;
     autoCollapsedForThinkingRef.current = false;
     setShowHistory(false);
+    setLocalUnread(0);
     setIsExpanded(true);
   }, [consentVisible]);
+  useEffect(() => {
+    if (isExpanded && localUnread > 0) {
+      setLocalUnread(0);
+    }
+  }, [isExpanded, localUnread]);
   useEffect(() => {
     return () => {
       if (metricsFrameRef.current != null) {
@@ -476,6 +615,7 @@ export function AgentChatBar({
       setIsExpanded(false);
     }
     if (pendingApprovalQuestion) {
+      setLocalUnread(0);
       setIsExpanded(true);
       autoCollapsedForThinkingRef.current = false;
     }
@@ -637,7 +777,16 @@ export function AgentChatBar({
     }
   }), [clampWindowPosition, isAndroidNativeWindow, pan, publishNativeWindowPosition, scheduleWindowMetricsPublish]);
   const jsDragHandlers = isAndroidNativeWindow ? undefined : panResponder.panHandlers;
+  const popupSideStyle = tooltipSide === 'right' ? styles.popupFromLeft : styles.popupFromRight;
   const handleSend = () => {
+    const hasImages = pendingImages.length > 0;
+    if (hasImages) {
+      // Allow send with images even when isThinking (bypass like RN)
+      onSend(text.trim() || '', pendingImages);
+      setText('');
+      setPendingImages([]);
+      return;
+    }
     if (text.trim() && !isThinking) {
       onSend(text.trim());
       setText('');
@@ -676,14 +825,14 @@ export function AgentChatBar({
         message: discoveryTooltipMessage,
         side: tooltipSide,
         onDismiss: () => onTooltipDismiss?.()
-      }), localUnread > 0 && chatMessages.length > 0 && !isAndroidNativeWindow && /*#__PURE__*/_jsxs(Pressable, {
-        style: [styles.unreadPopup, isArabic ? styles.unreadPopupRTL : styles.unreadPopupLTR],
+      }), localUnread > 0 && chatMessages.length > 0 && !isAndroidNativeWindow && /*#__PURE__*/_jsx(Pressable, {
+        style: [styles.unreadPopup, popupSideStyle, isArabic ? styles.unreadPopupRTL : styles.unreadPopupLTR],
         onPress: () => {
           onTooltipDismiss?.();
           setLocalUnread(0);
           setIsExpanded(true);
         },
-        children: [/*#__PURE__*/_jsx(Text, {
+        children: /*#__PURE__*/_jsx(Text, {
           style: [styles.unreadPopupText, {
             textAlign: isArabic ? 'right' : 'left'
           }],
@@ -691,19 +840,12 @@ export function AgentChatBar({
           children: (() => {
             const lastMsg = [...chatMessages].reverse().find(m => m.role === 'assistant');
             if (!lastMsg) return isArabic ? 'رسالة جديدة' : 'New message';
-            const content = Array.isArray(lastMsg.content) ? lastMsg.content.map(c => c.type === 'text' ? c.content : '').join('') : '';
+            const content = Array.isArray(lastMsg.content) ? lastMsg.content.map(c => c.type === 'text' ? c.content : '').join('') : markdownToPlainText(String(lastMsg.previewText || lastMsg.content || '')).trim();
             return content || (isArabic ? 'رسالة جديدة' : 'New message');
           })()
-        }), displayUnread > 1 && /*#__PURE__*/_jsx(View, {
-          style: [styles.fabUnreadBadge, styles.popupBadgeOverride],
-          pointerEvents: "none",
-          children: /*#__PURE__*/_jsx(Text, {
-            style: styles.fabUnreadBadgeText,
-            children: displayUnread > 99 ? '99+' : displayUnread
-          })
-        })]
+        })
       }), isThinking && !pendingApprovalQuestion && !isAndroidNativeWindow && /*#__PURE__*/_jsxs(Pressable, {
-        style: [styles.statusPopup, isArabic ? styles.unreadPopupRTL : styles.unreadPopupLTR],
+        style: [styles.statusPopup, popupSideStyle, isArabic ? styles.unreadPopupRTL : styles.unreadPopupLTR],
         onPress: () => {
           autoCollapsedForThinkingRef.current = false;
           setIsExpanded(true);
@@ -718,7 +860,7 @@ export function AgentChatBar({
           numberOfLines: 2,
           children: statusText || (isArabic ? 'جاري التنفيذ...' : 'Working...')
         })]
-      }), displayUnread > 0 && localUnread === 0 && /*#__PURE__*/_jsx(View, {
+      }), displayUnread > 0 && /*#__PURE__*/_jsx(View, {
         style: styles.fabUnreadBadge,
         pointerEvents: "none",
         children: /*#__PURE__*/_jsx(Text, {
@@ -1061,7 +1203,9 @@ export function AgentChatBar({
           onCancel: onCancel,
           isThinking: isThinking,
           isArabic: isArabic,
-          theme: theme
+          theme: theme,
+          pendingImages: pendingImages,
+          setPendingImages: setPendingImages
         })]
       }), mode === 'human' && !selectedTicketId && /*#__PURE__*/_jsx(ScrollView, {
         style: styles.ticketList,
@@ -1142,9 +1286,6 @@ const styles = StyleSheet.create({
   unreadPopup: {
     position: 'absolute',
     bottom: 70,
-    // Float above the FAB
-    left: -70,
-    // Centered over a 60px FAB
     width: 200,
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -1173,7 +1314,6 @@ const styles = StyleSheet.create({
   statusPopup: {
     position: 'absolute',
     bottom: 70,
-    left: -70,
     width: 220,
     minHeight: 48,
     backgroundColor: '#fff',
@@ -1192,17 +1332,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8
   },
+  popupFromLeft: {
+    left: 0
+  },
+  popupFromRight: {
+    right: 0
+  },
   statusPopupText: {
     color: '#111827',
     fontSize: 13,
     fontWeight: '600',
     lineHeight: 18,
     flex: 1
-  },
-  popupBadgeOverride: {
-    top: -8,
-    right: -8,
-    borderColor: '#fff'
   },
   expandedContainer: {
     position: 'absolute',
@@ -1505,6 +1646,43 @@ const styles = StyleSheet.create({
   dictationButtonActive: {
     backgroundColor: 'rgba(255, 59, 48, 0.3)'
   },
+  attachButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  pendingImagesRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 4,
+    flexWrap: 'wrap'
+  },
+  pendingImageThumb: {
+    position: 'relative',
+    width: 56,
+    height: 56
+  },
+  pendingImageRemove: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(220, 53, 69, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  pendingImageRemoveText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 18,
+    textAlign: 'center'
+  },
   ticketList: {
     maxHeight: 260,
     paddingHorizontal: 12
@@ -1634,7 +1812,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 5,
     borderWidth: 2,
-    borderColor: '#1a1a2e'
+    borderColor: '#fff'
   },
   fabUnreadBadgeText: {
     color: '#fff',

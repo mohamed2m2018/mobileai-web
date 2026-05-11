@@ -1296,7 +1296,7 @@ ${snapshot.elementsText}
 
   // ─── Main Execution Loop ──────────────────────────────────────
 
-  async execute(userMessage, chatHistory) {
+  async execute(userMessage, chatHistory, userImages) {
     if (this.isRunning) {
       return {
         success: false,
@@ -1473,7 +1473,9 @@ ${snapshot.elementsText}
         this.handleObservations(step, maxSteps, screenName);
 
         // 4. Capture screenshot for Gemini vision (optional)
-        const screenshot = await this.getPlatformAdapter().captureScreenshot();
+        // Skip screenshot on step 0 when user images are present to avoid token overflow
+        const hasUserImages = step === 0 && userImages?.length > 0;
+        const screenshot = hasUserImages ? undefined : await this.getPlatformAdapter().captureScreenshot();
         await this.updateCriticalVerification(screenName, screenContent, screen.elements, screenshot, step);
 
         // 5. Assemble structured user prompt after verification updates so
@@ -1487,10 +1489,11 @@ ${snapshot.elementsText}
         const isCopilot = this.config.interactionMode !== 'autopilot';
         const systemPrompt = buildSystemPrompt('en', hasKnowledge, isCopilot, this.config.supportStyle);
         const tools = this.buildToolsForProvider();
-        logger.info('AgentRuntime', `Sending to AI with ${tools.length} tools...`);
+        const stepUserImages = step === 0 ? userImages : undefined;
+        logger.info('AgentRuntime', `Sending to AI with ${tools.length} tools...${stepUserImages?.length ? `, with ${stepUserImages.length} user image(s)` : ''}`);
         logger.debug('AgentRuntime', 'System prompt length:', systemPrompt.length);
         logger.debug('AgentRuntime', 'User context preview:', contextMessage.substring(0, 300));
-        const response = await this.provider.generateContent(systemPrompt, contextMessage, tools, this.history, screenshot);
+        const response = await this.provider.generateContent(systemPrompt, contextMessage, tools, this.history, screenshot, undefined, stepUserImages);
         this.emitTrace('provider_response', {
           text: response.text,
           toolCalls: response.toolCalls,
@@ -1818,6 +1821,18 @@ ${snapshot.elementsText}
     if (this.isRunning) {
       this.isCancelRequested = true;
       logger.info('AgentRuntime', 'Cancel requested — will stop after current step completes');
+    }
+  }
+
+  /**
+   * Cancel the running task and wait until the runtime has fully stopped.
+   * Polls isRunning every 50ms up to the given timeout.
+   */
+  async cancelAndWait(timeoutMs = 5000) {
+    this.cancel();
+    const deadline = Date.now() + timeoutMs;
+    while (this.isRunning && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
   }
 }

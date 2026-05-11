@@ -989,6 +989,8 @@ export function AIAgent({
   const [statusText, setStatusText] = useState('');
   const [lastResult, setLastResult] = useState(null);
   const [input, setInput] = useState('');
+  const [pendingImages, setPendingImages] = useState([]);
+  const fileInputRef = useRef(null);
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const [popupPosition, setPopupPosition] = useState(null);
   const [localConversationKey, setLocalConversationKey] = useState(() => `local-${Date.now()}`);
@@ -1006,6 +1008,7 @@ export function AIAgent({
   const [supportMessages, setSupportMessages] = useState([]);
   const [isAgentTyping, setIsAgentTyping] = useState(false);
   const [unreadCounts, setUnreadCounts] = useState({});
+  const [localUnread, setLocalUnread] = useState(0);
   const [deviceId, setDeviceId] = useState(null);
   const [csatPrompt, setCsatPrompt] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -1030,6 +1033,7 @@ export function AIAgent({
   const userHasSpokenRef = useRef(false);
   const screenPollIntervalRef = useRef(null);
   const conversationIdRef = useRef(persistedState?.conversationId || null);
+  const seenMessageCountRef = useRef(messages.length);
   const syncedMessageCountRef = useRef(Array.isArray(persistedState?.messages) ? persistedState.messages.length : 0);
   const remoteConversationHydratedRef = useRef(false);
   const requestStartedAtRef = useRef(0);
@@ -1147,6 +1151,26 @@ export function AIAgent({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    const seenCount = seenMessageCountRef.current;
+    if (messages.length > seenCount) {
+      const newAssistantMessages = messages.slice(seenCount).filter(message => message.role !== 'user').length;
+      if (newAssistantMessages > 0 && !isOpen) {
+        setLocalUnread(count => count + newAssistantMessages);
+      }
+      seenMessageCountRef.current = messages.length;
+    } else if (messages.length < seenCount) {
+      seenMessageCountRef.current = messages.length;
+      setLocalUnread(0);
+    }
+  }, [isOpen, messages]);
+
+  useEffect(() => {
+    if (isOpen && localUnread > 0) {
+      setLocalUnread(0);
+    }
+  }, [isOpen, localUnread]);
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
@@ -1288,6 +1312,7 @@ export function AIAgent({
       const popupSize = getEstimatedPopupSize();
       setPopupPosition(clampFloatingPosition(rect.right - popupSize.width, rect.bottom - popupSize.height, popupSize.width, popupSize.height));
     }
+    setLocalUnread(0);
     setIsOpen(true);
   }, [popupPosition]);
 
@@ -1583,6 +1608,7 @@ export function AIAgent({
         if (restoredTickets.length === 0) return;
         setTickets(restoredTickets);
         setMode('human');
+        setLocalUnread(0);
         setIsOpen(true);
         setUnreadCounts(restoredTickets.reduce((acc, ticket) => {
           if ((ticket.unreadCount || 0) > 0) {
@@ -1758,6 +1784,7 @@ export function AIAgent({
         resolve
       });
       setMode('text');
+      setLocalUnread(0);
       setIsOpen(true);
     })
   }), [allowedActionNames, apiKey, enableUIControl, interactionMode, knowledgeBase, knowledgeMaxTokens, maxCostUSD, maxSteps, maxTokenBudget, mcpServerUrl, mergedCustomTools, mode, model, onAfterStep, onAfterTask, onBeforeStep, onBeforeTask, onTokenUsage, platformAdapter, provider, proxyHeaders, proxyUrl, resolvedInstructions, resolvedSupportStyle, screenMap, stepDelay, verifier, voiceProxyHeaders, voiceProxyUrl]);
@@ -1770,8 +1797,27 @@ export function AIAgent({
   }, [runtime]);
 
   const send = useCallback(async (message, options) => {
+    // Extract images — options can be an images array (from chat bar) or object
+    const userImages = Array.isArray(options) ? options : options?.images || undefined;
+    const hasImages = userImages && userImages.length > 0;
     const trimmed = message.trim();
-    if (!trimmed || isLoading) return;
+
+    // When images are present and agent is loading: cancel current execution, start fresh
+    if (hasImages && isLoading) {
+      logger.info('AIAgent', 'User sent images while loading — cancelling current execution');
+      runtime.cancel();
+      const deadline = Date.now() + 5000;
+      while (runtime.getIsRunning() && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      setIsLoading(false);
+      setStatusText('');
+    } else if (!trimmed && !hasImages) {
+      return;
+    } else if (isLoading && !hasImages) {
+      return;
+    }
+
     const consentGranted = await ensureConsent(requireConsent, provider);
     if (!consentGranted) {
       const denied = {
@@ -1783,17 +1829,34 @@ export function AIAgent({
       options?.onResult?.(denied);
       return;
     }
-    const userMessage = appendUserMessage(trimmed);
+
+    // Build user content nodes with images if present
+    const displayText = trimmed || (hasImages ? `[${userImages.length} image(s)]` : '');
+    const userContentNodes = [];
+    if (trimmed) {
+      userContentNodes.push({ type: 'text', content: trimmed });
+    }
+    if (hasImages) {
+      for (const img of userImages) {
+        userContentNodes.push({ type: 'image', uri: `data:${img.mimeType};base64,${img.base64}` });
+      }
+    }
+    const userMessage = appendUserMessage(displayText);
     if (!userMessage) return;
+    // Replace content with rich nodes if images present
+    if (hasImages && userMessage) {
+      userMessage.content = userContentNodes;
+    }
     setInput('');
     requestStartedAtRef.current = Date.now();
     setIsLoading(true);
     setStatusText('Thinking...');
+    setLocalUnread(0);
     setIsOpen(true);
-    logger.info('AIAgent', `📨 Sending message in ${mode} mode: "${trimmed}"`);
+    logger.info('AIAgent', `📨 Sending message in ${mode} mode: "${displayText}"${hasImages ? ` with ${userImages.length} image(s)` : ''}`);
     const history = messagesRef.current.concat(userMessage);
     try {
-      const rawResult = await runtime.execute(trimmed, toUserHistory(history));
+      const rawResult = await runtime.execute(trimmed || displayText, toUserHistory(history), userImages);
       const result = normalizeExecutionResult(rawResult);
       const assistantMessage = createAIMessage({
         id: `assistant-${Date.now()}`,
@@ -2267,6 +2330,30 @@ export function AIAgent({
   }), [cancel, clearMessages, isLoading, lastResult, messages, runtime, send, statusText]);
 
   const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + (count || 0), 0);
+  const displayUnread = totalUnread + localUnread;
+  const latestClosedPreview = useMemo(() => {
+    const latestAssistantMessage = [...messages].reverse().find(message => message.role !== 'user');
+    if (!latestAssistantMessage) return 'New message';
+    const content = latestAssistantMessage.previewText || latestAssistantMessage.content;
+    const preview = Array.isArray(content) ? richContentToPlainText(content, '') : markdownToPlainText(String(content || '')).trim();
+    return preview || 'New message';
+  }, [messages]);
+  const closedPreviewPlacement = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return {
+        right: 0,
+        borderBottomRightRadius: 4
+      };
+    }
+    const launcherLeft = popupPosition?.left ?? window.innerWidth - 20 - WEB_LAUNCHER_SIZE;
+    return launcherLeft < window.innerWidth / 2 ? {
+      left: 0,
+      borderBottomLeftRadius: 4
+    } : {
+      right: 0,
+      borderBottomRightRadius: 4
+    };
+  }, [popupPosition]);
   const greetingMessage = supportModeEnabled ? supportMode?.greeting?.message || 'Hi there. How can I help you today?' : null;
   const greetingAgentName = supportMode?.greeting?.agentName || 'Support';
   const modeButtonStyle = selected => ({
@@ -3519,13 +3606,92 @@ export function AIAgent({
           }) : null, mode === 'text' ? showHistory ? renderHistoryPanel() : renderChatMessages() : mode === 'voice' ? renderVoiceMode() : renderHumanMode(), mode === 'text' && !showHistory ? /*#__PURE__*/_jsxs("div", {
             style: {
               display: 'flex',
-              alignItems: 'center',
+              flexDirection: 'column',
               gap: 8,
               paddingTop: 0,
               marginTop: messages.length > 0 || pendingPrompt ? 12 : 0,
               minWidth: 0
             },
-            children: [/*#__PURE__*/_jsx("textarea", {
+            children: [pendingImages.length > 0 ? /*#__PURE__*/_jsx("div", {
+              style: { display: 'flex', gap: 8, flexWrap: 'wrap', paddingLeft: 4 },
+              children: pendingImages.map((img, idx) => /*#__PURE__*/_jsxs("div", {
+                style: { position: 'relative', width: 56, height: 56 },
+                children: [/*#__PURE__*/_jsx("img", {
+                  src: `data:${img.mimeType};base64,${img.base64}`,
+                  alt: "pending",
+                  style: { width: 56, height: 56, borderRadius: 8, objectFit: 'cover' }
+                }), /*#__PURE__*/_jsx("button", {
+                  type: "button",
+                  onClick: () => setPendingImages(prev => prev.filter((_, i) => i !== idx)),
+                  "aria-label": "Remove image",
+                  style: {
+                    position: 'absolute', top: -6, right: -6, width: 20, height: 20,
+                    borderRadius: 10, border: 'none', background: 'rgba(220,53,69,0.9)',
+                    color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
+                  },
+                  children: "×"
+                })]
+              }, `pending-img-${idx}`))
+            }) : null, /*#__PURE__*/_jsxs("div", {
+              style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
+              children: [/*#__PURE__*/_jsx("input", {
+                ref: fileInputRef,
+                type: "file",
+                accept: "image/*",
+                multiple: true,
+                style: { display: 'none' },
+                onChange: async (event) => {
+                  const files = event?.target?.files;
+                  if (!files) return;
+                  for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    if (!file.type.startsWith('image/')) continue;
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                      const dataUrl = e.target?.result;
+                      if (typeof dataUrl !== 'string') return;
+                      const rawBase64 = dataUrl.split(',')[1] || '';
+                      // Compress via canvas
+                      const img = new Image();
+                      img.onload = () => {
+                        const MAX_DIM = 1024;
+                        let w = img.width, h = img.height;
+                        if (w > MAX_DIM || h > MAX_DIM) {
+                          const scale = MAX_DIM / Math.max(w, h);
+                          w = Math.round(w * scale);
+                          h = Math.round(h * scale);
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w;
+                        canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        const compressed = canvas.toDataURL('image/jpeg', 0.3).split(',')[1] || '';
+                        setPendingImages(prev => [...prev, { base64: compressed, mimeType: 'image/jpeg' }]);
+                      };
+                      img.src = `data:${file.type};base64,${rawBase64}`;
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }
+              }), /*#__PURE__*/_jsx("button", {
+                type: "button",
+                onClick: () => fileInputRef.current?.click(),
+                "aria-label": "Attach image",
+                style: {
+                  width: 44, height: 44, borderRadius: 999, border: 'none',
+                  background: 'rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer',
+                  flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0
+                },
+                children: /*#__PURE__*/_jsx("svg", {
+                  width: 18, height: 18, viewBox: "0 0 24 24", fill: "none",
+                  stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round",
+                  children: /*#__PURE__*/_jsx("path", {
+                    d: "M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"
+                  })
+                })
+              }), /*#__PURE__*/_jsx("textarea", {
               value: input,
               placeholder: inputPlaceholder,
               onChange: event => setInput(event.target.value),
@@ -3542,7 +3708,12 @@ export function AIAgent({
                   pending.resolve(answer);
                   return;
                 }
-                void send(input);
+                if (pendingImages.length > 0) {
+                  void send(input, pendingImages);
+                  setPendingImages([]);
+                } else {
+                  void send(input);
+                }
               },
               style: {
                 flex: 1,
@@ -3562,7 +3733,7 @@ export function AIAgent({
                 overflowY: 'auto',
                 font: 'inherit'
               }
-            }), isLoading ? /*#__PURE__*/_jsx("button", {
+            }), isLoading && pendingImages.length === 0 ? /*#__PURE__*/_jsx("button", {
               type: "button",
               onClick: () => cancel({
                 source: 'composer'
@@ -3588,7 +3759,7 @@ export function AIAgent({
               })
             }) : null, /*#__PURE__*/_jsx("button", {
               type: "button",
-              disabled: isLoading || !input.trim(),
+              disabled: (isLoading && pendingImages.length === 0) || (!input.trim() && pendingImages.length === 0),
               "aria-label": "Send message",
               onClick: () => {
                 if (pendingPrompt?.kind === 'freeform') {
@@ -3601,7 +3772,12 @@ export function AIAgent({
                   pending.resolve(answer);
                   return;
                 }
-                void send(input);
+                if (pendingImages.length > 0) {
+                  void send(input, pendingImages);
+                  setPendingImages([]);
+                } else {
+                  void send(input);
+                }
               },
               style: {
                 width: 44,
@@ -3613,8 +3789,8 @@ export function AIAgent({
                 fontSize: 13,
                 fontWeight: 800,
                 lineHeight: 1,
-                cursor: isLoading || !input.trim() ? 'default' : 'pointer',
-                opacity: isLoading || !input.trim() ? 0.5 : 1,
+                cursor: (isLoading && pendingImages.length === 0) || (!input.trim() && pendingImages.length === 0) ? 'default' : 'pointer',
+                opacity: (isLoading && pendingImages.length === 0) || (!input.trim() && pendingImages.length === 0) ? 0.5 : 1,
                 flexShrink: 0,
                 display: 'flex',
                 alignItems: 'center',
@@ -3626,8 +3802,9 @@ export function AIAgent({
                 color: "#fff"
               })
             })]
+          })]
           }) : null]
-        }) : /*#__PURE__*/_jsx("div", {
+        }) : /*#__PURE__*/_jsxs("div", {
           "data-mobileai-ignore": "true",
           style: {
             position: 'fixed',
@@ -3637,11 +3814,37 @@ export function AIAgent({
             top: popupPosition?.top,
             zIndex: 9999
           },
-          children: /*#__PURE__*/_jsx("button", {
+          children: [localUnread > 0 && messages.length > 0 ? /*#__PURE__*/_jsx("button", {
+            type: "button",
+            onClick: openFromLauncher,
+            style: {
+              position: 'absolute',
+              bottom: WEB_LAUNCHER_SIZE + 10,
+              width: 220,
+              minHeight: 52,
+              border: 'none',
+              borderRadius: 16,
+              ...closedPreviewPlacement,
+              background: '#fff',
+              color: '#111827',
+              boxShadow: '0 10px 24px rgba(0, 0, 0, 0.22)',
+              padding: 12,
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontSize: 14,
+              fontWeight: 700,
+              lineHeight: 1.35,
+              overflow: 'hidden',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical'
+            },
+            children: latestClosedPreview
+          }) : null, /*#__PURE__*/_jsx("button", {
             type: "button",
             onClick: openFromLauncher,
             onPointerDown: handleLauncherPointerDown,
-            "aria-label": "Open AI chat",
+            "aria-label": displayUnread > 0 ? `Open AI chat - ${displayUnread} unread messages` : "Open AI chat",
             style: {
               width: WEB_LAUNCHER_SIZE,
               height: WEB_LAUNCHER_SIZE,
@@ -3661,7 +3864,7 @@ export function AIAgent({
               color: "#fff"
             }) : /*#__PURE__*/_jsx(WebAIBadge, {
               size: 28
-            }), totalUnread > 0 ? /*#__PURE__*/_jsx("div", {
+            }), displayUnread > 0 ? /*#__PURE__*/_jsx("div", {
               style: {
                 position: 'absolute',
                 top: -4,
@@ -3679,9 +3882,9 @@ export function AIAgent({
                 fontWeight: 700,
                 border: '2px solid #fff'
               },
-              children: totalUnread > 99 ? '99+' : totalUnread
+              children: displayUnread > 99 ? '99+' : displayUnread
             }) : null]
-          })
+          })]
         }) : null]
       })
     })

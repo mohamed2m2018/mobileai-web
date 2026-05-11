@@ -3,11 +3,11 @@
  * Supports two modes: Text and Voice.
  * Does not block underlying UI natively.
  */
-import type { ExecutionResult, AgentMode, ChatBarTheme, AIMessage, ConversationSummary, AIProviderName } from '../core/types';
+import type { ExecutionResult, AgentMode, ChatBarTheme, AIMessage, ConversationSummary, AIProviderName, UserImage } from '../core/types';
 import type { SupportTicket } from '../support/types';
 import type { AIConsentConfig } from './AIConsentDialog';
 interface AgentChatBarProps {
-    onSend: (message: string) => void;
+    onSend: (message: string, images?: UserImage[]) => void;
     onCancel?: () => void;
     isThinking: boolean;
     isActing?: boolean;
