@@ -1,0 +1,2917 @@
+"use strict";
+
+/**
+ * AIAgent — Root provider component for the AI agent.
+ *
+ * Wraps the app and provides:
+ * - Fiber tree root ref for element auto-detection
+ * - Navigation ref for auto-navigation
+ * - Floating chat bar for user input
+ * - Agent runtime context for useAction hooks
+ */
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, StyleSheet, InteractionManager, Platform } from 'react-native';
+import { AgentRuntime } from "../core/AgentRuntime.js";
+import { ReactNativePlatformAdapter } from "../core/ReactNativePlatformAdapter.js";
+import { actionRegistry } from "../core/ActionRegistry.js";
+import { dataRegistry } from "../core/DataRegistry.js";
+import { captureWireframe } from "../core/FiberTreeWalker.js";
+import { humanizeScreenName } from "../utils/humanizeScreenName.js";
+import { createProvider } from "../providers/ProviderFactory.js";
+import { AgentContext } from "../hooks/useAction.js";
+import { AgentChatBar } from "./AgentChatBar.js";
+import { AgentOverlay } from "./AgentOverlay.js";
+import { useAIConsent } from "./AIConsentDialog.js";
+import { FloatingOverlayWrapper } from "./FloatingOverlayWrapper.js";
+import { logger } from "../utils/logger.js";
+import { buildVoiceSystemPrompt } from "../core/systemPrompt.js";
+import { MCPBridge } from "../core/MCPBridge.js";
+import { VoiceService } from "../services/VoiceService.js";
+import { AudioInputService } from "../services/AudioInputService.js";
+import { AudioOutputService } from "../services/AudioOutputService.js";
+import { TelemetryService, bindTelemetryService } from "../services/telemetry/index.js";
+import { extractTouchTargetMetadata, checkRageClick } from "../services/telemetry/TouchAutoCapture.js";
+import { initDeviceId, getDeviceId } from "../services/telemetry/device.js";
+import { AgentErrorBoundary } from "./AgentErrorBoundary.js";
+import { HighlightOverlay } from "./HighlightOverlay.js";
+import { IdleDetector } from "../core/IdleDetector.js";
+import { ProactiveHint } from "./ProactiveHint.js";
+import { createEscalateTool } from "../support/escalateTool.js";
+import { createReportIssueTool } from "../support/reportIssueTool.js";
+import { EscalationSocket } from "../support/EscalationSocket.js";
+import { EscalationEventSource } from "../support/EscalationEventSource.js";
+import { ReportedIssueEventSource } from "../support/ReportedIssueEventSource.js";
+import { SupportChatModal } from "../support/SupportChatModal.js";
+import { ENDPOINTS } from "../config/endpoints.js";
+import * as ConversationService from "../services/ConversationService.js";
+import { createMobileAIKnowledgeRetriever } from "../services/MobileAIKnowledgeRetriever.js";
+import { executeConfiguredAction, fetchConfiguredActions } from "../services/MobileAIActionService.js";
+import { formatActionToolResult } from "../utils/actionResult.js";
+import { createAIMessage, normalizeExecutionResult, normalizeRichContent } from "../core/richContent.js";
+import { RichUIProvider } from "./rich-content/RichUIContext.js";
+import { ActionBridgeProvider } from "../core/ActionBridge.js";
+import { ActionCardDefinition, ComparisonCardDefinition, FactCardDefinition, FormCardDefinition, ProductCardDefinition } from "./blocks/index.js";
+import { jsx as _jsx, Fragment as _Fragment, jsxs as _jsxs } from "react/jsx-runtime";
+const UI_ACTION_TOOL_NAMES = new Set(['tap', 'type', 'scroll', 'navigate', 'long_press', 'adjust_slider', 'select_picker', 'set_date', 'dismiss_keyboard']);
+
+// ─── Context ───────────────────────────────────────────────────
+
+// ─── AsyncStorage Helper (same pattern as TicketStore) ─────────
+
+/** Try to load AsyncStorage for tooltip persistence. Optional peer dep. */
+function getTooltipStorage() {
+  try {
+    const origError = console.error;
+    console.error = (...args) => {
+      const msg = args[0];
+      if (typeof msg === 'string' && msg.includes('AsyncStorage')) return;
+      origError.apply(console, args);
+    };
+    try {
+      const mod = require('@react-native-async-storage/async-storage');
+      const candidate = mod?.default ?? mod?.AsyncStorage ?? null;
+      if (candidate && typeof candidate.getItem === 'function') return candidate;
+      return null;
+    } finally {
+      console.error = origError;
+    }
+  } catch {
+    return null;
+  }
+}
+function sanitizeWireframeScreenshot(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const base64 = trimmed.startsWith('data:') ? trimmed.split(',')[1] ?? '' : trimmed;
+  return base64.length > 0 ? base64 : null;
+}
+function resolveRouteKeyFromPath(path) {
+  if (!path) return '';
+  let route = path;
+  route = route.replace(/\([^)]+\)\//g, '');
+  route = route.replace(/^\/|\/$/g, '');
+  if (!route) return 'index';
+  if (route.includes('_layout') || route.includes('[...')) return '';
+  if (route.endsWith('/index')) {
+    route = route.replace(/\/index$/, '');
+  }
+  if (!route) return 'index';
+  const segments = route.split('/').filter(Boolean).map(segment => segment.replace(/\[([^\]]+)\]/g, '$1'));
+  return segments[segments.length - 1] || 'index';
+}
+function mergeSupportHistory(serverHistory = [], localHistory = []) {
+  const combined = [...serverHistory, ...localHistory];
+  const deduped = [];
+  const seen = new Set();
+  combined.forEach((entry, index) => {
+    const key = `${entry.role}|${entry.content}|${entry.timestamp ?? `missing-${index}`}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    deduped.push({
+      ...entry,
+      __index: index
+    });
+  });
+  deduped.sort((a, b) => {
+    const aTime = a.timestamp ? new Date(a.timestamp).getTime() : NaN;
+    const bTime = b.timestamp ? new Date(b.timestamp).getTime() : NaN;
+    if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) {
+      return aTime - bTime;
+    }
+    return a.__index - b.__index;
+  });
+  const sorted = deduped.map(({
+    __index,
+    ...entry
+  }) => entry);
+  const collapsed = [];
+  for (const entry of sorted) {
+    const previous = collapsed[collapsed.length - 1];
+    const previousTime = previous?.timestamp ? new Date(previous.timestamp).getTime() : NaN;
+    const currentTime = entry.timestamp ? new Date(entry.timestamp).getTime() : NaN;
+    const isNearDuplicate = previous && previous.role === entry.role && previous.content === entry.content && (Number.isNaN(previousTime) && Number.isNaN(currentTime) || !Number.isNaN(previousTime) && !Number.isNaN(currentTime) && Math.abs(currentTime - previousTime) < 3_000);
+    if (isNearDuplicate) continue;
+    collapsed.push(entry);
+  }
+  return collapsed;
+}
+async function captureHeatmapScreenshot(rootView) {
+  try {
+    if (!rootView) return null;
+    const viewShot = require('react-native-view-shot');
+    const captureRef = viewShot.captureRef || viewShot.default?.captureRef;
+    if (!captureRef || typeof captureRef !== 'function') return null;
+    const raw = await captureRef(rootView, {
+      format: 'jpg',
+      quality: 0.28,
+      result: 'base64'
+    });
+    return sanitizeWireframeScreenshot(raw);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Props ─────────────────────────────────────────────────────
+
+// ─── Component ─────────────────────────────────────────────────
+
+export function AIAgent({
+  apiKey,
+  proxyUrl,
+  proxyHeaders,
+  voiceProxyUrl,
+  voiceProxyHeaders,
+  provider: providerName = 'gemini',
+  model,
+  supportStyle = 'warm-concise',
+  verifier,
+  navRef,
+  maxSteps = 25,
+  showChatBar = true,
+  children,
+  onResult,
+  // Security props
+  interactiveBlacklist,
+  interactiveWhitelist,
+  onBeforeStep,
+  onAfterStep,
+  onBeforeTask,
+  onAfterTask,
+  transformScreenContent,
+  customTools,
+  instructions,
+  stepDelay,
+  mcpServerUrl,
+  router,
+  pathname,
+  interceptNativeAlerts,
+  enableVoice = false,
+  onTokenUsage,
+  debug = false,
+  knowledgeBase,
+  knowledgeMaxTokens,
+  enableUIControl,
+  accentColor,
+  theme,
+  blocks,
+  richUITheme,
+  richUISurfaceThemes,
+  blockActionHandlers,
+  screenMap,
+  useScreenMap = true,
+  maxTokenBudget,
+  maxCostUSD,
+  analyticsKey,
+  analyticsProxyUrl,
+  analyticsProxyHeaders,
+  proactiveHelp,
+  userContext,
+  pushToken,
+  pushTokenType,
+  interactionMode,
+  showDiscoveryTooltip: showDiscoveryTooltipProp = true,
+  discoveryTooltipMessage,
+  customerSuccess,
+  onboarding,
+  consent
+}) {
+  // Consent is ALWAYS required by default — only disabled if explicitly set to false.
+  // No consent prop at all → gate is active with default dialog config.
+  const consentRequired = consent?.required !== false;
+  const consentConfig = consent ?? {
+    required: true,
+    persist: false
+  };
+
+  // ─── AI Consent State (Apple Guideline 5.1.2(i)) ─────────────
+  const [hasConsented, grantConsent,, isConsentLoading] = useAIConsent(consentConfig.persist);
+  const [showConsentDialog, setShowConsentDialog] = useState(false);
+  const pendingConsentSendRef = useRef(null);
+  const pendingFollowUpAfterApprovalRef = useRef(null);
+  const consentGateActive = consentRequired && !hasConsented && !isConsentLoading;
+  // Configure logger based on debug prop
+  React.useEffect(() => {
+    logger.setEnabled(debug);
+    if (debug) {
+      logger.info('AIAgent', '🔧 Debug logging enabled');
+      logger.info('AIAgent', `⚙️ Initial config: interactionMode=${interactionMode || 'copilot(default)'} enableVoice=${enableVoice} useScreenMap=${useScreenMap} analytics=${!!analyticsKey}`);
+    }
+  }, [debug]);
+  const rootViewRef = useRef(null);
+  const [isThinking, setIsThinking] = useState(false);
+  const [isActing, setIsActing] = useState(false);
+  const [statusText, setStatusText] = useState('');
+  const [lastResult, setLastResult] = useState(null);
+  const [lastUserMessage, setLastUserMessage] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [supportMessages, setSupportMessages] = useState([]);
+  const [remoteConfiguredActions, setRemoteConfiguredActions] = useState([]);
+  const [registeredActionRevision, setRegisteredActionRevision] = useState(0);
+  const [registeredDataRevision, setRegisteredDataRevision] = useState(0);
+  const [chatScrollTrigger, setChatScrollTrigger] = useState(0);
+  // Mirror of messages for safe reading inside async callbacks (avoids setMessages abuse)
+  const messagesRef = useRef([]);
+
+  // ── Conversation History State ────────────────────────────────
+  const [conversations, setConversations] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const activeConversationIdRef = useRef(null);
+  const lastSavedMessageCountRef = useRef(0);
+  const appendDebounceRef = useRef(null);
+
+  // Keep messagesRef always in sync — used by async save callbacks
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+  useEffect(() => {
+    return actionRegistry.onChange(() => {
+      setRegisteredActionRevision(prev => prev + 1);
+    });
+  }, []);
+  useEffect(() => {
+    return dataRegistry.onChange(() => {
+      setRegisteredDataRevision(prev => prev + 1);
+    });
+  }, []);
+
+  // Increment scroll trigger when messages change to auto-scroll chat modal
+  useEffect(() => {
+    if (messages.length > 0) {
+      setChatScrollTrigger(prev => prev + 1);
+    }
+  }, [messages.length]);
+
+  // ── Support Modal State ──
+  const [tickets, setTickets] = useState([]);
+  const [selectedTicketId, setSelectedTicketId] = useState(null);
+  const [supportSocket, setSupportSocket] = useState(null);
+  const [isLiveAgentTyping, setIsLiveAgentTyping] = useState(false);
+  const [autoExpandTrigger, setAutoExpandTrigger] = useState(0);
+  const [unreadCounts, setUnreadCounts] = useState({});
+  const seenReportedIssueUpdatesRef = useRef(new Set());
+  // Ref mirrors selectedTicketId — lets socket callbacks access current value
+  // without stale closures (sockets are long-lived, closures capture old state).
+  const selectedTicketIdRef = useRef(null);
+  const openSupportTicketModalRef = useRef(null);
+  const supportSocketRef = useRef(null);
+  useEffect(() => {
+    selectedTicketIdRef.current = selectedTicketId;
+  }, [selectedTicketId]);
+  useEffect(() => {
+    supportSocketRef.current = supportSocket;
+  }, [supportSocket]);
+  // Cache of live sockets by ticketId — keeps sockets alive even when user
+  // navigates back to the ticket list, so new messages still trigger badge updates.
+  const pendingSocketsRef = useRef(new Map());
+  const recentSupportReplyRef = useRef(new Map());
+  // SSE connections per ticket — reliable fallback for ticket_closed events
+  // when the WebSocket is disconnected. EventSource auto-reconnects.
+  const sseRef = useRef(new Map());
+  const reportedIssuesSSERef = useRef(null);
+  const agentFrtFiredRef = useRef(false);
+  const humanFrtFiredRef = useRef({});
+  const appendIncomingSupportReply = useCallback((ticketId, reply) => {
+    const normalizedReply = reply.trim();
+    if (!normalizedReply) return;
+    const now = Date.now();
+    const recent = recentSupportReplyRef.current.get(ticketId);
+    if (recent && recent.content === normalizedReply && now - recent.at < 2_500) {
+      logger.info('AIAgent', '★ Ignoring duplicate support reply for ticket:', ticketId);
+      return;
+    }
+    recentSupportReplyRef.current.set(ticketId, {
+      content: normalizedReply,
+      at: now
+    });
+    const incomingEntry = {
+      role: 'live_agent',
+      content: normalizedReply,
+      timestamp: new Date(now).toISOString()
+    };
+    let updatedHistory = null;
+    let ticketWsUrl;
+    setTickets(prev => prev.map(t => {
+      if (t.id !== ticketId) return t;
+      ticketWsUrl = t.wsUrl;
+      const lastEntry = t.history?.[t.history.length - 1];
+      if (lastEntry?.role === 'live_agent' && lastEntry.content === normalizedReply) {
+        updatedHistory = t.history || [];
+        return t;
+      }
+      updatedHistory = [...(t.history || []), incomingEntry];
+      return {
+        ...t,
+        history: updatedHistory
+      };
+    }));
+    if (selectedTicketIdRef.current === ticketId) {
+      setSupportMessages(prev => {
+        const lastMessage = prev[prev.length - 1];
+        if (lastMessage?.previewText === normalizedReply && (lastMessage.role === 'assistant' || lastMessage.role === 'live_agent')) {
+          return prev;
+        }
+        return [...prev, createAIMessage({
+          id: `human-${ticketId}-${now}`,
+          role: 'assistant',
+          content: normalizedReply,
+          previewText: normalizedReply,
+          timestamp: now
+        })];
+      });
+      setLastResult({
+        success: true,
+        message: `👤 ${normalizedReply}`,
+        previewText: `👤 ${normalizedReply}`,
+        reply: normalizeRichContent(normalizedReply),
+        steps: []
+      });
+    } else if (!selectedTicketIdRef.current) {
+      openSupportTicketModalRef.current?.(ticketId, {
+        history: updatedHistory ?? undefined,
+        wsUrl: ticketWsUrl
+      });
+      setAutoExpandTrigger(prev => prev + 1);
+    } else {
+      setUnreadCounts(prev => ({
+        ...prev,
+        [ticketId]: (prev[ticketId] || 0) + 1
+      }));
+    }
+  }, []);
+
+  // ── Onboarding Journey State ────────────────────────────────
+  const [isOnboardingActive, setIsOnboardingActive] = useState(false);
+  const [currentOnboardingIndex, setCurrentOnboardingIndex] = useState(0);
+  const [androidWindowMetrics, setAndroidWindowMetrics] = useState(null);
+  const androidWindowMetricsRef = useRef(null);
+  const floatingOverlayRef = useRef(null);
+  useEffect(() => {
+    if (!onboarding?.enabled) return;
+    if (onboarding.firstLaunchOnly !== false) {
+      void (async () => {
+        try {
+          const AS = getTooltipStorage();
+          if (!AS) {
+            setIsOnboardingActive(true);
+            return;
+          }
+          const completed = await AS.getItem('@mobileai_onboarding_completed');
+          if (!completed) setIsOnboardingActive(true);
+        } catch {
+          setIsOnboardingActive(true);
+        }
+      })();
+    } else {
+      setIsOnboardingActive(true);
+    }
+  }, [onboarding?.enabled, onboarding?.firstLaunchOnly]);
+  const advanceOnboarding = useCallback(() => {
+    if (!onboarding?.steps) return;
+    if (currentOnboardingIndex >= onboarding.steps.length - 1) {
+      setIsOnboardingActive(false);
+      onboarding.onComplete?.();
+      void (async () => {
+        try {
+          const AS = getTooltipStorage();
+          await AS?.setItem('@mobileai_onboarding_completed', 'true');
+        } catch {
+          /* graceful */
+        }
+      })();
+    } else {
+      setCurrentOnboardingIndex(prev => prev + 1);
+    }
+  }, [onboarding, currentOnboardingIndex]);
+  const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + count, 0);
+
+  // ── Discovery Tooltip (one-time) ──────────────────────────
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  useEffect(() => {
+    if (!showDiscoveryTooltipProp) return;
+    void (async () => {
+      try {
+        const AS = getTooltipStorage();
+        if (!AS) {
+          setTooltipVisible(true);
+          return;
+        }
+        const seen = await AS.getItem('@mobileai_tooltip_seen');
+        if (!seen) setTooltipVisible(true);
+      } catch {
+        setTooltipVisible(true);
+      }
+    })();
+  }, [showDiscoveryTooltipProp]);
+  const handleTooltipDismiss = useCallback(() => {
+    setTooltipVisible(false);
+    void (async () => {
+      try {
+        const AS = getTooltipStorage();
+        await AS?.setItem('@mobileai_tooltip_seen', 'true');
+      } catch {
+        /* graceful */
+      }
+    })();
+  }, []);
+  useEffect(() => {
+    if (!showChatBar) {
+      androidWindowMetricsRef.current = null;
+      setAndroidWindowMetrics(null);
+    }
+  }, [showChatBar]);
+  const handleAndroidWindowMetricsChange = useCallback(metrics => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+    if (!showChatBar) {
+      androidWindowMetricsRef.current = null;
+      setAndroidWindowMetrics(null);
+      return;
+    }
+    const previousMetrics = androidWindowMetricsRef.current;
+    if (previousMetrics && previousMetrics.x === metrics.x && previousMetrics.y === metrics.y && previousMetrics.width === metrics.width && previousMetrics.height === metrics.height) {
+      return;
+    }
+    androidWindowMetricsRef.current = metrics;
+    if (floatingOverlayRef.current && previousMetrics) {
+      floatingOverlayRef.current.setAndroidWindowMetrics(metrics);
+      return;
+    }
+    setAndroidWindowMetrics(metrics);
+  }, [showChatBar]);
+  const handleAndroidWindowDragEnd = useCallback(metrics => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+    if (!showChatBar) {
+      androidWindowMetricsRef.current = null;
+      setAndroidWindowMetrics(null);
+      return;
+    }
+    androidWindowMetricsRef.current = metrics;
+    setAndroidWindowMetrics(prev => {
+      if (prev && prev.x === metrics.x && prev.y === metrics.y && prev.width === metrics.width && prev.height === metrics.height) {
+        return prev;
+      }
+      return metrics;
+    });
+  }, [showChatBar]);
+
+  // CRITICAL: clearSupport uses REFS and functional setters — never closure values.
+  // This function is captured by long-lived callbacks (escalation sockets, restored
+  // sockets) that may hold stale references. Using refs guarantees the current
+  // selectedTicketId and supportSocket are always read, not snapshot values.
+  const clearSupport = useCallback(ticketId => {
+    if (ticketId) {
+      // Remove specific ticket + its cached socket and SSE
+      const cached = pendingSocketsRef.current.get(ticketId);
+      if (cached) {
+        cached.disconnect();
+        pendingSocketsRef.current.delete(ticketId);
+      }
+      const sse = sseRef.current.get(ticketId);
+      if (sse) {
+        sse.disconnect();
+        sseRef.current.delete(ticketId);
+      }
+      setTickets(prev => prev.filter(t => t.id !== ticketId));
+      setUnreadCounts(prev => {
+        const n = {
+          ...prev
+        };
+        delete n[ticketId];
+        return n;
+      });
+
+      // If user was viewing this ticket, close the support modal + switch to ticket list
+      if (selectedTicketIdRef.current === ticketId) {
+        setSupportSocket(prev => {
+          prev?.disconnect();
+          return null;
+        });
+        setSelectedTicketId(null);
+        setIsLiveAgentTyping(false);
+        setMessages([]);
+      }
+
+      // If no tickets remain, switch back to text mode
+      setTickets(prev => {
+        if (prev.length === 0) {
+          setMode('text');
+        }
+        return prev;
+      });
+    } else {
+      // Clear all — disconnect every cached socket and SSE
+      pendingSocketsRef.current.forEach(s => s.disconnect());
+      pendingSocketsRef.current.clear();
+      sseRef.current.forEach(s => s.disconnect());
+      sseRef.current.clear();
+      setSupportSocket(prev => {
+        prev?.disconnect();
+        return null;
+      });
+      setSelectedTicketId(null);
+      setTickets([]);
+      setUnreadCounts({});
+      setIsLiveAgentTyping(false);
+      setMode('text');
+    }
+  }, []);
+  const openSSE = useCallback(ticketId => {
+    if (sseRef.current.has(ticketId)) return;
+    if (!analyticsKey) return;
+    const sseUrl = `${ENDPOINTS.escalation}/api/v1/escalations/events?analyticsKey=${encodeURIComponent(analyticsKey)}&ticketId=${encodeURIComponent(ticketId)}`;
+    const sse = new EscalationEventSource({
+      url: sseUrl,
+      onTicketClosed: tid => {
+        logger.info('AIAgent', 'SSE: ticket_closed received for', tid);
+        setUnreadCounts(prev => {
+          const next = {
+            ...prev
+          };
+          delete next[tid];
+          return next;
+        });
+        clearSupport(tid);
+      },
+      onConnected: tid => {
+        logger.info('AIAgent', 'SSE: connected for ticket', tid);
+      }
+    });
+    sse.connect();
+    sseRef.current.set(ticketId, sse);
+    logger.info('AIAgent', 'SSE opened for ticket:', ticketId);
+  }, [analyticsKey, clearSupport]);
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    setLastResult(null);
+  }, []);
+  const openSupportTicketModal = useCallback((ticketId, options) => {
+    setMode('human');
+    setSelectedTicketId(ticketId);
+    setUnreadCounts(prev => {
+      if (!prev[ticketId]) return prev;
+      const next = {
+        ...prev
+      };
+      delete next[ticketId];
+      return next;
+    });
+    if (options?.history) {
+      const restored = options.history.map((entry, i) => createAIMessage({
+        id: `restored-${ticketId}-${i}`,
+        role: entry.role === 'live_agent' ? 'assistant' : entry.role,
+        content: entry.content,
+        previewText: entry.content,
+        timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now()
+      }));
+      setSupportMessages(restored);
+    }
+    const cachedSocket = pendingSocketsRef.current.get(ticketId);
+    if (cachedSocket) {
+      pendingSocketsRef.current.delete(ticketId);
+      setSupportSocket(cachedSocket);
+    } else if (options?.wsUrl) {
+      const socket = new EscalationSocket({
+        onReply: reply => {
+          appendIncomingSupportReply(ticketId, reply);
+        },
+        onTypingChange: isTyping => {
+          if (selectedTicketIdRef.current === ticketId) {
+            setIsLiveAgentTyping(isTyping);
+          }
+        },
+        onTicketClosed: closedTicketId => {
+          if (closedTicketId) {
+            setUnreadCounts(prev => {
+              const next = {
+                ...prev
+              };
+              delete next[closedTicketId];
+              return next;
+            });
+          }
+          clearSupport(ticketId);
+        },
+        onError: err => logger.warn('AIAgent', '★ Socket error while auto-opening:', err)
+      });
+      socket.connect(options.wsUrl);
+      setSupportSocket(socket);
+    }
+    setChatScrollTrigger(prev => prev + 1);
+    (async () => {
+      try {
+        await fetch(`${ENDPOINTS.escalation}/api/v1/escalations/${ticketId}/read?analyticsKey=${analyticsKey}`, {
+          method: 'POST'
+        });
+        logger.info('AIAgent', '★ Marked auto-opened ticket as read:', ticketId);
+      } catch (err) {
+        logger.warn('AIAgent', '★ Failed to mark auto-opened ticket as read:', err);
+      }
+    })();
+  }, [analyticsKey, appendIncomingSupportReply, clearSupport]);
+  const ensureBackgroundTicketSocket = useCallback(ticket => {
+    if (!ticket.wsUrl) {
+      logger.warn('AIAgent', '★ Restored ticket has no wsUrl — skipping background socket:', ticket.id);
+      return;
+    }
+    if (selectedTicketIdRef.current === ticket.id && supportSocketRef.current) {
+      return;
+    }
+    if (pendingSocketsRef.current.has(ticket.id)) {
+      return;
+    }
+    const socket = new EscalationSocket({
+      onReply: reply => {
+        appendIncomingSupportReply(ticket.id, reply);
+      },
+      onTypingChange: isTyping => {
+        if (selectedTicketIdRef.current === ticket.id) {
+          setIsLiveAgentTyping(isTyping);
+        }
+      },
+      onTicketClosed: closedTicketId => {
+        if (closedTicketId) {
+          setUnreadCounts(prev => {
+            const next = {
+              ...prev
+            };
+            delete next[closedTicketId];
+            return next;
+          });
+        }
+        clearSupport(ticket.id);
+      },
+      onError: err => logger.warn('AIAgent', '★ Background socket error:', err)
+    });
+    socket.connect(ticket.wsUrl);
+    pendingSocketsRef.current.set(ticket.id, socket);
+    logger.info('AIAgent', '★ Background socket opened for ticket:', ticket.id);
+  }, [appendIncomingSupportReply, clearSupport]);
+  useEffect(() => {
+    openSupportTicketModalRef.current = openSupportTicketModal;
+  }, [openSupportTicketModal]);
+  useEffect(() => {
+    return () => {
+      pendingSocketsRef.current.forEach(socket => socket.disconnect());
+      pendingSocketsRef.current.clear();
+      sseRef.current.forEach(sse => sse.disconnect());
+      sseRef.current.clear();
+      reportedIssuesSSERef.current?.disconnect();
+      reportedIssuesSSERef.current = null;
+      supportSocket?.disconnect();
+    };
+  }, [supportSocket]);
+  const applyReportedIssueUpdates = useCallback((nextIssues, options) => {
+    const replayToChat = options?.replayToChat ?? true;
+    nextIssues.forEach(issue => {
+      const history = Array.isArray(issue.statusHistory) ? issue.statusHistory : [];
+      history.forEach(entry => {
+        if (!entry || typeof entry !== 'object') return;
+        const id = typeof entry.id === 'string' ? entry.id : null;
+        const message = typeof entry.message === 'string' ? entry.message : null;
+        if (!id || !message) return;
+        if (seenReportedIssueUpdatesRef.current.has(id)) return;
+        seenReportedIssueUpdatesRef.current.add(id);
+        if (!replayToChat) return;
+        const entryTimestamp = typeof entry.timestamp === 'string' ? new Date(entry.timestamp).getTime() : NaN;
+        setMessages(prev => {
+          if (prev.some(msg => msg.id === `reported-${id}`)) return prev;
+          return [...prev, createAIMessage({
+            id: `reported-${id}`,
+            role: 'assistant',
+            content: message,
+            previewText: message,
+            timestamp: Number.isFinite(entryTimestamp) ? entryTimestamp : Date.now()
+          })];
+        });
+      });
+    });
+  }, []);
+  const getDeepestRouteName = useCallback(state => {
+    if (!state || !Array.isArray(state.routes) || state.index == null) {
+      return null;
+    }
+    const route = state.routes[state.index];
+    if (!route) return null;
+    const nested = route.state;
+    if (nested) {
+      const nestedName = getDeepestRouteName(nested);
+      if (nestedName) return nestedName;
+    }
+    return typeof route.name === 'string' ? route.name : null;
+  }, []);
+  const resolveRawScreenName = useCallback(() => {
+    if (pathname) {
+      const routeKey = resolveRouteKeyFromPath(pathname === '/' ? 'index' : pathname);
+      if (routeKey) return routeKey;
+    }
+    const navState = navRef?.getRootState?.() ?? navRef?.getState?.();
+    const deepestFromState = getDeepestRouteName(navState);
+    if (deepestFromState) {
+      return deepestFromState;
+    }
+    const routeName = navRef?.getCurrentRoute?.()?.name;
+    if (typeof routeName === 'string' && routeName.trim().length > 0) {
+      return routeName;
+    }
+    const telemetryScreen = telemetryRef.current?.screen;
+    if (typeof telemetryScreen === 'string' && telemetryScreen !== 'Unknown' && telemetryScreen.trim().length > 0) {
+      return telemetryScreen;
+    }
+    return 'unknown';
+  }, [pathname, navRef, getDeepestRouteName]);
+  const resolveScreenName = useCallback(() => {
+    const rawScreenName = resolveRawScreenName();
+    if (rawScreenName === 'unknown') return rawScreenName;
+    const humanized = humanizeScreenName(rawScreenName);
+    return humanized || rawScreenName;
+  }, [resolveRawScreenName]);
+  const syncTelemetryScreen = useCallback(() => {
+    const screen = resolveScreenName();
+    if (screen === 'unknown') {
+      return screen;
+    }
+    telemetryRef.current?.setScreen(screen);
+    return screen;
+  }, [resolveScreenName]);
+  const getResolvedScreenName = useCallback(() => resolveScreenName(), [resolveScreenName]);
+  const getRawScreenName = useCallback(() => resolveRawScreenName(), [resolveRawScreenName]);
+  const resolvedKnowledgeBase = useMemo(() => {
+    if (knowledgeBase) return knowledgeBase;
+    if (!analyticsKey) return undefined;
+    return createMobileAIKnowledgeRetriever({
+      analyticsKey: analyticsKey,
+      baseUrl: analyticsProxyUrl ?? ENDPOINTS.escalation,
+      headers: analyticsProxyHeaders
+    });
+  }, [analyticsKey, analyticsProxyHeaders, analyticsProxyUrl, knowledgeBase]);
+  const platformAdapter = useMemo(() => new ReactNativePlatformAdapter({
+    getRootRef: () => rootViewRef.current,
+    getWalkConfig: () => ({
+      interactiveBlacklist,
+      interactiveWhitelist,
+      screenName: getRawScreenName(),
+      interceptNativeAlerts
+    }),
+    navRef,
+    router,
+    pathname,
+    getCurrentScreenName: getRawScreenName
+  }), [getRawScreenName, interactiveBlacklist, interactiveWhitelist, interceptNativeAlerts, navRef, pathname, router]);
+  useEffect(() => {
+    if (!analyticsKey) {
+      setRemoteConfiguredActions([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchConfiguredActions({
+      analyticsKey,
+      baseUrl: analyticsProxyUrl ?? ENDPOINTS.escalation,
+      headers: analyticsProxyHeaders
+    }).then(actions => {
+      if (!cancelled) {
+        setRemoteConfiguredActions(actions);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [analyticsKey, analyticsProxyHeaders, analyticsProxyUrl]);
+
+  // ─── Auto-create MobileAI escalation tool ─────────────────────
+  // When analyticsKey is present and consumer hasn't provided their own
+  // escalate_to_human tool, auto-wire the MobileAI platform provider.
+  // Human replies from the dashboard inbox are injected into chat messages.
+  const autoEscalateTool = useMemo(() => {
+    if (!analyticsKey) return null;
+    if (customTools?.['escalate_to_human']) return null; // consumer overrides
+    return createEscalateTool({
+      config: {
+        provider: 'mobileai'
+      },
+      analyticsKey,
+      getContext: () => ({
+        currentScreen: getResolvedScreenName(),
+        originalQuery: '',
+        stepsBeforeEscalation: 0
+      }),
+      getHistory: () => messages.map(m => ({
+        role: m.role,
+        content: m.previewText
+      })),
+      getToolCalls: () => {
+        const toolCalls = [];
+        messages.forEach(m => {
+          if (m.result?.steps) {
+            m.result.steps.forEach(step => {
+              if (step.action && step.action.name !== 'done' && step.action.name !== 'agent_step' && step.action.name !== 'escalate_to_human') {
+                toolCalls.push(step.action);
+              }
+            });
+          }
+        });
+        return toolCalls;
+      },
+      getScreenFlow: () => telemetryRef.current?.getScreenFlow() ?? [],
+      userContext,
+      pushToken,
+      pushTokenType,
+      onEscalationStarted: (tid, socket) => {
+        logger.info('AIAgent', '★★★ onEscalationStarted FIRED — ticketId:', tid);
+        // Cache the live socket so handleTicketSelect can reuse it without reconnecting
+        pendingSocketsRef.current.set(tid, socket);
+        // Open SSE for reliable ticket_closed delivery
+        openSSE(tid);
+        const currentScreen = getResolvedScreenName();
+        setTickets(prev => {
+          if (prev.find(t => t.id === tid)) {
+            logger.info('AIAgent', '★★★ Ticket already in list, skipping add');
+            return prev;
+          }
+          const newList = [{
+            id: tid,
+            reason: 'Connecting to agent...',
+            screen: currentScreen,
+            status: 'open',
+            history: [],
+            createdAt: new Date().toISOString(),
+            wsUrl: ''
+          }, ...prev];
+          logger.info('AIAgent', '★★★ Tickets updated, new length:', newList.length);
+          return newList;
+        });
+
+        // Fetch real ticket data from backend to replace the placeholder
+        void (async () => {
+          try {
+            const res = await fetch(`${ENDPOINTS.escalation}/api/v1/escalations/${tid}?analyticsKey=${encodeURIComponent(analyticsKey)}`);
+            if (res.ok) {
+              const data = await res.json();
+              setTickets(prev => prev.map(t => {
+                if (t.id !== tid) return t;
+                return {
+                  ...t,
+                  reason: data.reason || t.reason,
+                  screen: data.screen || t.screen,
+                  status: data.status || t.status,
+                  history: Array.isArray(data.history) ? data.history : t.history
+                };
+              }));
+            }
+          } catch {
+            // Best-effort — placeholder is still usable
+          }
+        })();
+
+        // Switch to human mode so the ticket LIST is visible — do NOT auto-select
+        setMode('human');
+        setAutoExpandTrigger(prev => {
+          const next = prev + 1;
+          logger.info('AIAgent', '★★★ autoExpandTrigger:', prev, '→', next);
+          return next;
+        });
+        logger.info('AIAgent', '★★★ setMode("human") called from onEscalationStarted');
+      },
+      onHumanReply: (reply, ticketId) => {
+        if (ticketId) {
+          if (!humanFrtFiredRef.current[ticketId]) {
+            humanFrtFiredRef.current[ticketId] = true;
+            telemetryRef.current?.track('human_first_response', {
+              canonical_type: 'human_first_response_sent',
+              ticketId
+            });
+          }
+          appendIncomingSupportReply(ticketId, reply);
+        }
+      },
+      onTypingChange: isTyping => {
+        setIsLiveAgentTyping(isTyping);
+      },
+      onTicketClosed: ticketId => {
+        logger.info('AIAgent', 'Ticket closed by agent — removing from list');
+        if (ticketId) {
+          setUnreadCounts(prev => {
+            const next = {
+              ...prev
+            };
+            delete next[ticketId];
+            return next;
+          });
+        }
+        clearSupport(ticketId);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analyticsKey, customTools, getResolvedScreenName, navRef, openSSE, userContext, pushToken, pushTokenType, messages, appendIncomingSupportReply, clearSupport]);
+  const autoReportIssueTool = useMemo(() => {
+    if (!analyticsKey) return null;
+    if (customTools?.['report_issue']) return null;
+    return createReportIssueTool({
+      analyticsKey,
+      getCurrentScreen: getResolvedScreenName,
+      getHistory: () => messages.map(m => ({
+        role: m.role,
+        content: m.previewText
+      })),
+      getScreenFlow: () => telemetryRef.current?.getScreenFlow() ?? [],
+      userContext
+    });
+  }, [analyticsKey, customTools, getResolvedScreenName, messages, userContext]);
+
+  // ─── Load conversation history on mount ─────────────────────────
+  useEffect(() => {
+    if (!analyticsKey) return;
+    void (async () => {
+      try {
+        setIsLoadingHistory(true);
+        await initDeviceId();
+        const deviceId = getDeviceId();
+        const list = await ConversationService.fetchConversations({
+          analyticsKey,
+          userId: userContext?.userId,
+          deviceId: deviceId || undefined
+        });
+        setConversations(list);
+      } catch (err) {
+        logger.warn('AIAgent', 'Failed to load conversation history:', err);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analyticsKey, userContext?.userId]);
+
+  // ─── Restore pending tickets on app start ──────────────────────
+  useEffect(() => {
+    if (!analyticsKey) return;
+    void (async () => {
+      try {
+        // Wait for the device ID to be initialised before reading it.
+        // getDeviceId() is synchronous but returns null on cold start until
+        // initDeviceId() resolves — awaiting here prevents an early bail-out
+        // that would leave the Human tab hidden after an app refresh.
+        await initDeviceId();
+        const deviceId = getDeviceId();
+        logger.info('AIAgent', '★ Restore check — analyticsKey:', !!analyticsKey, 'userId:', userContext?.userId, 'pushToken:', !!pushToken, 'deviceId:', deviceId);
+        if (!userContext?.userId && !pushToken && !deviceId) return;
+        const query = new URLSearchParams({
+          analyticsKey
+        });
+        if (userContext?.userId) query.append('userId', userContext.userId);
+        if (pushToken) query.append('pushToken', pushToken);
+        if (deviceId) query.append('deviceId', deviceId);
+        const url = `${ENDPOINTS.escalation}/api/v1/escalations/mine?${query.toString()}`;
+        logger.info('AIAgent', '★ Restore — fetching:', url);
+        const res = await fetch(url);
+        logger.info('AIAgent', '★ Restore — response status:', res.status);
+        if (!res.ok) return;
+        const data = await res.json();
+        const fetchedTickets = data.tickets ?? [];
+        logger.info('AIAgent', '★ Restore — found', fetchedTickets.length, 'active tickets');
+        if (fetchedTickets.length === 0) return;
+
+        // Initialize unread counts from backend (set together with tickets for instant badge)
+        const initialUnreadCounts = {};
+        for (const ticket of fetchedTickets) {
+          if (ticket.unreadCount && ticket.unreadCount > 0) {
+            initialUnreadCounts[ticket.id] = ticket.unreadCount;
+          }
+        }
+        setTickets(fetchedTickets);
+        setUnreadCounts(initialUnreadCounts);
+
+        // Switch the widget to human mode so support is immediately available.
+        setMode('human');
+        setAutoExpandTrigger(prev => prev + 1);
+
+        // Open SSE for every restored ticket — reliable ticket_closed delivery
+        for (const t of fetchedTickets) {
+          openSSE(t.id);
+          ensureBackgroundTicketSocket(t);
+        }
+
+        // Keep restored human conversations available, but only auto-open the
+        // modal when there is exactly one unread ticket that clearly contains a
+        // new incoming human message for the user.
+        const unreadTickets = fetchedTickets.filter(ticket => (ticket.unreadCount ?? 0) > 0);
+        if (unreadTickets.length === 1) {
+          const ticket = unreadTickets[0];
+          openSupportTicketModal(ticket.id, {
+            history: ticket.history,
+            wsUrl: ticket.wsUrl
+          });
+          logger.info('AIAgent', '★ Restored unread ticket auto-opened:', ticket.id);
+        }
+      } catch (err) {
+        logger.warn('AIAgent', '★ Failed to restore tickets:', err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analyticsKey, ensureBackgroundTicketSocket, openSSE, openSupportTicketModal]);
+  useEffect(() => {
+    if (!analyticsKey) return;
+    let isCancelled = false;
+    const syncIssues = async () => {
+      try {
+        await initDeviceId();
+        const deviceId = getDeviceId();
+        if (!userContext?.userId && !deviceId) return;
+        const query = new URLSearchParams({
+          analyticsKey
+        });
+        if (userContext?.userId) query.append('userId', userContext.userId);
+        if (deviceId) query.append('deviceId', deviceId);
+        const res = await fetch(`${ENDPOINTS.escalation}/api/v1/reported-issues/mine?${query.toString()}`);
+        if (!res.ok || isCancelled) return;
+        const data = await res.json();
+        const nextIssues = Array.isArray(data.issues) ? data.issues : [];
+        applyReportedIssueUpdates(nextIssues, {
+          replayToChat: false
+        });
+      } catch (error) {
+        logger.warn('AIAgent', 'Failed to sync reported issues:', error);
+      }
+    };
+    void syncIssues();
+    void (async () => {
+      await initDeviceId();
+      const deviceId = getDeviceId();
+      if (!userContext?.userId && !deviceId) return;
+      const query = new URLSearchParams({
+        analyticsKey
+      });
+      if (userContext?.userId) query.append('userId', userContext.userId);
+      if (deviceId) query.append('deviceId', deviceId);
+      reportedIssuesSSERef.current?.disconnect();
+      const sse = new ReportedIssueEventSource({
+        url: `${ENDPOINTS.escalation}/api/v1/reported-issues/events?${query.toString()}`,
+        onIssueUpdate: issue => {
+          applyReportedIssueUpdates([issue], {
+            replayToChat: true
+          });
+        },
+        onError: error => {
+          logger.warn('AIAgent', 'Reported issue SSE error:', error.message);
+        }
+      });
+      sse.connect();
+      reportedIssuesSSERef.current = sse;
+    })();
+    return () => {
+      isCancelled = true;
+      reportedIssuesSSERef.current?.disconnect();
+      reportedIssuesSSERef.current = null;
+    };
+  }, [analyticsKey, applyReportedIssueUpdates, userContext?.userId]);
+
+  // ─── Ticket selection handlers ────────────────────────────────
+  const handleTicketSelect = useCallback(async ticketId => {
+    const ticket = tickets.find(t => t.id === ticketId);
+    if (!ticket) return;
+
+    // Cache (not disconnect!) the previous ticket's socket so it keeps
+    // receiving messages in the background and can update unread counts.
+    if (supportSocket && selectedTicketId && selectedTicketId !== ticketId) {
+      pendingSocketsRef.current.set(selectedTicketId, supportSocket);
+      setSupportSocket(null);
+    }
+    setSelectedTicketId(ticketId);
+    setMode('human');
+
+    // Clear unread count when user opens a ticket
+    setUnreadCounts(prev => {
+      if (!prev[ticketId]) return prev;
+      const next = {
+        ...prev
+      };
+      delete next[ticketId];
+      return next;
+    });
+
+    // Mark ticket as read on backend (source of truth)
+    (async () => {
+      try {
+        await fetch(`${ENDPOINTS.escalation}/api/v1/escalations/${ticketId}/read?analyticsKey=${analyticsKey}`, {
+          method: 'POST'
+        });
+        logger.info('AIAgent', '★ Marked ticket as read:', ticketId);
+      } catch (err) {
+        logger.warn('AIAgent', '★ Failed to mark ticket as read:', err);
+      }
+    })();
+
+    // Trigger scroll to bottom when modal opens
+    setChatScrollTrigger(prev => prev + 1);
+
+    // Capture the fresh wsUrl returned by the server — it is the canonical value.
+    // The local `ticket` snapshot may have an empty wsUrl if it was a placeholder
+    // created before the WS URL was known (e.g. via onEscalationStarted).
+    let freshWsUrl = ticket.wsUrl;
+
+    // Fetch latest history from server — this is the source of truth and catches
+    // any messages that arrived while the socket was disconnected (modal closed,
+    // app backgrounded, etc.)
+    try {
+      const res = await fetch(`${ENDPOINTS.escalation}/api/v1/escalations/${ticketId}?analyticsKey=${analyticsKey}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.wsUrl) {
+          freshWsUrl = data.wsUrl; // always prefer the live server value
+        }
+        const serverHistory = Array.isArray(data.history) ? data.history : [];
+        const mergedHistory = mergeSupportHistory(serverHistory, ticket.history || []);
+        const restored = mergedHistory.map((entry, i) => createAIMessage({
+          id: `restored-${ticketId}-${i}`,
+          role: entry.role === 'live_agent' ? 'assistant' : entry.role,
+          content: entry.content,
+          previewText: entry.content,
+          timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now()
+        }));
+        setSupportMessages(restored);
+        // Update ticket in local list with fresh history + wsUrl
+        if (data.wsUrl) {
+          setTickets(prev => prev.map(t => t.id === ticketId ? {
+            ...t,
+            history: mergedHistory,
+            wsUrl: data.wsUrl
+          } : t));
+        } else {
+          setTickets(prev => prev.map(t => t.id === ticketId ? {
+            ...t,
+            history: mergedHistory
+          } : t));
+        }
+      } else {
+        // Fallback to local ticket history
+        if (ticket.history?.length) {
+          const restored = ticket.history.map((entry, i) => createAIMessage({
+            id: `restored-${ticketId}-${i}`,
+            role: entry.role === 'live_agent' ? 'assistant' : entry.role,
+            content: entry.content,
+            previewText: entry.content,
+            timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now()
+          }));
+          setSupportMessages(restored);
+        } else {
+          setSupportMessages([]);
+        }
+      }
+    } catch (err) {
+      logger.warn('AIAgent', '★ Failed to fetch ticket history, using local:', err);
+      if (ticket.history?.length) {
+        const restored = ticket.history.map((entry, i) => createAIMessage({
+          id: `restored-${ticketId}-${i}`,
+          role: entry.role === 'live_agent' ? 'assistant' : entry.role,
+          content: entry.content,
+          previewText: entry.content,
+          timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now()
+        }));
+        setSupportMessages(restored);
+      } else {
+        setSupportMessages([]);
+      }
+    }
+
+    // Reuse the already-connected socket if escalation just happened,
+    // otherwise create a fresh connection from the ticket's stored wsUrl.
+    const cached = pendingSocketsRef.current.get(ticketId);
+    if (cached) {
+      // If the socket errored (not just cleanly disconnected), discard it and
+      // fall through to create a fresh one — reusing an errored socket causes
+      // sendText to silently return false → "Connection lost" on every message.
+      if (cached.hasErrored) {
+        logger.warn('AIAgent', '★ Cached socket errored — discarding and creating fresh socket for ticket:', ticketId);
+        cached.disconnect();
+        pendingSocketsRef.current.delete(ticketId);
+        // Fall through to fresh socket creation below
+      } else {
+        pendingSocketsRef.current.delete(ticketId);
+        // If the cached socket was created before wsUrl was available (e.g. during
+        // on-mount restore), it may never have connected. Reconnect it now.
+        if (!cached.isConnected && freshWsUrl) {
+          logger.info('AIAgent', '★ Cached socket not connected — reconnecting with wsUrl:', freshWsUrl);
+          cached.connect(freshWsUrl);
+        }
+        setSupportSocket(cached);
+        logger.info('AIAgent', '★ Reusing cached escalation socket for ticket:', ticketId);
+        return;
+      }
+    }
+    const socket = new EscalationSocket({
+      onReply: reply => {
+        appendIncomingSupportReply(ticketId, reply);
+      },
+      onTypingChange: setIsLiveAgentTyping,
+      onTicketClosed: closedTicketId => {
+        if (closedTicketId) {
+          setUnreadCounts(prev => {
+            const next = {
+              ...prev
+            };
+            delete next[closedTicketId];
+            return next;
+          });
+        }
+        clearSupport(ticketId);
+      },
+      onError: err => logger.warn('AIAgent', '★ Socket error on select:', err)
+    });
+    if (freshWsUrl) {
+      socket.connect(freshWsUrl);
+    } else {
+      logger.warn('AIAgent', '★ Ticket has no wsUrl — skipping socket connect for ticket:', ticketId);
+    }
+    setSupportSocket(socket);
+  }, [tickets, supportSocket, selectedTicketId, analyticsKey, clearSupport]);
+  const handleBackToTickets = useCallback(() => {
+    // Cache socket in pendingSocketsRef instead of disconnecting —
+    // keeps the WS alive so new messages update unreadCounts in real time.
+    const currentTicketId = selectedTicketIdRef.current;
+    // Use functional setter to read + cache the current socket without closure dependency
+    setSupportSocket(prev => {
+      if (prev && currentTicketId) {
+        pendingSocketsRef.current.set(currentTicketId, prev);
+        logger.info('AIAgent', '★ Socket cached for ticket:', currentTicketId, '— stays alive for badge updates');
+      }
+      return null;
+    });
+    logger.info('AIAgent', '★ Back to tickets');
+    setSelectedTicketId(null);
+    setSupportMessages([]);
+    setIsLiveAgentTyping(false);
+  }, []); // No dependencies — uses refs/functional setters
+
+  const remoteActionInstructions = useMemo(() => {
+    if (remoteConfiguredActions.length === 0) return "";
+    const lines = remoteConfiguredActions.map(action => {
+      const modeLabel = action.executionType === "webhook" ? "executes directly in MobileAI" : "executes in app code after MobileAI authorization";
+      return `- Tool \`${action.name}\` (${modeLabel}): ${action.triggerHint}`;
+    });
+    return ["### MobileAI Configured Actions", "Only use the configured actions below. Do not invent or call unconfigured app actions.", ...lines].join("\n");
+  }, [remoteConfiguredActions]);
+  const registeredDataInstructions = useMemo(() => {
+    const sources = dataRegistry.getAll();
+    if (sources.length === 0) return "";
+    const lines = sources.map(source => {
+      const schema = source.schema ? Object.entries(source.schema).map(([key, value]) => {
+        if (typeof value === 'string') {
+          return `${key}: ${value}`;
+        }
+        return `${key}: ${value.type || 'string'} - ${value.description}`;
+      }).join('; ') : '';
+      return schema.length > 0 ? `- Data source \`${source.name}\`: ${source.description}. Fields: ${schema}` : `- Data source \`${source.name}\`: ${source.description}`;
+    });
+    return ["### MobileAI Registered Data Sources", "The app exposes live data sources you can query with `query_data(source, query)`.", "Use them for recommendations, catalog lookup, live pricing, inventory, order status, or any structured data that is better fetched directly than inferred from the current screen.", ...lines].join("\n");
+  }, [registeredDataRevision]);
+  const resolvedInstructions = useMemo(() => {
+    const combinedSystem = [instructions?.system?.trim(), remoteActionInstructions.trim(), registeredDataInstructions.trim()].filter(Boolean).join("\n\n");
+    if (!combinedSystem && !instructions?.getScreenInstructions) {
+      return instructions;
+    }
+    return {
+      ...instructions,
+      system: combinedSystem || undefined
+    };
+  }, [instructions, remoteActionInstructions, registeredDataInstructions]);
+  const remoteActionTools = useMemo(() => {
+    if (!analyticsKey || remoteConfiguredActions.length === 0) {
+      return {};
+    }
+    const buildParameters = actionName => {
+      const registeredAction = actionRegistry.get(actionName);
+      if (!registeredAction) {
+        return {};
+      }
+      const params = {};
+      for (const [key, value] of Object.entries(registeredAction.parameters)) {
+        if (typeof value === "string") {
+          params[key] = {
+            type: "string",
+            description: value,
+            required: true
+          };
+          continue;
+        }
+        params[key] = {
+          type: value.type,
+          description: value.description,
+          required: value.required !== false,
+          enum: value.enum
+        };
+      }
+      return params;
+    };
+    return Object.fromEntries(remoteConfiguredActions.map(action => {
+      const description = action.executionType === "webhook" ? `${action.description} This action is fully configured in MobileAI and runs via webhook.` : `${action.description} This action requires a matching useAction('${action.name}', ...) implementation in the app.`;
+      const tool = {
+        name: action.name,
+        description,
+        parameters: action.executionType === "app_code" ? buildParameters(action.name) : {},
+        execute: async args => {
+          const execution = await executeConfiguredAction({
+            analyticsKey,
+            actionName: action.name,
+            baseUrl: analyticsProxyUrl ?? ENDPOINTS.escalation,
+            headers: analyticsProxyHeaders,
+            args,
+            currentScreen: getResolvedScreenName(),
+            userContext: userContext ?? {}
+          });
+          if (!execution.allowed) {
+            return `❌ ${execution.error ?? `Action "${action.name}" is not allowed right now.`}`;
+          }
+          if (action.executionType === "webhook") {
+            return formatActionToolResult({
+              success: true,
+              message: execution.message,
+              output: execution.output
+            }, `✅ Action "${action.name}" executed successfully.`);
+          }
+          const registeredAction = actionRegistry.get(action.name);
+          if (!registeredAction) {
+            return `❌ Action "${action.name}" is configured in MobileAI as app_code, but no matching useAction('${action.name}', ...) is mounted in the app.`;
+          }
+          try {
+            const result = await registeredAction.handler(args);
+            return formatActionToolResult(result, `✅ Action "${action.name}" executed successfully.`);
+          } catch (error) {
+            return `❌ Action "${action.name}" failed: ${error.message}`;
+          }
+        }
+      };
+      return [action.name, tool];
+    }));
+  }, [analyticsKey, analyticsProxyHeaders, analyticsProxyUrl, getResolvedScreenName, remoteConfiguredActions, registeredActionRevision, userContext]);
+  const mergedCustomTools = useMemo(() => {
+    return {
+      ...remoteActionTools,
+      ...(autoEscalateTool ? {
+        escalate_to_human: autoEscalateTool
+      } : {}),
+      ...(autoReportIssueTool ? {
+        report_issue: autoReportIssueTool
+      } : {}),
+      ...customTools
+    };
+  }, [autoEscalateTool, autoReportIssueTool, customTools, remoteActionTools]);
+
+  // ─── Voice/Live Mode State ──────────────────────────────────
+  const [mode, setMode] = useState('text');
+  const [isMicActive, setIsMicActive] = useState(false);
+  const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+  const [isAISpeaking, setIsAISpeaking] = useState(false);
+  const [isVoiceConnected, setIsVoiceConnected] = useState(false);
+  const voiceServiceRef = useRef(null);
+  const audioInputRef = useRef(null);
+  const audioOutputRef = useRef(null);
+  const toolLockRef = useRef(false);
+  const userHasSpokenRef = useRef(false);
+  const lastScreenContextRef = useRef('');
+  const screenPollIntervalRef = useRef(null);
+  const lastAgentErrorRef = useRef(null);
+  const availableModes = useMemo(() => {
+    const modes = ['text'];
+    if (enableVoice) modes.push('voice');
+    if (tickets.length > 0) modes.push('human');
+    logger.info('AIAgent', '★ availableModes recomputed:', modes, '| tickets:', tickets.length, '| ticketIds:', tickets.map(t => t.id));
+    return modes;
+  }, [enableVoice, tickets]);
+
+  // Ref-based resolver for ask_user — stays alive across renders
+  const askUserResolverRef = useRef(null);
+  const pendingAskUserKindRef = useRef(null);
+  // Tracks whether we're waiting for a BUTTON tap (not just any text answer).
+  // Set true when kind='approval' is issued; cleared ONLY on actual button tap.
+  // Forces kind='approval' on all subsequent ask_user calls until resolved.
+  const pendingAppApprovalRef = useRef(false);
+  // Stores a message typed by the user while the agent is still thinking (mid-approval flow).
+  // Auto-resolved into the next ask_user call to prevent the message being lost.
+  const queuedApprovalAnswerRef = useRef(null);
+  const [pendingApprovalQuestion, setPendingApprovalQuestion] = useState(null);
+  const overlayVisible = isThinking || !!pendingApprovalQuestion;
+  const overlayStatusText = pendingApprovalQuestion ? 'Waiting for your approval...' : statusText;
+  const effectiveProxyHeaders = useMemo(() => {
+    if (!analyticsKey) return proxyHeaders;
+    const isAuthMissing = !proxyHeaders || !Object.keys(proxyHeaders).some(k => k.toLowerCase() === 'authorization');
+    if (isAuthMissing) {
+      return {
+        ...proxyHeaders,
+        Authorization: `Bearer ${analyticsKey}`
+      };
+    }
+    return proxyHeaders;
+  }, [proxyHeaders, analyticsKey]);
+  const effectiveVoiceProxyHeaders = useMemo(() => {
+    if (!analyticsKey) return voiceProxyHeaders;
+    const isAuthMissing = !voiceProxyHeaders || !Object.keys(voiceProxyHeaders).some(k => k.toLowerCase() === 'authorization');
+    if (isAuthMissing) {
+      return {
+        ...voiceProxyHeaders,
+        Authorization: `Bearer ${analyticsKey}`
+      };
+    }
+    return voiceProxyHeaders;
+  }, [voiceProxyHeaders, analyticsKey]);
+  const resolvedProxyUrl = useMemo(() => {
+    if (proxyUrl) return proxyUrl;
+    if (analyticsKey) return ENDPOINTS.hostedTextProxy;
+    return undefined;
+  }, [proxyUrl, analyticsKey]);
+  const resolvedVoiceProxyUrl = useMemo(() => {
+    if (voiceProxyUrl) return voiceProxyUrl;
+    if (analyticsKey) return ENDPOINTS.hostedVoiceProxy;
+    return resolvedProxyUrl;
+  }, [voiceProxyUrl, analyticsKey, resolvedProxyUrl]);
+
+  // ─── Create Runtime ──────────────────────────────────────────
+
+  const config = useMemo(() => ({
+    apiKey,
+    proxyUrl: resolvedProxyUrl,
+    proxyHeaders,
+    voiceProxyUrl: resolvedVoiceProxyUrl,
+    voiceProxyHeaders,
+    model,
+    supportStyle,
+    verifier,
+    language: 'en',
+    maxSteps,
+    interactiveBlacklist,
+    interactiveWhitelist,
+    onBeforeStep,
+    onAfterStep,
+    onBeforeTask,
+    onAfterTask,
+    customTools: mode === 'voice' ? {
+      ...mergedCustomTools,
+      ask_user: null
+    } : mergedCustomTools,
+    instructions: resolvedInstructions,
+    stepDelay,
+    mcpServerUrl,
+    router,
+    pathname,
+    interceptNativeAlerts,
+    onStatusUpdate: setStatusText,
+    onTokenUsage,
+    knowledgeBase: resolvedKnowledgeBase,
+    knowledgeMaxTokens,
+    enableUIControl,
+    allowedActionNames: analyticsKey && remoteConfiguredActions.length > 0 ? remoteConfiguredActions.map(action => action.name) : undefined,
+    screenMap: useScreenMap ? screenMap : undefined,
+    maxTokenBudget,
+    maxCostUSD,
+    interactionMode,
+    platformAdapter,
+    // Block the agent loop until user responds
+    onAskUser: mode === 'voice' ? undefined : request => {
+      return new Promise(resolve => {
+        const normalized = typeof request === 'string' ? {
+          question: request,
+          kind: 'freeform'
+        } : request;
+        const question = normalized.question;
+        const kind = normalized.kind || 'freeform';
+        logger.info('AIAgent', `❓ onAskUser invoked in ${mode} mode: "${question}"`);
+        telemetryRef.current?.track('agent_trace', {
+          stage: 'ask_user_prompt_rendered',
+          question,
+          mode,
+          kind
+        });
+        askUserResolverRef.current = resolve;
+        logger.info('AIAgent', `📌 askUserResolverRef SET (resolver stored) | kind=${kind} | pendingAppApprovalRef=${pendingAppApprovalRef.current}`);
+        // If we're already waiting for a button tap, force approval kind regardless
+        // of what the model passed — the user must tap a button to proceed.
+        const forcedKind = pendingAppApprovalRef.current ? 'approval' : kind;
+        pendingAskUserKindRef.current = forcedKind;
+        if (forcedKind === 'approval') {
+          pendingAppApprovalRef.current = true;
+        }
+
+        // If the user typed a message while we were thinking (queued answer),
+        // resolve immediately with that message instead of blocking on a new prompt.
+        const queued = queuedApprovalAnswerRef.current;
+        if (queued !== null) {
+          queuedApprovalAnswerRef.current = null;
+          logger.info('AIAgent', `⚡ Auto-resolving ask_user with queued message: "${queued}"`);
+          setAutoExpandTrigger(prev => prev + 1);
+          // Show the AI question in chat, clear the approval buttons (no resolver for them),
+          // then immediately resolve the Promise with the queued message.
+          setMessages(prev => [...prev, createAIMessage({
+            id: `assistant-ask-${Date.now()}`,
+            role: 'assistant',
+            content: question,
+            previewText: question,
+            timestamp: Date.now(),
+            promptKind: forcedKind === 'approval' ? 'approval' : undefined
+          })]);
+          askUserResolverRef.current = null;
+          pendingAskUserKindRef.current = null;
+          pendingAppApprovalRef.current = false; // CRITICAL FIX: Unlock the agent state
+          setPendingApprovalQuestion(null); // clear any stale buttons — buttons with no resolver = dead tap
+          resolve(queued);
+          return;
+        }
+        setPendingApprovalQuestion(forcedKind === 'approval' ? question : null);
+        setAutoExpandTrigger(prev => prev + 1);
+        // Add AI question to the message thread so it appears in chat
+        setMessages(prev => [...prev, createAIMessage({
+          id: `assistant-ask-${Date.now()}`,
+          role: 'assistant',
+          content: question,
+          previewText: question,
+          timestamp: Date.now(),
+          promptKind: kind === 'approval' ? 'approval' : undefined
+        })]);
+        setLastResult({
+          success: true,
+          message: question,
+          previewText: question,
+          reply: normalizeRichContent(question),
+          steps: []
+        });
+        setIsThinking(false);
+        setStatusText('');
+      });
+    },
+    // Toggle isAgentActing flag on TelemetryService before/after every tool
+    // so that AI-driven taps are never tracked as user_interaction events.
+    onToolExecute: (active, toolName) => {
+      setIsActing(active && !!toolName && UI_ACTION_TOOL_NAMES.has(toolName));
+      telemetryRef.current?.setAgentActing(active);
+    },
+    onTrace: event => {
+      telemetryRef.current?.track('agent_trace', {
+        traceId: event.traceId,
+        stage: event.stage,
+        stepIndex: event.stepIndex,
+        screenName: event.screenName,
+        ...(event.data ?? {})
+      });
+    }
+  }), [mode, apiKey, resolvedProxyUrl, proxyHeaders, resolvedVoiceProxyUrl, voiceProxyHeaders, model, maxSteps, interactiveBlacklist, interactiveWhitelist, onBeforeStep, onAfterStep, onBeforeTask, onAfterTask, transformScreenContent, mergedCustomTools, resolvedInstructions, stepDelay, mcpServerUrl, router, pathname, onTokenUsage, resolvedKnowledgeBase, knowledgeMaxTokens, enableUIControl, analyticsKey, remoteConfiguredActions, screenMap, useScreenMap, maxTokenBudget, maxCostUSD, interactionMode, platformAdapter, verifier, supportStyle]);
+  useEffect(() => {
+    logger.info('AIAgent', `⚙️ Runtime config recomputed: mode=${mode} interactionMode=${interactionMode || 'copilot(default)'} onAskUser=${mode !== 'voice'} mergedTools=${Object.keys(mergedCustomTools).join(', ') || '(none)'}`);
+  }, [mode, interactionMode, mergedCustomTools]);
+  const provider = useMemo(() => createProvider(providerName, apiKey, model, resolvedProxyUrl, effectiveProxyHeaders), [providerName, apiKey, model, resolvedProxyUrl, effectiveProxyHeaders]);
+  const runtime = useMemo(() => new AgentRuntime(provider, config, rootViewRef.current, navRef),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [provider, config]);
+
+  // Update refs when they change
+  useEffect(() => {
+    runtime.updateRefs(rootViewRef.current, navRef);
+  }, [runtime, navRef]);
+
+  // ─── Telemetry ─────────────────────────────────────────────
+
+  const telemetryRef = useRef(null);
+  useEffect(() => {
+    if (!analyticsKey && !analyticsProxyUrl) {
+      bindTelemetryService(null);
+      return;
+    }
+
+    // Initialize persistent device ID before telemetry starts
+    initDeviceId().then(() => {
+      const telemetry = new TelemetryService({
+        analyticsKey,
+        analyticsProxyUrl,
+        analyticsProxyHeaders,
+        debug,
+        onEvent: event => {
+          // Proactive behavior triggers
+          if (event.type === 'rage_tap' || event.type === 'rage_click' || event.type === 'rage_click_detected' || event.type === 'error_screen' || event.type === 'repeated_navigation') {
+            idleDetectorRef.current?.triggerBehavior(event.type, event.screen);
+          }
+
+          // Customer Success features
+          if (customerSuccess?.enabled && (event.type === 'user_interaction' || event.type === 'user_action') && event.data) {
+            const action = String(event.data.label || event.data.action || '');
+
+            // Check milestones
+            customerSuccess.successMilestones?.forEach(m => {
+              if (m.action && m.action === action) {
+                telemetry.track('health_signal', {
+                  type: 'success_milestone',
+                  milestone: m.name
+                });
+              }
+            });
+
+            // Check key feature adoption
+            customerSuccess.keyFeatures?.forEach(feature => {
+              if (action.includes(feature) || action === feature) {
+                telemetry.track('health_signal', {
+                  type: 'feature_adoption',
+                  feature
+                });
+              }
+            });
+          }
+        }
+      });
+      telemetryRef.current = telemetry;
+      bindTelemetryService(telemetry);
+      telemetry.start();
+      // NavigationContainer is a child of AIAgent, so navRef may not be
+      // ready yet when this effect runs. Poll briefly until it is.
+      const resolveInitialScreen = () => {
+        let attempts = 0;
+        const maxAttempts = 15; // 15 × 200ms = 3s max wait
+        const timer = setInterval(() => {
+          attempts++;
+          const cleanName = syncTelemetryScreen();
+          if (cleanName !== 'unknown') {
+            clearInterval(timer);
+          } else if (attempts >= maxAttempts) {
+            clearInterval(timer);
+          }
+        }, 200);
+      };
+      resolveInitialScreen();
+    }); // initDeviceId
+  }, [analyticsKey, analyticsProxyUrl, analyticsProxyHeaders, bindTelemetryService, debug, navRef, syncTelemetryScreen]);
+
+  // ─── Security warnings ──────────────────────────────────────
+
+  useEffect(() => {
+    // @ts-ignore
+    if (typeof __DEV__ !== 'undefined' && !__DEV__ && apiKey && !resolvedProxyUrl) {
+      logger.warn('[MobileAI] ⚠️ SECURITY WARNING: You are using `apiKey` directly in a production build. ' + 'This exposes your LLM provider key in the app binary. ' + 'Use `apiProxyUrl` to route requests through your backend instead. ' + 'See docs for details.');
+    }
+  }, [apiKey, resolvedProxyUrl]);
+
+  // Track screen changes via navRef
+  useEffect(() => {
+    if (!navRef?.addListener || !telemetryRef.current) return;
+    const checkScreenMilestone = screenName => {
+      telemetryRef.current?.setScreen(screenName);
+
+      // Auto-capture wireframe snapshot for privacy-safe heatmaps.
+      // Deferred: wait for all animations/interactions to finish, then
+      // wait one more frame for layout to settle. Zero perf impact.
+      if (rootViewRef.current) {
+        const handle = InteractionManager.runAfterInteractions(() => {
+          requestAnimationFrame(() => {
+            Promise.all([captureWireframe(rootViewRef, {
+              screenName
+            }), captureHeatmapScreenshot(rootViewRef.current)]).then(([wireframe, screenshot]) => {
+              if (wireframe && telemetryRef.current) {
+                telemetryRef.current.trackWireframe({
+                  ...wireframe,
+                  screenshot: screenshot || undefined
+                });
+              }
+            }).catch(err => {
+              if (debug) logger.debug('AIAgent', 'Wireframe capture failed:', err);
+            });
+          });
+        });
+        void handle;
+      }
+      if (customerSuccess?.enabled) {
+        customerSuccess.successMilestones?.forEach(m => {
+          if (m.screen && m.screen === screenName) {
+            telemetryRef.current?.track('health_signal', {
+              type: 'success_milestone',
+              milestone: m.name
+            });
+          }
+        });
+      }
+      if (isOnboardingActive && onboarding?.steps) {
+        const step = onboarding.steps[currentOnboardingIndex];
+        if (step && step.screen === screenName) {
+          telemetryRef.current?.track('onboarding_step', {
+            step_index: currentOnboardingIndex,
+            screen: screenName,
+            action: step.action || 'view'
+          });
+
+          // Pop the onboarding badge instantly
+          setTimeout(() => {
+            setProactiveBadgeText(step.message);
+            setProactiveStage('badge');
+            // Stop typical idle timers so it stays until dismissed or advanced
+            idleDetectorRef.current?.dismiss();
+
+            // Auto advance logic
+            advanceOnboarding();
+          }, 300);
+        }
+      }
+    };
+    const unsubscribe = navRef.addListener('state', () => {
+      const cleanName = resolveScreenName();
+      if (cleanName) {
+        checkScreenMilestone(cleanName);
+      }
+    });
+    return () => unsubscribe?.();
+  }, [navRef, resolveScreenName, customerSuccess, isOnboardingActive, onboarding, currentOnboardingIndex, advanceOnboarding]);
+
+  // ─── MCP Bridge ──────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!mcpServerUrl) return;
+    logger.info('AIAgent', `Setting up MCP bridge at ${mcpServerUrl}`);
+    const bridge = new MCPBridge(mcpServerUrl, runtime);
+    return () => {
+      bridge.destroy();
+    };
+  }, [mcpServerUrl, runtime]);
+
+  // ─── Proactive Idle Agent ────────────────────────────────────
+
+  const idleDetectorRef = useRef(null);
+  const [proactiveStage, setProactiveStage] = useState('hidden');
+  const [proactiveBadgeText, setProactiveBadgeText] = useState('');
+  useEffect(() => {
+    if (proactiveHelp?.enabled === false) {
+      idleDetectorRef.current?.destroy();
+      idleDetectorRef.current = null;
+      setProactiveStage('hidden');
+      return;
+    }
+    if (!idleDetectorRef.current) {
+      idleDetectorRef.current = new IdleDetector();
+    }
+    idleDetectorRef.current.start({
+      pulseAfterMs: (proactiveHelp?.pulseAfterMinutes || 2) * 60000,
+      badgeAfterMs: (proactiveHelp?.badgeAfterMinutes || 4) * 60000,
+      onPulse: () => setProactiveStage('pulse'),
+      onBadge: suggestion => {
+        setProactiveBadgeText(suggestion);
+        setProactiveStage('badge');
+      },
+      onReset: () => setProactiveStage('hidden'),
+      generateSuggestion: () => proactiveHelp?.generateSuggestion?.(telemetryRef.current?.screen || 'Home') || proactiveHelp?.badgeText || 'Need help with this screen?',
+      behaviorTriggers: proactiveHelp?.behaviorTriggers
+    });
+    return () => {
+      idleDetectorRef.current?.destroy();
+      idleDetectorRef.current = null;
+    };
+  }, [proactiveHelp, telemetryRef]);
+
+  // ─── Voice/Live Service Initialization ──────────────────────
+
+  // Initialize voice services when mode changes to voice
+  useEffect(() => {
+    if (mode !== 'voice') {
+      logger.info('AIAgent', `Mode ${mode} — skipping voice service init`);
+      return;
+    }
+    logger.info('AIAgent', `Mode changed to "${mode}" — initializing voice services...`);
+
+    // Track async audio output init — mic MUST wait for this
+    let audioOutputInitPromise = Promise.resolve();
+
+    // Create VoiceService with runtime's built-in tools (navigate, tap, type, done, etc.)
+    if (!voiceServiceRef.current) {
+      logger.info('AIAgent', 'Creating VoiceService...');
+      const runtimeTools = runtime.getTools();
+      logger.info('AIAgent', `Registering ${runtimeTools.length} tools with VoiceService: ${runtimeTools.map(t => t.name).join(', ')}`);
+      // Use voice-adapted system prompt — same core rules as text mode
+      // but without agent-loop directives that trigger autonomous actions
+      const voicePrompt = buildVoiceSystemPrompt('en', instructions?.system, !!knowledgeBase, supportStyle);
+      logger.info('AIAgent', `📝 Voice system prompt (${voicePrompt.length} chars):\n${voicePrompt}`);
+      voiceServiceRef.current = new VoiceService({
+        apiKey,
+        proxyUrl: resolvedVoiceProxyUrl,
+        proxyHeaders: effectiveVoiceProxyHeaders || effectiveProxyHeaders,
+        systemPrompt: voicePrompt,
+        tools: runtimeTools,
+        language: 'en'
+      });
+      logger.info('AIAgent', `VoiceService created with ${runtimeTools.length} tools: ${runtimeTools.map(t => t.name).join(', ')}`);
+    }
+
+    // Create AudioOutputService if not exists
+    if (!audioOutputRef.current) {
+      logger.info('AIAgent', 'Creating AudioOutputService...');
+      audioOutputRef.current = new AudioOutputService({
+        onError: err => logger.warn('AIAgent', `AudioOutput error/disabled: ${err}`)
+      });
+      // IMPORTANT: Must await initialize() BEFORE starting mic.
+      // initialize() calls setAudioSessionOptions which reconfigures the
+      // audio hardware. If the mic starts before this finishes, the native
+      // audio session change kills the recorder's device handle.
+      audioOutputInitPromise = audioOutputRef.current.initialize().then(ok => {
+        logger.info('AIAgent', `AudioOutputService initialized: ${ok}`);
+      });
+    }
+
+    // Create AudioInputService if not exists
+    if (!audioInputRef.current) {
+      logger.info('AIAgent', 'Creating AudioInputService...');
+      audioInputRef.current = new AudioInputService({
+        // Default 16kHz — Gemini Live API input standard
+        onAudioChunk: chunk => {
+          logger.info('AIAgent', `🎤 onAudioChunk: ${chunk.length} chars, voiceService=${!!voiceServiceRef.current}, connected=${voiceServiceRef.current?.isConnected}`);
+          voiceServiceRef.current?.sendAudio(chunk);
+        },
+        onError: err => logger.warn('AIAgent', `AudioInput error/disabled: ${err}`),
+        onPermissionDenied: () => logger.warn('AIAgent', 'Mic permission denied by user')
+      });
+    }
+
+    // Connect VoiceService (async — SDK's ai.live.connect returns a Promise)
+    logger.info('AIAgent', 'Connecting VoiceService...');
+    void voiceServiceRef.current.connect({
+      onAudioResponse: audio => {
+        logger.info('AIAgent', `🔊 Audio response: ${audio.length} chars, audioOutputRef=${!!audioOutputRef.current}`);
+        setIsAISpeaking(true);
+        if (!audioOutputRef.current) {
+          logger.error('AIAgent', '❌ audioOutputRef.current is NULL — cannot play audio!');
+          return;
+        }
+        audioOutputRef.current.enqueue(audio);
+      },
+      onStatusChange: status => {
+        logger.info('AIAgent', `Voice status: ${status}`);
+        const connected = status === 'connected';
+        setIsVoiceConnected(connected);
+        if (connected) {
+          logger.info('AIAgent', '✅ VoiceService connected — waiting for audio session init before starting mic...');
+          // Wait for audio session config to finish BEFORE starting mic.
+          // If mic starts while setAudioSessionOptions is in flight,
+          // the native audio device gets killed (AudioDeviceStop error).
+          audioOutputInitPromise.then(() => {
+            logger.info('AIAgent', '✅ Audio session ready — starting mic now...');
+            audioInputRef.current?.start().then(ok => {
+              if (ok) {
+                setIsMicActive(true);
+                logger.info('AIAgent', '🎙️ Mic auto-started after connection');
+              }
+            });
+          });
+        }
+
+        // Handle unexpected disconnection — auto-reconnect ONLY if not intentional
+        if (status === 'disconnected' && mode === 'voice' && voiceServiceRef.current && !voiceServiceRef.current.intentionalDisconnect) {
+          // Stop mic & audio immediately so user isn't stuck
+          audioInputRef.current?.stop();
+          audioOutputRef.current?.stop();
+          setIsMicActive(false);
+          setIsAISpeaking(false);
+          logger.warn('AIAgent', '⚠️ Voice connection dropped unexpectedly — attempting reconnect in 2s...');
+
+          // Auto-reconnect after short delay
+          setTimeout(() => {
+            if (mode === 'voice' && voiceServiceRef.current && !voiceServiceRef.current.intentionalDisconnect && voiceServiceRef.current.lastCallbacks) {
+              logger.info('AIAgent', '🔄 Reconnecting VoiceService...');
+              void voiceServiceRef.current.connect(voiceServiceRef.current.lastCallbacks);
+            }
+          }, 2000);
+        }
+      },
+      onTranscript: (text, isFinal, role) => {
+        logger.info('AIAgent', `Transcript [${role}] (final=${isFinal}): "${text}"`);
+        if (role === 'user') {
+          userHasSpokenRef.current = true;
+        }
+      },
+      onSetupComplete: () => {
+        logger.info('AIAgent', '✅ SDK setup complete — sending initial screen context now');
+        userHasSpokenRef.current = false;
+        const initialContext = runtime.getScreenContext();
+        lastScreenContextRef.current = initialContext; // Seed for screen change detection
+        const passiveContext = `[SYSTEM CONTEXT — THIS IS NOT A USER REQUEST. DO NOT RESPOND. DO NOT NAVIGATE. DO NOT CALL ANY TOOLS. DO NOT SPEAK. Just silently read and memorize this screen layout. You will use it when the user speaks their first voice command.]\n\n${initialContext}`;
+        logger.info('AIAgent', `📡 Initial screen context (${passiveContext.length} chars):\n${passiveContext}`);
+        voiceServiceRef.current?.sendScreenContext(passiveContext);
+        logger.info('AIAgent', '📡 Initial screen context sent (turnComplete=true)');
+      },
+      onToolCall: async toolCall => {
+        logger.info('AIAgent', `🔧 Voice tool call: ${toolCall.name}(${JSON.stringify(toolCall.args)}) [id=${toolCall.id}]`);
+
+        // Code-level gate: reject tool calls before the user has spoken.
+        // The model sometimes auto-navigates on receiving screen context.
+        if (!userHasSpokenRef.current) {
+          logger.warn('AIAgent', `🚫 Rejected tool call ${toolCall.name} — user hasn't spoken yet`);
+          voiceServiceRef.current?.sendFunctionResponse(toolCall.name, toolCall.id, {
+            result: 'Action rejected: wait for the user to speak before performing any actions.'
+          });
+          return;
+        }
+
+        // CRITICAL: Gate audio input during tool execution.
+        // The Gemini Live API crashes (code 1008) if sendRealtimeInput
+        // (audio) is called while a tool call is pending. Stop the mic
+        // before executing the tool and resume after the response is sent.
+        audioInputRef.current?.stop();
+        logger.info('AIAgent', `🔇 Mic paused for tool execution: ${toolCall.name}`);
+
+        // One-tool-at-a-time enforcement (mirrors text mode's line 752).
+        if (toolLockRef.current) {
+          logger.warn('AIAgent', `⏳ Tool locked — waiting for previous tool to finish before executing ${toolCall.name}`);
+          while (toolLockRef.current) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        }
+        toolLockRef.current = true;
+        try {
+          // Trigger visual 'thinking' overlay down to ChatBar so user knows action is happening
+          setIsThinking(true);
+          setIsActing(UI_ACTION_TOOL_NAMES.has(toolCall.name));
+          const toolNameFriendly = toolCall.name.replace(/_/g, ' ');
+          setStatusText(`Executing ${toolNameFriendly}...`);
+
+          // Execute the tool via AgentRuntime and send result back to Gemini
+          const result = await runtime.executeTool(toolCall.name, toolCall.args);
+          logger.info('AIAgent', `🔧 Tool result for ${toolCall.name}: ${result}`);
+
+          // Step delay — matches text mode's stepDelay (line 820 in AgentRuntime).
+          await new Promise(resolve => setTimeout(resolve, 300));
+
+          // Include updated screen context IN the tool response
+          const updatedContext = runtime.getScreenContext();
+          lastScreenContextRef.current = updatedContext; // Sync with poll tracker
+          logger.info('AIAgent', `📡 Updated screen context after ${toolCall.name} (${updatedContext.length} chars):\n${updatedContext}`);
+          const enrichedResult = `${result}\n\n<updated_screen>\n${updatedContext}\n</updated_screen>`;
+          logger.info('AIAgent', `📡 Enriched tool response (${enrichedResult.length} chars):\n${enrichedResult}`);
+          voiceServiceRef.current?.sendFunctionResponse(toolCall.name, toolCall.id, {
+            result: enrichedResult
+          });
+          logger.info('AIAgent', `📡 Tool response sent for ${toolCall.name} [id=${toolCall.id}]`);
+        } finally {
+          toolLockRef.current = false;
+          setIsActing(false);
+          setIsThinking(false);
+          setStatusText('');
+
+          // Resume mic after tool response is sent
+          if (voiceServiceRef.current?.isConnected) {
+            audioInputRef.current?.start().then(ok => {
+              if (ok) {
+                setIsMicActive(true);
+                logger.info('AIAgent', `🔊 Mic resumed after tool execution: ${toolCall.name}`);
+              }
+            });
+          }
+        }
+      },
+      onError: err => {
+        logger.error('AIAgent', `VoiceService error: ${err}`);
+        // Stop mic & audio on error to prevent stale state
+        audioInputRef.current?.stop();
+        audioOutputRef.current?.stop();
+        setIsMicActive(false);
+        setIsAISpeaking(false);
+      },
+      onTurnComplete: () => {
+        logger.info('AIAgent', 'AI turn complete');
+        setIsAISpeaking(false);
+        // No cool-down or echo gate needed — hardware AEC handles everything.
+        // Mic stays active and ready for the next voice command immediately.
+      }
+    });
+
+    // ─── Screen Change Detection ───────────────────────────────
+    // Poll the Fiber tree every 5s and resend context if the screen meaningfully changed.
+    // This gives voice mode the same screen-awareness as text mode's per-step re-read.
+    const SCREEN_POLL_INTERVAL = 5000;
+    const MIN_DIFF_RATIO = 0.05; // Ignore changes smaller than 5% of total length (animation flicker)
+
+    screenPollIntervalRef.current = setInterval(() => {
+      if (!voiceServiceRef.current?.isConnected) return;
+      // Skip during tool execution — the enriched tool response handles that
+      if (toolLockRef.current) {
+        logger.debug('AIAgent', '🔄 Screen poll skipped — tool lock active');
+        return;
+      }
+      try {
+        const currentContext = runtime.getScreenContext();
+        if (currentContext === lastScreenContextRef.current) return; // No change
+
+        // Check if the change is meaningful (not just animation/cursor flicker)
+        const lastLen = lastScreenContextRef.current.length;
+        const diff = Math.abs(currentContext.length - lastLen);
+        const diffRatio = lastLen > 0 ? diff / lastLen : 1;
+        if (diffRatio < MIN_DIFF_RATIO) {
+          logger.debug('AIAgent', `🔄 Screen poll: minor change ignored (${diff} chars, ${(diffRatio * 100).toFixed(1)}% < ${MIN_DIFF_RATIO * 100}% threshold)`);
+          return;
+        }
+        logger.info('AIAgent', `🔄 Screen change detected (${lastLen} → ${currentContext.length} chars, ${(diffRatio * 100).toFixed(1)}% diff)`);
+        lastScreenContextRef.current = currentContext;
+        const passiveUpdate = `[SCREEN UPDATE — The UI has changed. Here is the current screen layout. This is not a user request — do not act unless the user asks.]\n\n${currentContext}`;
+        voiceServiceRef.current?.sendScreenContext(passiveUpdate);
+        logger.info('AIAgent', '🔄 Updated screen context sent to voice model');
+      } catch (err) {
+        logger.warn('AIAgent', `🔄 Screen poll error: ${err}`);
+      }
+    }, SCREEN_POLL_INTERVAL);
+
+    // Cleanup on mode change back to text
+    return () => {
+      logger.info('AIAgent', `Cleaning up voice services (leaving "${mode}" mode)`);
+      // Stop screen change polling
+      if (screenPollIntervalRef.current) {
+        clearInterval(screenPollIntervalRef.current);
+        screenPollIntervalRef.current = null;
+        logger.info('AIAgent', '🔄 Screen poll stopped');
+      }
+      lastScreenContextRef.current = '';
+      voiceServiceRef.current?.disconnect();
+      voiceServiceRef.current = null;
+      audioInputRef.current?.stop();
+      setIsMicActive(false);
+      setIsAISpeaking(false);
+      setIsVoiceConnected(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, apiKey, resolvedVoiceProxyUrl, effectiveVoiceProxyHeaders, effectiveProxyHeaders, runtime, resolvedInstructions, supportStyle, knowledgeBase]);
+
+  // ─── Stop Voice Session (full cleanup) ─────────────────────
+
+  const stopVoiceSession = useCallback(() => {
+    logger.info('AIAgent', '🛑 Stopping voice session (full cleanup)...');
+    // 1. Stop mic input
+    audioInputRef.current?.stop();
+    // 2. Stop audio output (clear queued chunks)
+    audioOutputRef.current?.stop();
+    // 3. Disconnect WebSocket
+    voiceServiceRef.current?.disconnect();
+    voiceServiceRef.current = null;
+    // 4. Reset state
+    setIsMicActive(false);
+    setIsAISpeaking(false);
+    setIsVoiceConnected(false);
+    // 6. Switch back to text mode (triggers cleanup effect naturally)
+    setMode('text');
+    logger.info('AIAgent', '🛑 Voice session fully stopped');
+  }, [runtime]);
+
+  // ─── Execute ──────────────────────────────────────────────────
+
+  const handleSend = useCallback(async (message, options) => {
+    if (!message.trim() || isThinking) return;
+
+    // ── Apple Guideline 5.1.2(i): Consent gate ──────────────────
+    // If consent is required but not yet granted, show the consent dialog
+    // instead of sending data to the AI provider.
+    // EXCEPTION: bypass consent when talking to a human agent —
+    // this is a person-to-person chat, not AI data processing.
+    const isHumanAgentChat = !!(selectedTicketId && supportSocket);
+    if (consentGateActive && !isHumanAgentChat) {
+      pendingConsentSendRef.current = {
+        message: message.trim(),
+        options
+      };
+      setShowConsentDialog(true);
+      return;
+    }
+    logger.info('AIAgent', `User message: "${message}"`);
+    setLastUserMessage(message.trim());
+
+    // Intercom-style transparent intercept:
+    // If we're connected to a human agent, all text input goes directly to them.
+    if (selectedTicketId && supportSocket) {
+      // Gate: do not allow sending if the ticket is closed/resolved.
+      const activeTicket = tickets.find(t => t.id === selectedTicketId);
+      const CLOSED_STATUSES = ['closed', 'resolved'];
+      if (activeTicket && CLOSED_STATUSES.includes(activeTicket.status)) {
+        setLastResult({
+          success: false,
+          message: 'This conversation is closed. Please start a new request.',
+          steps: []
+        });
+        return;
+      }
+      if (supportSocket.sendText(message)) {
+        setSupportMessages(prev => [...prev, createAIMessage({
+          id: `user-${Date.now()}`,
+          role: 'user',
+          content: message.trim(),
+          previewText: message.trim(),
+          timestamp: Date.now()
+        })]);
+        setIsThinking(true);
+        setStatusText('Sending to agent...');
+        setTimeout(() => {
+          setIsThinking(false);
+          setStatusText('');
+        }, 800);
+      } else {
+        setLastResult({
+          success: false,
+          message: 'Failed to send message to support agent. Connection lost.',
+          steps: []
+        });
+      }
+      return;
+    }
+
+    // Append user message to AI thread
+    setMessages(prev => [...prev, createAIMessage({
+      id: Date.now().toString() + Math.random(),
+      role: 'user',
+      content: message.trim(),
+      previewText: message.trim(),
+      timestamp: Date.now()
+    })]);
+
+    // If there's a pending ask_user, resolve it instead of starting a new execution
+    if (askUserResolverRef.current) {
+      if (pendingAskUserKindRef.current === 'approval') {
+        const resolver = askUserResolverRef.current;
+        askUserResolverRef.current = null;
+        pendingAskUserKindRef.current = null;
+        pendingAppApprovalRef.current = false; // CRITICAL FIX: Unlock the agent state
+        setPendingApprovalQuestion(null);
+
+        // Pass the user's conversational message directly back to the active prompt resolver.
+        // It will NOT be treated as a rejection! It will be passed back to the LLM.
+        telemetryRef.current?.track('agent_trace', {
+          stage: 'approval_interrupted_by_user_question',
+          message: message.trim()
+        });
+        setIsThinking(true);
+        setStatusText('Answering your question...');
+        setLastResult(null);
+        resolver(message.trim());
+        return;
+      }
+      const resolver = askUserResolverRef.current;
+      askUserResolverRef.current = null;
+      pendingAskUserKindRef.current = null;
+      pendingAppApprovalRef.current = false; // CRITICAL FIX: Unlock the agent state
+      setPendingApprovalQuestion(null);
+      setIsThinking(true);
+      setStatusText('Processing your answer...');
+      setLastResult(null);
+      logger.info('AIAgent', `✅ Resolving pending ask_user with: "${message.trim()}"`);
+      telemetryRef.current?.track('agent_trace', {
+        stage: 'ask_user_answer_submitted',
+        answer: message.trim(),
+        mode
+      });
+      resolver(message);
+      return;
+    }
+
+    // Guard: if we're mid-approval flow (waiting for button tap) but no resolver exists yet
+    // (agent is still thinking between ask_user calls), do NOT start a new task —
+    // that would spawn two concurrent agent loops and freeze the app.
+    // Instead, store the message as a queued answer that will auto-resolve on the next ask_user.
+    if (pendingAppApprovalRef.current) {
+      logger.warn('AIAgent', '⚠️ User typed during active approval flow — queuing message, not spawning new task');
+      queuedApprovalAnswerRef.current = message.trim();
+      return;
+    }
+
+    // Normal execution — new task
+    // Reset approval gate refs so previous conversations don't bleed state
+    pendingAppApprovalRef.current = false;
+    queuedApprovalAnswerRef.current = null;
+    setIsThinking(true);
+    setStatusText('Thinking...');
+    setLastResult(null);
+    const requestStartedAt = Date.now();
+    logger.info('AIAgent', `📨 New user request received in ${mode} mode | interactionMode=${interactionMode || 'copilot(default)'} | text="${message.trim()}"`);
+
+    // Telemetry: track agent request
+    telemetryRef.current?.track('agent_request', {
+      canonical_type: 'ai_question_asked',
+      query: message.trim(),
+      transcript: message.trim(),
+      request_topic: message.trim().slice(0, 120),
+      mode
+    });
+    telemetryRef.current?.track('agent_trace', {
+      stage: 'request_received',
+      query: message.trim(),
+      mode,
+      interactionMode: interactionMode || 'copilot'
+    });
+    try {
+      // ─── Business-grade escalation policy ───
+      const FRUSTRATION_REGEX = /\b(angry|frustrated|useless|terrible|hate|worst|ridiculous|awful)\b/i;
+      const HIGH_RISK_ESCALATION_REGEX = /\b(human|agent|representative|supervisor|manager|refund|chargeback|charged|billing|payment|fraud|scam|lawsuit|attorney|lawyer|sue|legal|privacy|data breach|account locked|can't log in|cannot log in)\b/i;
+      const escalateTool = customTools?.['escalate_to_human'] || autoEscalateTool;
+      const priorFrustrationCount = messages.filter(m => m.role === 'user' && FRUSTRATION_REGEX.test(m.previewText)).length;
+      if (escalateTool && !selectedTicketId) {
+        if (HIGH_RISK_ESCALATION_REGEX.test(message)) {
+          logger.warn('AIAgent', 'High-risk support signal detected — auto-escalating to human');
+          telemetryRef.current?.track('business_escalation', {
+            canonical_type: 'support_escalated',
+            message,
+            trigger: 'high_risk',
+            escalation_reason: 'high_risk',
+            topic: message.trim().slice(0, 120)
+          });
+          const escalationResult = await escalateTool.execute({
+            reason: `Customer needs human support: ${message.trim()}`
+          });
+          const customerMessage = typeof escalationResult === 'string' && escalationResult.trim().length > 0 ? escalationResult.replace(/^ESCALATED:\s*/i, '') : 'Your request has been sent to our support team. A human agent will reply here as soon as possible.';
+          const res = {
+            success: true,
+            message: customerMessage,
+            previewText: customerMessage,
+            reply: normalizeRichContent(customerMessage),
+            steps: [{
+              stepIndex: 0,
+              reflection: {
+                previousGoalEval: '',
+                memory: '',
+                plan: 'Escalate to human support for a high-risk or explicitly requested issue'
+              },
+              action: {
+                name: 'escalate_to_human',
+                input: {
+                  reason: 'business_escalation'
+                },
+                output: 'Escalated'
+              }
+            }]
+          };
+          setLastResult(res);
+          setMessages(prev => [...prev, createAIMessage({
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: res.message,
+            previewText: res.previewText || res.message,
+            timestamp: Date.now(),
+            result: res
+          })]);
+          setIsThinking(false);
+          setStatusText('');
+          return;
+        }
+        if (FRUSTRATION_REGEX.test(message)) {
+          const frustrationMessage = priorFrustrationCount > 0 ? "I'm sorry this has been frustrating. I can keep helping here, or I can connect you with a human support agent if you'd prefer." : "I'm sorry this has been frustrating. Tell me what went wrong, and I'll do my best to fix it.";
+          const res = {
+            success: true,
+            message: frustrationMessage,
+            previewText: frustrationMessage,
+            reply: normalizeRichContent(frustrationMessage),
+            steps: [{
+              stepIndex: 0,
+              reflection: {
+                previousGoalEval: '',
+                memory: '',
+                plan: priorFrustrationCount > 0 ? 'Acknowledge repeated frustration and offer escalation without forcing a handoff' : 'Acknowledge first-time frustration and continue trying to resolve the issue'
+              },
+              action: {
+                name: 'done',
+                input: {},
+                output: frustrationMessage
+              }
+            }]
+          };
+          setLastResult(res);
+          setMessages(prev => [...prev, createAIMessage({
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: frustrationMessage,
+            previewText: frustrationMessage,
+            timestamp: Date.now(),
+            result: res
+          })]);
+          setIsThinking(false);
+          setStatusText('');
+          return;
+        }
+      }
+
+      // Ensure we have the latest Fiber tree ref
+      runtime.updateRefs(rootViewRef.current, navRef);
+      const result = await runtime.execute(message, messages.map(entry => ({
+        role: entry.role,
+        content: entry.previewText
+      })));
+      let normalizedResult = normalizeExecutionResult(result);
+      const reportStep = result.steps?.find(step => step.action.name === 'report_issue');
+      if (reportStep && typeof reportStep.action.output === 'string') {
+        const match = /^ISSUE_REPORTED:([^:]+):([^:]*):([\s\S]+)$/i.exec(reportStep.action.output);
+        if (match) {
+          const [, _issueId, historyId, customerMessage] = match;
+          const resolvedCustomerMessage = customerMessage || reportStep.action.output;
+          if (historyId) {
+            seenReportedIssueUpdatesRef.current.add(historyId);
+          }
+          normalizedResult = {
+            ...normalizedResult,
+            message: resolvedCustomerMessage,
+            previewText: resolvedCustomerMessage,
+            reply: normalizeRichContent(resolvedCustomerMessage),
+            steps: result.steps.map(step => step === reportStep ? {
+              ...step,
+              action: {
+                ...step.action,
+                output: resolvedCustomerMessage
+              }
+            } : step)
+          };
+        }
+      }
+
+      // Telemetry: track agent completion and per-step details
+      if (telemetryRef.current) {
+        if (!agentFrtFiredRef.current) {
+          agentFrtFiredRef.current = true;
+          telemetryRef.current.track('agent_first_response', {
+            canonical_type: 'ai_first_response_sent'
+          });
+        }
+        for (const step of normalizedResult.steps ?? []) {
+          telemetryRef.current.track('agent_step', {
+            stepIndex: step.stepIndex,
+            tool: step.action.name,
+            args: step.action.input,
+            result: typeof step.action.output === 'string' ? step.action.output : String(step.action.output),
+            plan: step.reflection.plan,
+            memory: step.reflection.memory,
+            previousGoalEval: step.reflection.previousGoalEval
+          });
+        }
+        telemetryRef.current.track('agent_complete', {
+          canonical_type: normalizedResult.success ? 'ai_answer_completed' : 'ai_answer_failed',
+          success: normalizedResult.success,
+          resolved: normalizedResult.success,
+          resolution_type: normalizedResult.success ? 'ai_resolved' : 'needs_follow_up',
+          latency_ms: Date.now() - requestStartedAt,
+          request_topic: message.trim().slice(0, 120),
+          steps: normalizedResult.steps?.length ?? 0,
+          tokens: normalizedResult.tokenUsage?.totalTokens ?? 0,
+          cost: normalizedResult.tokenUsage?.estimatedCostUSD ?? 0,
+          response: normalizedResult.message,
+          conversation: {
+            user: message.trim(),
+            assistant: normalizedResult.message
+          }
+        });
+      }
+      logger.info('AIAgent', '★ handleSend — SETTING lastResult:', normalizedResult.message.substring(0, 80), '| mode:', mode);
+      logger.info('AIAgent', '★ handleSend — tickets:', tickets.length, 'selectedTicketId:', selectedTicketId);
+
+      // Don't overwrite lastResult if escalation already switched us to human mode
+      // (mode in this closure is stale — the actual mode may have changed during async execution)
+      const stepsHadEscalation = normalizedResult.steps?.some(s => s.action.name === 'escalate_to_human');
+      if (!stepsHadEscalation) {
+        setLastResult(normalizedResult);
+      }
+      const assistantMsg = createAIMessage({
+        id: Date.now().toString() + Math.random(),
+        role: 'assistant',
+        content: normalizedResult.reply || normalizedResult.message,
+        previewText: normalizedResult.previewText || normalizedResult.message,
+        timestamp: Date.now(),
+        result: normalizedResult
+      });
+      setMessages(prev => [...prev, assistantMsg]);
+
+      // ── Persist to backend (debounced 600ms) ─────────────────────
+      if (analyticsKey) {
+        if (appendDebounceRef.current) clearTimeout(appendDebounceRef.current);
+        appendDebounceRef.current = setTimeout(async () => {
+          try {
+            await initDeviceId();
+            const deviceId = getDeviceId();
+            // Read current messages directly from ref — never use setMessages() to read state
+            const currentMsgs = messagesRef.current;
+            const newMsgs = currentMsgs.slice(lastSavedMessageCountRef.current);
+            if (newMsgs.length === 0) return;
+            if (!activeConversationIdRef.current) {
+              // First exchange — create a new conversation
+              const id = await ConversationService.startConversation({
+                analyticsKey: analyticsKey,
+                userId: userContext?.userId,
+                deviceId: deviceId || undefined,
+                messages: newMsgs
+              });
+              if (id) {
+                activeConversationIdRef.current = id;
+                lastSavedMessageCountRef.current = currentMsgs.length;
+                const newSummary = {
+                  id,
+                  title: newMsgs.find(m => m.role === 'user')?.previewText?.slice(0, 80) || 'New conversation',
+                  preview: assistantMsg.previewText.slice(0, 100),
+                  previewRole: 'assistant',
+                  messageCount: newMsgs.length,
+                  createdAt: Date.now(),
+                  updatedAt: Date.now()
+                };
+                setConversations(prev => [newSummary, ...prev]);
+                logger.info('AIAgent', `Conversation created: ${id}`);
+              }
+            } else {
+              // Subsequent turns — append only new messages
+              await ConversationService.appendMessages({
+                conversationId: activeConversationIdRef.current,
+                analyticsKey: analyticsKey,
+                messages: newMsgs
+              });
+              lastSavedMessageCountRef.current = currentMsgs.length;
+              setConversations(prev => prev.map(c => c.id === activeConversationIdRef.current ? {
+                ...c,
+                preview: assistantMsg.previewText.slice(0, 100),
+                updatedAt: Date.now(),
+                messageCount: c.messageCount + newMsgs.length
+              } : c));
+              logger.info('AIAgent', `Conversation appended: ${activeConversationIdRef.current}`);
+            }
+          } catch (err) {
+            logger.warn('AIAgent', 'Failed to persist conversation:', err);
+          }
+        }, 600);
+      }
+      if (options?.onResult) {
+        options.onResult(normalizedResult);
+      } else {
+        onResult?.(normalizedResult);
+      }
+      logger.info('AIAgent', `Result: ${normalizedResult.success ? '✅' : '❌'} ${normalizedResult.message}`);
+    } catch (error) {
+      logger.error('AIAgent', 'Execution failed:', error);
+
+      // Telemetry: track agent failure
+      telemetryRef.current?.track('agent_complete', {
+        canonical_type: 'ai_answer_failed',
+        success: false,
+        resolved: false,
+        resolution_type: 'execution_error',
+        latency_ms: Date.now() - requestStartedAt,
+        request_topic: message.trim().slice(0, 120),
+        error: error.message,
+        response: `Error: ${error.message}`,
+        conversation: {
+          user: message.trim(),
+          assistant: `Error: ${error.message}`
+        }
+      });
+      setLastResult({
+        success: false,
+        message: `Error: ${error.message}`,
+        steps: []
+      });
+    } finally {
+      setIsActing(false);
+      setIsThinking(false);
+      setStatusText('');
+    }
+  }, [runtime, navRef, onResult, messages, isThinking, consentGateActive]);
+  useEffect(() => {
+    if (consentGateActive) return;
+    const pending = pendingConsentSendRef.current;
+    if (!pending) return;
+    pendingConsentSendRef.current = null;
+    void handleSend(pending.message, pending.options);
+  }, [consentGateActive, handleSend]);
+  useEffect(() => {
+    if (isThinking) return;
+    const pending = pendingFollowUpAfterApprovalRef.current;
+    if (!pending) return;
+    pendingFollowUpAfterApprovalRef.current = null;
+    void handleSend(pending.message, pending.options);
+  }, [isThinking, handleSend]);
+
+  // ─── Context value (for useAI bridge) ─────────────────────────
+
+  const handleCancel = useCallback(() => {
+    runtime.cancel();
+    setStatusText('Stopping...');
+  }, [runtime]);
+
+  // ─── Conversation History Handlers ─────────────────────────────
+
+  const handleConversationSelect = useCallback(async conversationId => {
+    if (!analyticsKey) return;
+    try {
+      const msgs = await ConversationService.fetchConversation({
+        conversationId,
+        analyticsKey
+      });
+      if (msgs) {
+        activeConversationIdRef.current = conversationId;
+        lastSavedMessageCountRef.current = msgs.length;
+        setMessages(msgs);
+        setLastResult(null);
+      }
+    } catch (err) {
+      logger.warn('AIAgent', 'Failed to load conversation:', err);
+    }
+  }, [analyticsKey]);
+  const handleNewConversation = useCallback(() => {
+    activeConversationIdRef.current = null;
+    lastSavedMessageCountRef.current = 0;
+    setMessages([]);
+    setLastResult(null);
+    setLastUserMessage(null);
+  }, []);
+  const contextValue = useMemo(() => ({
+    runtime,
+    send: handleSend,
+    isLoading: isThinking,
+    status: statusText,
+    lastResult,
+    messages,
+    clearMessages,
+    cancel: handleCancel
+  }), [runtime, handleSend, handleCancel, isThinking, statusText, lastResult, messages, clearMessages]);
+  const richBlocks = useMemo(() => [FactCardDefinition, ProductCardDefinition, ActionCardDefinition, ComparisonCardDefinition, FormCardDefinition, ...(blocks || [])], [blocks]);
+
+  // ─── Render ──────────────────────────────────────────────────
+
+  return /*#__PURE__*/_jsx(AgentContext.Provider, {
+    value: contextValue,
+    children: /*#__PURE__*/_jsx(RichUIProvider, {
+      blocks: richBlocks,
+      theme: richUITheme,
+      surfaceThemes: richUISurfaceThemes,
+      children: /*#__PURE__*/_jsx(ActionBridgeProvider, {
+        handlers: blockActionHandlers,
+        children: /*#__PURE__*/_jsxs(View, {
+          style: styles.root,
+          children: [/*#__PURE__*/_jsx(View, {
+            ref: rootViewRef,
+            style: styles.root,
+            collapsable: false,
+            onStartShouldSetResponderCapture: event => {
+              // Auto-capture every tap for analytics (zero-config)
+              // Skip if the AI agent is currently executing a tool — those are
+              // already tracked as `agent_step` events with full context.
+              if (telemetryRef.current && !telemetryRef.current.isAgentActing) {
+                syncTelemetryScreen();
+                const target = extractTouchTargetMetadata(event);
+                const pageX = Math.round(event.nativeEvent.pageX);
+                const pageY = Math.round(event.nativeEvent.pageY);
+                if (target.label) {
+                  telemetryRef.current.track('user_action', {
+                    canonical_type: 'button_tapped',
+                    type: 'tap',
+                    action: target.label,
+                    label: target.label,
+                    element_label: target.label,
+                    element_kind: target.elementKind,
+                    label_confidence: target.labelConfidence,
+                    zone_id: target.zoneId,
+                    ancestor_path: target.ancestorPath,
+                    sibling_labels: target.siblingLabels,
+                    component_name: target.componentName,
+                    actor: 'user',
+                    x: pageX,
+                    y: pageY
+                  });
+
+                  // Track if user is rage-tapping this specific element
+                  checkRageClick({
+                    ...target,
+                    x: pageX,
+                    y: pageY
+                  }, telemetryRef.current);
+                } else {
+                  // Tapped an unlabelled/empty area
+                  telemetryRef.current.track('dead_click', {
+                    canonical_type: 'dead_click_detected',
+                    x: pageX,
+                    y: pageY,
+                    screen: telemetryRef.current.screen,
+                    screen_area: 'unknown',
+                    zone_id: target.zoneId,
+                    ancestor_path: target.ancestorPath,
+                    sibling_labels: target.siblingLabels,
+                    component_name: target.componentName
+                  });
+                }
+              }
+              // IMPORTANT: return false so we don't steal the touch from the actual button
+              return false;
+            },
+            children: /*#__PURE__*/_jsx(AgentErrorBoundary, {
+              telemetryRef: telemetryRef,
+              onError: (error, componentStack) => {
+                const errorMsg = `⚠️ A rendering error occurred: ${error.message}`;
+                lastAgentErrorRef.current = errorMsg;
+                logger.warn('AIAgent', `🛡️ Error caught by boundary: ${error.message}\n${componentStack || ''}`);
+              },
+              children: children
+            })
+          }), /*#__PURE__*/_jsx(HighlightOverlay, {}), showChatBar && /*#__PURE__*/_jsx(FloatingOverlayWrapper, {
+            ref: Platform.OS === 'android' ? floatingOverlayRef : undefined,
+            androidWindowMetrics: Platform.OS === 'android' ? androidWindowMetricsRef.current ?? androidWindowMetrics : null,
+            onAndroidWindowDragEnd: Platform.OS === 'android' ? handleAndroidWindowDragEnd : undefined,
+            fallbackStyle: styles.floatingLayer,
+            children: Platform.OS === 'android' ? /*#__PURE__*/_jsx(AgentChatBar, {
+              onSend: handleSend,
+              onCancel: handleCancel,
+              isThinking: isThinking,
+              isActing: isActing,
+              statusText: overlayStatusText,
+              lastResult: lastResult,
+              lastUserMessage: lastUserMessage,
+              chatMessages: messages,
+              pendingApprovalQuestion: pendingApprovalQuestion,
+              onPendingApprovalAction: action => {
+                const resolver = askUserResolverRef.current;
+                logger.info('AIAgent', `🔘 Approval button tapped: action=${action} | resolver=${resolver ? 'EXISTS' : 'NULL'} | pendingApprovalQuestion="${pendingApprovalQuestion}" | pendingAppApprovalRef=${pendingAppApprovalRef.current}`);
+                if (!resolver) {
+                  logger.error('AIAgent', '🚫 ABORT: resolver is null when button was tapped — this means ask_user Promise was already resolved without clearing the buttons. This is a state sync bug.');
+                  return;
+                }
+                askUserResolverRef.current = null;
+                pendingAskUserKindRef.current = null;
+                pendingAppApprovalRef.current = false;
+                queuedApprovalAnswerRef.current = null;
+                setPendingApprovalQuestion(null);
+                const response = action === 'approve' ? '__APPROVAL_GRANTED__' : '__APPROVAL_REJECTED__';
+                if (action === 'approve') {
+                  setIsThinking(true);
+                  setStatusText('Working...');
+                }
+                telemetryRef.current?.track('agent_trace', {
+                  stage: 'approval_button_pressed',
+                  action
+                });
+                resolver(response);
+              },
+              language: 'en',
+              onDismiss: () => {
+                setLastResult(null);
+                setLastUserMessage(null);
+              },
+              theme: accentColor || theme ? {
+                ...(accentColor ? {
+                  primaryColor: accentColor
+                } : {}),
+                ...theme
+              } : undefined,
+              availableModes: availableModes,
+              mode: mode,
+              onModeChange: newMode => {
+                logger.info('AIAgent', '★ onModeChange:', mode, '→', newMode, '| tickets:', tickets.length, 'selectedTicketId:', selectedTicketId);
+                setMode(newMode);
+              },
+              isMicActive: isMicActive,
+              isSpeakerMuted: isSpeakerMuted,
+              isAISpeaking: isAISpeaking,
+              isAgentTyping: isLiveAgentTyping,
+              onStopSession: stopVoiceSession,
+              isVoiceConnected: isVoiceConnected,
+              onMicToggle: active => {
+                if (active && !isVoiceConnected) {
+                  logger.warn('AIAgent', 'Cannot toggle mic — VoiceService not connected yet');
+                  return;
+                }
+                logger.info('AIAgent', `Mic toggle: ${active ? 'ON' : 'OFF'}`);
+                setIsMicActive(active);
+                if (active) {
+                  logger.info('AIAgent', 'Starting AudioInput...');
+                  audioInputRef.current?.start().then(ok => {
+                    logger.info('AIAgent', `AudioInput start result: ${ok}`);
+                  });
+                } else {
+                  logger.info('AIAgent', 'Stopping AudioInput...');
+                  audioInputRef.current?.stop();
+                }
+              },
+              onSpeakerToggle: muted => {
+                logger.info('AIAgent', `Speaker toggle: ${muted ? 'MUTED' : 'UNMUTED'}`);
+                setIsSpeakerMuted(muted);
+                if (muted) {
+                  audioOutputRef.current?.mute();
+                } else {
+                  audioOutputRef.current?.unmute();
+                }
+              },
+              tickets: tickets,
+              selectedTicketId: selectedTicketId,
+              onTicketSelect: handleTicketSelect,
+              onBackToTickets: handleBackToTickets,
+              autoExpandTrigger: autoExpandTrigger,
+              unreadCounts: unreadCounts,
+              totalUnread: totalUnread,
+              showDiscoveryTooltip: tooltipVisible,
+              discoveryTooltipMessage: discoveryTooltipMessage,
+              onTooltipDismiss: handleTooltipDismiss,
+              conversations: conversations,
+              isLoadingHistory: isLoadingHistory,
+              onConversationSelect: handleConversationSelect,
+              onNewConversation: handleNewConversation,
+              renderMode: "android-native-window",
+              windowMetrics: androidWindowMetricsRef.current ?? androidWindowMetrics,
+              onWindowMetricsChange: handleAndroidWindowMetricsChange,
+              consentVisible: showConsentDialog,
+              consentProvider: providerName,
+              consentConfig: consentConfig,
+              onConsentApprove: async () => {
+                await grantConsent();
+                setShowConsentDialog(false);
+                consentConfig.onConsent?.();
+                logger.info('AIAgent', '✅ AI consent granted by user');
+              },
+              onConsentDecline: () => {
+                setShowConsentDialog(false);
+                consentConfig.onDecline?.();
+                logger.info('AIAgent', '❌ AI consent declined by user');
+              }
+            }) : /*#__PURE__*/_jsx(ProactiveHint, {
+              stage: proactiveStage,
+              badgeText: proactiveBadgeText,
+              onDismiss: () => idleDetectorRef.current?.dismiss(),
+              children: /*#__PURE__*/_jsx(AgentChatBar, {
+                onSend: handleSend,
+                onCancel: handleCancel,
+                isThinking: isThinking,
+                isActing: isActing,
+                statusText: overlayStatusText,
+                lastResult: lastResult,
+                lastUserMessage: lastUserMessage,
+                chatMessages: messages,
+                pendingApprovalQuestion: pendingApprovalQuestion,
+                onPendingApprovalAction: action => {
+                  const resolver = askUserResolverRef.current;
+                  logger.info('AIAgent', `🔘 Approval button tapped: action=${action} | resolver=${resolver ? 'EXISTS' : 'NULL'} | pendingApprovalQuestion="${pendingApprovalQuestion}" | pendingAppApprovalRef=${pendingAppApprovalRef.current}`);
+                  if (!resolver) {
+                    logger.error('AIAgent', '🚫 ABORT: resolver is null when button was tapped — this means ask_user Promise was already resolved without clearing the buttons. This is a state sync bug.');
+                    return;
+                  }
+                  askUserResolverRef.current = null;
+                  pendingAskUserKindRef.current = null;
+                  pendingAppApprovalRef.current = false;
+                  queuedApprovalAnswerRef.current = null;
+                  setPendingApprovalQuestion(null);
+                  const response = action === 'approve' ? '__APPROVAL_GRANTED__' : '__APPROVAL_REJECTED__';
+                  if (action === 'approve') {
+                    setIsThinking(true);
+                    setStatusText('Working...');
+                  }
+                  telemetryRef.current?.track('agent_trace', {
+                    stage: 'approval_button_pressed',
+                    action
+                  });
+                  resolver(response);
+                },
+                language: 'en',
+                onDismiss: () => {
+                  setLastResult(null);
+                  setLastUserMessage(null);
+                },
+                theme: accentColor || theme ? {
+                  ...(accentColor ? {
+                    primaryColor: accentColor
+                  } : {}),
+                  ...theme
+                } : undefined,
+                availableModes: availableModes,
+                mode: mode,
+                onModeChange: newMode => {
+                  logger.info('AIAgent', '★ onModeChange:', mode, '→', newMode, '| tickets:', tickets.length, 'selectedTicketId:', selectedTicketId);
+                  setMode(newMode);
+                },
+                isMicActive: isMicActive,
+                isSpeakerMuted: isSpeakerMuted,
+                isAISpeaking: isAISpeaking,
+                isAgentTyping: isLiveAgentTyping,
+                onStopSession: stopVoiceSession,
+                isVoiceConnected: isVoiceConnected,
+                onMicToggle: active => {
+                  if (active && !isVoiceConnected) {
+                    logger.warn('AIAgent', 'Cannot toggle mic — VoiceService not connected yet');
+                    return;
+                  }
+                  logger.info('AIAgent', `Mic toggle: ${active ? 'ON' : 'OFF'}`);
+                  setIsMicActive(active);
+                  if (active) {
+                    logger.info('AIAgent', 'Starting AudioInput...');
+                    audioInputRef.current?.start().then(ok => {
+                      logger.info('AIAgent', `AudioInput start result: ${ok}`);
+                    });
+                  } else {
+                    logger.info('AIAgent', 'Stopping AudioInput...');
+                    audioInputRef.current?.stop();
+                  }
+                },
+                onSpeakerToggle: muted => {
+                  logger.info('AIAgent', `Speaker toggle: ${muted ? 'MUTED' : 'UNMUTED'}`);
+                  setIsSpeakerMuted(muted);
+                  if (muted) {
+                    audioOutputRef.current?.mute();
+                  } else {
+                    audioOutputRef.current?.unmute();
+                  }
+                },
+                tickets: tickets,
+                selectedTicketId: selectedTicketId,
+                onTicketSelect: handleTicketSelect,
+                onBackToTickets: handleBackToTickets,
+                autoExpandTrigger: autoExpandTrigger,
+                unreadCounts: unreadCounts,
+                totalUnread: totalUnread,
+                showDiscoveryTooltip: tooltipVisible,
+                discoveryTooltipMessage: discoveryTooltipMessage,
+                onTooltipDismiss: handleTooltipDismiss,
+                conversations: conversations,
+                isLoadingHistory: isLoadingHistory,
+                onConversationSelect: handleConversationSelect,
+                onNewConversation: handleNewConversation,
+                renderMode: "default",
+                consentVisible: showConsentDialog,
+                consentProvider: providerName,
+                consentConfig: consentConfig,
+                onConsentApprove: async () => {
+                  await grantConsent();
+                  setShowConsentDialog(false);
+                  consentConfig.onConsent?.();
+                  logger.info('AIAgent', '✅ AI consent granted by user');
+                },
+                onConsentDecline: () => {
+                  setShowConsentDialog(false);
+                  consentConfig.onDecline?.();
+                  logger.info('AIAgent', '❌ AI consent declined by user');
+                }
+              })
+            })
+          }), /*#__PURE__*/_jsx(AgentOverlay, {
+            visible: overlayVisible,
+            statusText: overlayStatusText,
+            onCancel: handleCancel
+          }), Platform.OS !== 'android' && /*#__PURE__*/_jsx(_Fragment, {
+            children: /*#__PURE__*/_jsx(SupportChatModal, {
+              visible: mode === 'human' && !!selectedTicketId,
+              messages: supportMessages,
+              onSend: handleSend,
+              onClose: handleBackToTickets,
+              isAgentTyping: isLiveAgentTyping,
+              isThinking: isThinking,
+              scrollToEndTrigger: chatScrollTrigger,
+              ticketStatus: tickets.find(t => t.id === selectedTicketId)?.status
+            })
+          }), Platform.OS === 'android' && /*#__PURE__*/_jsx(_Fragment, {
+            children: /*#__PURE__*/_jsx(SupportChatModal, {
+              visible: mode === 'human' && !!selectedTicketId,
+              messages: supportMessages,
+              onSend: handleSend,
+              onClose: handleBackToTickets,
+              isAgentTyping: isLiveAgentTyping,
+              isThinking: isThinking,
+              scrollToEndTrigger: chatScrollTrigger,
+              ticketStatus: tickets.find(t => t.id === selectedTicketId)?.status
+            })
+          })]
+        })
+      })
+    })
+  });
+}
+const styles = StyleSheet.create({
+  root: {
+    flex: 1
+  },
+  floatingLayer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 99999
+  }
+});
+//# sourceMappingURL=AIAgent.js.map

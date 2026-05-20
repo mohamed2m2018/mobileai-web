@@ -1,0 +1,52 @@
+/**
+ * Telemetry types for the MobileAI analytics module.
+ *
+ * Events are split into two categories:
+ * 1. Auto-captured: SDK captures these without consumer code
+ * 2. Consumer-tracked: via MobileAI.track() API
+ */
+/** Auto-captured event types */
+export type AutoEventType = 'screen_view' | 'user_action' | 'user_interaction' | 'scroll_depth' | 'idle_detected' | 'session_start' | 'session_end' | 'agent_request' | 'agent_step' | 'agent_trace' | 'agent_complete' | 'escalation' | 'knowledge_query' | 'knowledge_miss' | 'csat_response' | 'ces_response' | 'agent_first_response' | 'human_first_response' | 'fcr_achieved' | 'engagement_signal' | 'health_signal' | 'onboarding_step' | 'business_escalation' | 'dead_click' | 'dead_click_detected' | 'rage_click' | 'rage_click_detected' | 'error_screen' | 'repeated_navigation' | 'checkout_started' | 'purchase_complete' | 'purchase_completed' | 'wireframe_snapshot';
+/** All event types (auto + custom) */
+export type EventType = AutoEventType | string;
+export interface TelemetryEvent {
+    /** Event type identifier */
+    type: EventType;
+    /** Event-specific data */
+    data: Record<string, unknown>;
+    /** ISO 8601 timestamp (auto-set by SDK) */
+    timestamp: string;
+    /** Current screen name (auto-attached) */
+    screen: string;
+    /** Session ID (auto-generated per app lifecycle) */
+    sessionId: string;
+}
+export interface TelemetryBatch {
+    /** Publishable analytics key */
+    analyticsKey: string;
+    /** App identifier (bundle ID / package name) */
+    appId: string;
+    /** Hashed user/device identifier */
+    deviceId: string;
+    /** SDK version */
+    sdkVersion: string;
+    /** Batch of events */
+    events: TelemetryEvent[];
+}
+export interface TelemetryConfig {
+    /** Publishable analytics key (mobileai_pub_xxx) */
+    analyticsKey?: string;
+    /** Proxy URL for enterprise customers (replaces direct cloud API) */
+    analyticsProxyUrl?: string;
+    /** Custom headers for proxy requests */
+    analyticsProxyHeaders?: Record<string, string>;
+    /** Flush interval in ms (default: 30000) */
+    flushIntervalMs?: number;
+    /** Max events before auto-flush (default: 50) */
+    maxBatchSize?: number;
+    /** Enable debug logging for telemetry (default: false) */
+    debug?: boolean;
+    /** Callback fired locally whenever an event is tracked (useful for reacting to rage_tap) */
+    onEvent?: (event: import('./types').TelemetryEvent) => void;
+}
+//# sourceMappingURL=types.d.ts.map

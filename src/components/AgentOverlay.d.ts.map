@@ -1,0 +1,1 @@
+{"version":3,"file":"AgentOverlay.d.ts","sourceRoot":"","sources":["../../../../src/components/AgentOverlay.tsx"],"names":[],"mappings":"AAAA;;;GAGG;AAKH,UAAU,iBAAiB;IACzB,OAAO,EAAE,OAAO,CAAC;IACjB,UAAU,EAAE,MAAM,CAAC;IACnB,QAAQ,CAAC,EAAE,MAAM,IAAI,CAAC;CACvB;AAED,wBAAgB,YAAY,CAAC,EAAE,OAAO,EAAE,UAAU,EAAE,QAAQ,EAAE,EAAE,iBAAiB,kDAoBhF"}
