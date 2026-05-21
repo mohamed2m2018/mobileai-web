@@ -21,12 +21,6 @@ Embedded AI support for first-party web apps.
 npm install @mobileai/web
 ```
 
-If the npm package has not been published yet, install directly from GitHub:
-
-```bash
-npm install github:mohamed2m2018/mobileai-web
-```
-
 For local development in this workspace:
 
 ```json
