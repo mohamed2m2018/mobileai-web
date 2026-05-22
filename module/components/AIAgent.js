@@ -11,7 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, InteractionManager, Platform } from 'react-native';
+import { View, StyleSheet, InteractionManager, Platform, NativeModules } from 'react-native';
 import { AgentRuntime } from "../core/AgentRuntime.js";
 import { ReactNativePlatformAdapter } from "../core/ReactNativePlatformAdapter.js";
 import { actionRegistry } from "../core/ActionRegistry.js";
@@ -39,47 +39,82 @@ import { IdleDetector } from "../core/IdleDetector.js";
 import { ProactiveHint } from "./ProactiveHint.js";
 import { createEscalateTool } from "../support/escalateTool.js";
 import { createReportIssueTool } from "../support/reportIssueTool.js";
+import { createOutboundCallTool } from "../support/outboundCallTool.js";
 import { EscalationSocket } from "../support/EscalationSocket.js";
 import { EscalationEventSource } from "../support/EscalationEventSource.js";
 import { ReportedIssueEventSource } from "../support/ReportedIssueEventSource.js";
 import { SupportChatModal } from "../support/SupportChatModal.js";
+import { QuickActionsSheet } from "../support/QuickActionsSheet.js";
 import { ENDPOINTS } from "../config/endpoints.js";
+import { CSATSurvey } from "../support/CSATSurvey.js";
 import * as ConversationService from "../services/ConversationService.js";
 import { createMobileAIKnowledgeRetriever } from "../services/MobileAIKnowledgeRetriever.js";
+import { getSessionToken, clearSession as clearProxySession } from "../services/ProxySessionService.js";
 import { executeConfiguredAction, fetchConfiguredActions } from "../services/MobileAIActionService.js";
 import { formatActionToolResult } from "../utils/actionResult.js";
-import { createAIMessage, normalizeExecutionResult, normalizeRichContent } from "../core/richContent.js";
+import { createAIMessage, createImageNode, normalizeExecutionResult, normalizeRichContent } from "../core/richContent.js";
 import { RichUIProvider } from "./rich-content/RichUIContext.js";
 import { ActionBridgeProvider } from "../core/ActionBridge.js";
 import { ActionCardDefinition, ComparisonCardDefinition, FactCardDefinition, FormCardDefinition, ProductCardDefinition } from "./blocks/index.js";
 import { jsx as _jsx, Fragment as _Fragment, jsxs as _jsxs } from "react/jsx-runtime";
 const UI_ACTION_TOOL_NAMES = new Set(['tap', 'type', 'scroll', 'navigate', 'long_press', 'adjust_slider', 'select_picker', 'set_date', 'dismiss_keyboard']);
+const VOICE_PERMISSION_TOOL_NAME = 'ask_user_permission_voice_mode';
+const VOICE_OUTPUT_SAMPLE_RATE = 24000;
+const VOICE_OUTPUT_BYTES_PER_SAMPLE = 2;
+const VOICE_PLAYBACK_MIN_CHUNK_MS = 60;
+const VOICE_PLAYBACK_DRAIN_GRACE_MS = 650;
+const VOICE_PERMISSION_TOOL = {
+  name: VOICE_PERMISSION_TOOL_NAME,
+  description: 'Voice mode only. Ask the user for explicit permission before performing an app action. This shows Allow and Don’t Allow buttons and waits for the user to tap one.',
+  parameters: {
+    question: {
+      type: 'string',
+      description: 'Short permission question to show to the user, for example: "I can open Profile. May I proceed?"',
+      required: true
+    }
+  },
+  execute: async () => 'Voice permission requests are handled directly by the voice UI.'
+};
+function cleanVoiceTranscript(text) {
+  return text.replace(/<ctrl\d+>/gi, '').replace(/(?:<|\[|\()(?:noise|silence|inaudible|music|laughs?|applause|crosstalk|background noise)(?:>|\]|\))/gi, '').replace(/\s+/g, ' ').trim();
+}
+function shouldSuppressVoiceTranscript(text, role) {
+  const normalized = text.trim();
+  if (!normalized) return true;
+  if (role !== 'model') return false;
+  const lower = normalized.toLowerCase();
+  const bareToken = lower.replace(/^[\s"'`(){}\[\].,!?:;]+|[\s"'`(){}\[\].,!?:;]+$/g, '');
+  return bareToken === 'done' || lower === 'ask_tool' || lower.includes(VOICE_PERMISSION_TOOL_NAME) || lower.includes('function_call') || lower.includes('tool_call') || lower.includes('tool call') || /^done\s*[\({]/.test(lower) || /^ask[_\s-]?tool\b/.test(lower);
+}
+function buildVoiceActionPermissionQuestion(toolName, args) {
+  if (toolName === 'navigate' && typeof args.screen === 'string' && args.screen.trim()) {
+    return `I can open ${args.screen.trim()}. May I proceed?`;
+  }
+  if (toolName === 'tap') {
+    return 'I need to tap something in the app to continue. May I proceed?';
+  }
+  if (toolName === 'type') {
+    return 'I need to type into the app to continue. May I proceed?';
+  }
+  if (toolName === 'scroll') {
+    return 'I need to scroll the app to continue. May I proceed?';
+  }
+  return 'I need permission to interact with the app. May I proceed?';
+}
+function estimateVoiceOutputDurationMs(base64Audio) {
+  const compact = base64Audio.replace(/\s+/g, '');
+  if (!compact) return 0;
+  const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0;
+  const byteLength = Math.max(0, Math.floor(compact.length * 3 / 4) - padding);
+  const sampleCount = Math.floor(byteLength / VOICE_OUTPUT_BYTES_PER_SAMPLE);
+  if (sampleCount <= 0) return 0;
+  return sampleCount / VOICE_OUTPUT_SAMPLE_RATE * 1000;
+}
 
 // ─── Context ───────────────────────────────────────────────────
 
-// ─── AsyncStorage Helper (same pattern as TicketStore) ─────────
-
-/** Try to load AsyncStorage for tooltip persistence. Optional peer dep. */
-function getTooltipStorage() {
-  try {
-    const origError = console.error;
-    console.error = (...args) => {
-      const msg = args[0];
-      if (typeof msg === 'string' && msg.includes('AsyncStorage')) return;
-      origError.apply(console, args);
-    };
-    try {
-      const mod = require('@react-native-async-storage/async-storage');
-      const candidate = mod?.default ?? mod?.AsyncStorage ?? null;
-      if (candidate && typeof candidate.getItem === 'function') return candidate;
-      return null;
-    } finally {
-      console.error = origError;
-    }
-  } catch {
-    return null;
-  }
-}
+let discoveryTooltipSeenInSession = false;
+let onboardingCompletedInSession = false;
 function sanitizeWireframeScreenshot(value) {
   if (!value || typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -140,6 +175,7 @@ function mergeSupportHistory(serverHistory = [], localHistory = []) {
 async function captureHeatmapScreenshot(rootView) {
   try {
     if (!rootView) return null;
+    if (!NativeModules?.RNViewShot) return null;
     const viewShot = require('react-native-view-shot');
     const captureRef = viewShot.captureRef || viewShot.default?.captureRef;
     if (!captureRef || typeof captureRef !== 'function') return null;
@@ -164,12 +200,15 @@ export function AIAgent({
   proxyHeaders,
   voiceProxyUrl,
   voiceProxyHeaders,
+  outboundCalls,
   provider: providerName = 'gemini',
   model,
   supportStyle = 'warm-concise',
   verifier,
+  actionSafety,
+  toolStabilization,
   navRef,
-  maxSteps = 25,
+  maxSteps = 40,
   showChatBar = true,
   children,
   onResult,
@@ -189,6 +228,7 @@ export function AIAgent({
   pathname,
   interceptNativeAlerts,
   enableVoice = false,
+  enableWebSearch = true,
   onTokenUsage,
   debug = false,
   knowledgeBase,
@@ -208,6 +248,7 @@ export function AIAgent({
   analyticsProxyUrl,
   analyticsProxyHeaders,
   proactiveHelp,
+  supportMode,
   userContext,
   pushToken,
   pushTokenType,
@@ -241,6 +282,18 @@ export function AIAgent({
     }
   }, [debug]);
   const rootViewRef = useRef(null);
+  const [proxySessionToken, setProxySessionToken] = useState(null);
+  useEffect(() => {
+    if (!analyticsKey) return;
+    let cancelled = false;
+    getSessionToken(analyticsKey).then(token => {
+      if (!cancelled) setProxySessionToken(token);
+    }).catch(err => logger.warn('AIAgent', `Proxy session exchange failed: ${err.message}`));
+    return () => {
+      cancelled = true;
+      clearProxySession();
+    };
+  }, [analyticsKey]);
   const [isThinking, setIsThinking] = useState(false);
   const [isActing, setIsActing] = useState(false);
   const [statusText, setStatusText] = useState('');
@@ -248,10 +301,13 @@ export function AIAgent({
   const [lastUserMessage, setLastUserMessage] = useState(null);
   const [messages, setMessages] = useState([]);
   const [supportMessages, setSupportMessages] = useState([]);
+  const [showQuickActions, setShowQuickActions] = useState(false);
   const [remoteConfiguredActions, setRemoteConfiguredActions] = useState([]);
   const [registeredActionRevision, setRegisteredActionRevision] = useState(0);
   const [registeredDataRevision, setRegisteredDataRevision] = useState(0);
   const [chatScrollTrigger, setChatScrollTrigger] = useState(0);
+  const [showCSAT, setShowCSAT] = useState(false);
+  const conversationStartRef = useRef(Date.now());
   // Mirror of messages for safe reading inside async callbacks (avoids setMessages abuse)
   const messagesRef = useRef([]);
 
@@ -261,11 +317,102 @@ export function AIAgent({
   const activeConversationIdRef = useRef(null);
   const lastSavedMessageCountRef = useRef(0);
   const appendDebounceRef = useRef(null);
+  const isPersistingConversationRef = useRef(false);
+  const pendingConversationPersistRef = useRef(false);
+  const conversationGenerationRef = useRef(0);
 
   // Keep messagesRef always in sync — used by async save callbacks
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  const clearPendingConversationSave = useCallback(() => {
+    if (appendDebounceRef.current) {
+      clearTimeout(appendDebounceRef.current);
+      appendDebounceRef.current = null;
+    }
+    pendingConversationPersistRef.current = false;
+  }, []);
+  const persistConversationMessages = useCallback(async () => {
+    if (!analyticsKey) return;
+    if (isPersistingConversationRef.current) {
+      pendingConversationPersistRef.current = true;
+      return;
+    }
+    isPersistingConversationRef.current = true;
+    const persistGeneration = conversationGenerationRef.current;
+    try {
+      do {
+        pendingConversationPersistRef.current = false;
+        await initDeviceId();
+        if (persistGeneration !== conversationGenerationRef.current) return;
+        const deviceId = getDeviceId();
+        const currentMsgs = messagesRef.current;
+        const newMsgs = currentMsgs.slice(lastSavedMessageCountRef.current);
+        if (newMsgs.length === 0) continue;
+        const lastMessage = currentMsgs[currentMsgs.length - 1];
+        const preview = (lastMessage?.previewText || '').slice(0, 100);
+        const previewRole = lastMessage?.role || 'assistant';
+        if (!activeConversationIdRef.current) {
+          const id = await ConversationService.startConversation({
+            analyticsKey,
+            userId: userContext?.userId,
+            deviceId: deviceId || undefined,
+            messages: newMsgs
+          });
+          if (persistGeneration !== conversationGenerationRef.current) return;
+          if (!id) continue;
+          activeConversationIdRef.current = id;
+          lastSavedMessageCountRef.current = currentMsgs.length;
+          const newSummary = {
+            id,
+            title: currentMsgs.find(m => m.role === 'user')?.previewText?.slice(0, 80) || 'New conversation',
+            preview,
+            previewRole,
+            messageCount: currentMsgs.length,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          };
+          setConversations(prev => [newSummary, ...prev]);
+          logger.info('AIAgent', `Conversation created: ${id}`);
+          continue;
+        }
+        const saved = await ConversationService.appendMessages({
+          conversationId: activeConversationIdRef.current,
+          analyticsKey,
+          userId: userContext?.userId,
+          deviceId: deviceId || undefined,
+          messages: newMsgs
+        });
+        if (persistGeneration !== conversationGenerationRef.current) return;
+        if (!saved) continue;
+        lastSavedMessageCountRef.current = currentMsgs.length;
+        setConversations(prev => prev.map(c => c.id === activeConversationIdRef.current ? {
+          ...c,
+          preview,
+          previewRole,
+          updatedAt: Date.now(),
+          messageCount: currentMsgs.length
+        } : c));
+        logger.info('AIAgent', `Conversation appended: ${activeConversationIdRef.current}`);
+      } while (pendingConversationPersistRef.current);
+    } catch (err) {
+      logger.warn('AIAgent', 'Failed to persist conversation:', err);
+    } finally {
+      isPersistingConversationRef.current = false;
+    }
+  }, [analyticsKey, userContext?.userId]);
+  useEffect(() => {
+    if (!analyticsKey || messages.length <= lastSavedMessageCountRef.current) {
+      return;
+    }
+    if (appendDebounceRef.current) {
+      clearTimeout(appendDebounceRef.current);
+    }
+    appendDebounceRef.current = setTimeout(() => {
+      appendDebounceRef.current = null;
+      void persistConversationMessages();
+    }, 150);
+  }, [analyticsKey, messages.length, persistConversationMessages]);
   useEffect(() => {
     return actionRegistry.onChange(() => {
       setRegisteredActionRevision(prev => prev + 1);
@@ -391,19 +538,7 @@ export function AIAgent({
   useEffect(() => {
     if (!onboarding?.enabled) return;
     if (onboarding.firstLaunchOnly !== false) {
-      void (async () => {
-        try {
-          const AS = getTooltipStorage();
-          if (!AS) {
-            setIsOnboardingActive(true);
-            return;
-          }
-          const completed = await AS.getItem('@mobileai_onboarding_completed');
-          if (!completed) setIsOnboardingActive(true);
-        } catch {
-          setIsOnboardingActive(true);
-        }
-      })();
+      if (!onboardingCompletedInSession) setIsOnboardingActive(true);
     } else {
       setIsOnboardingActive(true);
     }
@@ -412,15 +547,8 @@ export function AIAgent({
     if (!onboarding?.steps) return;
     if (currentOnboardingIndex >= onboarding.steps.length - 1) {
       setIsOnboardingActive(false);
+      onboardingCompletedInSession = true;
       onboarding.onComplete?.();
-      void (async () => {
-        try {
-          const AS = getTooltipStorage();
-          await AS?.setItem('@mobileai_onboarding_completed', 'true');
-        } catch {
-          /* graceful */
-        }
-      })();
     } else {
       setCurrentOnboardingIndex(prev => prev + 1);
     }
@@ -431,30 +559,11 @@ export function AIAgent({
   const [tooltipVisible, setTooltipVisible] = useState(false);
   useEffect(() => {
     if (!showDiscoveryTooltipProp) return;
-    void (async () => {
-      try {
-        const AS = getTooltipStorage();
-        if (!AS) {
-          setTooltipVisible(true);
-          return;
-        }
-        const seen = await AS.getItem('@mobileai_tooltip_seen');
-        if (!seen) setTooltipVisible(true);
-      } catch {
-        setTooltipVisible(true);
-      }
-    })();
+    if (!discoveryTooltipSeenInSession) setTooltipVisible(true);
   }, [showDiscoveryTooltipProp]);
   const handleTooltipDismiss = useCallback(() => {
+    discoveryTooltipSeenInSession = true;
     setTooltipVisible(false);
-    void (async () => {
-      try {
-        const AS = getTooltipStorage();
-        await AS?.setItem('@mobileai_tooltip_seen', 'true');
-      } catch {
-        /* graceful */
-      }
-    })();
   }, []);
   useEffect(() => {
     if (!showChatBar) {
@@ -587,9 +696,19 @@ export function AIAgent({
     logger.info('AIAgent', 'SSE opened for ticket:', ticketId);
   }, [analyticsKey, clearSupport]);
   const clearMessages = useCallback(() => {
+    if (activeConversationIdRef.current && analyticsKey) {
+      ConversationService.endConversation({
+        conversationId: activeConversationIdRef.current,
+        analyticsKey
+      });
+    }
+    clearPendingConversationSave();
+    conversationGenerationRef.current += 1;
+    activeConversationIdRef.current = null;
+    lastSavedMessageCountRef.current = 0;
     setMessages([]);
     setLastResult(null);
-  }, []);
+  }, [clearPendingConversationSave, analyticsKey]);
   const openSupportTicketModal = useCallback((ticketId, options) => {
     setMode('human');
     setSelectedTicketId(ticketId);
@@ -962,6 +1081,22 @@ export function AIAgent({
       userContext
     });
   }, [analyticsKey, customTools, getResolvedScreenName, messages, userContext]);
+  const autoOutboundCallTool = useMemo(() => {
+    if (!analyticsKey) return null;
+    if (outboundCalls?.enabled === false) return null;
+    if (customTools?.['start_ai_call']) return null;
+    return createOutboundCallTool({
+      analyticsKey,
+      config: outboundCalls,
+      getCurrentScreen: getResolvedScreenName,
+      getHistory: () => messages.map(m => ({
+        role: m.role,
+        content: m.previewText
+      })),
+      userContext: userContext ?? {},
+      onStatusUpdate: setStatusText
+    });
+  }, [analyticsKey, customTools, getResolvedScreenName, messages, outboundCalls, userContext]);
 
   // ─── Load conversation history on mount ─────────────────────────
   useEffect(() => {
@@ -1025,8 +1160,8 @@ export function AIAgent({
         setTickets(fetchedTickets);
         setUnreadCounts(initialUnreadCounts);
 
-        // Switch the widget to human mode so support is immediately available.
-        setMode('human');
+        // Make Human mode available, but do NOT auto-switch the user away from
+        // Text/Voice. The user explicitly chooses Human by tapping the tab.
         setAutoExpandTrigger(prev => prev + 1);
 
         // Open SSE for every restored ticket — reliable ticket_closed delivery
@@ -1396,9 +1531,12 @@ export function AIAgent({
       ...(autoReportIssueTool ? {
         report_issue: autoReportIssueTool
       } : {}),
+      ...(autoOutboundCallTool ? {
+        start_ai_call: autoOutboundCallTool
+      } : {}),
       ...customTools
     };
-  }, [autoEscalateTool, autoReportIssueTool, customTools, remoteActionTools]);
+  }, [autoEscalateTool, autoOutboundCallTool, autoReportIssueTool, customTools, remoteActionTools]);
 
   // ─── Voice/Live Mode State ──────────────────────────────────
   const [mode, setMode] = useState('text');
@@ -1406,14 +1544,36 @@ export function AIAgent({
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
   const [isAISpeaking, setIsAISpeaking] = useState(false);
   const [isVoiceConnected, setIsVoiceConnected] = useState(false);
+  const [voiceTranscripts, setVoiceTranscripts] = useState([]);
   const voiceServiceRef = useRef(null);
   const audioInputRef = useRef(null);
   const audioOutputRef = useRef(null);
   const toolLockRef = useRef(false);
+  const isMicActiveRef = useRef(false);
+  const isAISpeakingRef = useRef(false);
+  const voicePlaybackDrainTimerRef = useRef(null);
+  const voicePlaybackDrainUntilRef = useRef(0);
   const userHasSpokenRef = useRef(false);
+  const voiceTranscriptSeqRef = useRef(0);
+  const voiceSessionActiveRef = useRef(false);
+  const voiceSessionGenerationRef = useRef(0);
   const lastScreenContextRef = useRef('');
   const screenPollIntervalRef = useRef(null);
+  const voiceReconnectTimeoutRef = useRef(null);
   const lastAgentErrorRef = useRef(null);
+  const appendVoiceTranscript = useCallback((role, text) => {
+    const normalized = cleanVoiceTranscript(text);
+    if (shouldSuppressVoiceTranscript(normalized, role)) {
+      logger.debug('AIAgent', `Transcript suppressed [${role}]: "${text}"`);
+      return;
+    }
+    const id = `voice-transcript-${Date.now()}-${voiceTranscriptSeqRef.current++}`;
+    setVoiceTranscripts(prev => [...prev, {
+      id,
+      role,
+      text: normalized
+    }]);
+  }, []);
   const availableModes = useMemo(() => {
     const modes = ['text'];
     if (enableVoice) modes.push('voice');
@@ -1429,34 +1589,96 @@ export function AIAgent({
   // Set true when kind='approval' is issued; cleared ONLY on actual button tap.
   // Forces kind='approval' on all subsequent ask_user calls until resolved.
   const pendingAppApprovalRef = useRef(false);
+  const pendingVoicePermissionToolRef = useRef(null);
+  const pendingVoiceActionToolRef = useRef(null);
   // Stores a message typed by the user while the agent is still thinking (mid-approval flow).
   // Auto-resolved into the next ask_user call to prevent the message being lost.
   const queuedApprovalAnswerRef = useRef(null);
   const [pendingApprovalQuestion, setPendingApprovalQuestion] = useState(null);
-  const overlayVisible = isThinking || !!pendingApprovalQuestion;
-  const overlayStatusText = pendingApprovalQuestion ? 'Waiting for your approval...' : statusText;
+  const latestVoiceModelTranscript = useMemo(() => {
+    for (let i = voiceTranscripts.length - 1; i >= 0; i--) {
+      const transcript = voiceTranscripts[i];
+      if (transcript?.role === 'model' && transcript.text.trim()) {
+        return transcript.text.trim();
+      }
+    }
+    return '';
+  }, [voiceTranscripts]);
+  const voiceSpeakingStatusText = mode === 'voice' && isAISpeaking ? latestVoiceModelTranscript || statusText || 'Speaking...' : '';
+  const overlayVisible = isThinking || isActing || !!statusText.trim() || !!pendingApprovalQuestion || mode === 'voice' && isAISpeaking;
+  const overlayStatusText = pendingApprovalQuestion ? 'Waiting for your approval...' : voiceSpeakingStatusText || statusText;
+  useEffect(() => {
+    isMicActiveRef.current = isMicActive;
+  }, [isMicActive]);
+  useEffect(() => {
+    isAISpeakingRef.current = isAISpeaking;
+  }, [isAISpeaking]);
+  const clearVoicePlaybackDrainTimer = useCallback(() => {
+    if (voicePlaybackDrainTimerRef.current) {
+      clearTimeout(voicePlaybackDrainTimerRef.current);
+      voicePlaybackDrainTimerRef.current = null;
+    }
+  }, []);
+  const setVoiceAISpeaking = useCallback(speaking => {
+    isAISpeakingRef.current = speaking;
+    setIsAISpeaking(speaking);
+    if (!speaking) {
+      voicePlaybackDrainUntilRef.current = 0;
+    }
+  }, []);
+  const scheduleVoicePlaybackDrain = useCallback(() => {
+    clearVoicePlaybackDrainTimer();
+    const now = Date.now();
+    const estimatedDelay = Math.max(VOICE_PLAYBACK_DRAIN_GRACE_MS, voicePlaybackDrainUntilRef.current - now + VOICE_PLAYBACK_DRAIN_GRACE_MS);
+    logger.info('AIAgent', `AI turn complete — waiting ${Math.ceil(estimatedDelay)}ms for local playback drain`);
+    voicePlaybackDrainTimerRef.current = setTimeout(() => {
+      voicePlaybackDrainTimerRef.current = null;
+      logger.info('AIAgent', 'AI local playback drain complete');
+      setVoiceAISpeaking(false);
+    }, estimatedDelay);
+  }, [clearVoicePlaybackDrainTimer, setVoiceAISpeaking]);
+  const markVoicePlaybackChunkQueued = useCallback(audio => {
+    clearVoicePlaybackDrainTimer();
+    const now = Date.now();
+    const chunkDurationMs = Math.max(VOICE_PLAYBACK_MIN_CHUNK_MS, estimateVoiceOutputDurationMs(audio));
+    voicePlaybackDrainUntilRef.current = Math.max(now, voicePlaybackDrainUntilRef.current) + chunkDurationMs;
+    setVoiceAISpeaking(true);
+    scheduleVoicePlaybackDrain();
+  }, [clearVoicePlaybackDrainTimer, scheduleVoicePlaybackDrain, setVoiceAISpeaking]);
+  const resetVoicePlaybackState = useCallback(() => {
+    clearVoicePlaybackDrainTimer();
+    setVoiceAISpeaking(false);
+  }, [clearVoicePlaybackDrainTimer, setVoiceAISpeaking]);
   const effectiveProxyHeaders = useMemo(() => {
     if (!analyticsKey) return proxyHeaders;
+    const authToken = proxySessionToken || analyticsKey;
+    const deviceId = getDeviceId();
     const isAuthMissing = !proxyHeaders || !Object.keys(proxyHeaders).some(k => k.toLowerCase() === 'authorization');
-    if (isAuthMissing) {
-      return {
-        ...proxyHeaders,
-        Authorization: `Bearer ${analyticsKey}`
-      };
-    }
-    return proxyHeaders;
-  }, [proxyHeaders, analyticsKey]);
+    return {
+      ...proxyHeaders,
+      ...(isAuthMissing && {
+        Authorization: `Bearer ${authToken}`
+      }),
+      ...(deviceId && {
+        'X-MobileAI-Device-Id': deviceId
+      })
+    };
+  }, [proxyHeaders, analyticsKey, proxySessionToken]);
   const effectiveVoiceProxyHeaders = useMemo(() => {
     if (!analyticsKey) return voiceProxyHeaders;
+    const authToken = proxySessionToken || analyticsKey;
+    const deviceId = getDeviceId();
     const isAuthMissing = !voiceProxyHeaders || !Object.keys(voiceProxyHeaders).some(k => k.toLowerCase() === 'authorization');
-    if (isAuthMissing) {
-      return {
-        ...voiceProxyHeaders,
-        Authorization: `Bearer ${analyticsKey}`
-      };
-    }
-    return voiceProxyHeaders;
-  }, [voiceProxyHeaders, analyticsKey]);
+    return {
+      ...voiceProxyHeaders,
+      ...(isAuthMissing && {
+        Authorization: `Bearer ${authToken}`
+      }),
+      ...(deviceId && {
+        'X-MobileAI-Device-Id': deviceId
+      })
+    };
+  }, [voiceProxyHeaders, analyticsKey, proxySessionToken]);
   const resolvedProxyUrl = useMemo(() => {
     if (proxyUrl) return proxyUrl;
     if (analyticsKey) return ENDPOINTS.hostedTextProxy;
@@ -1476,9 +1698,13 @@ export function AIAgent({
     proxyHeaders,
     voiceProxyUrl: resolvedVoiceProxyUrl,
     voiceProxyHeaders,
+    outboundCalls,
     model,
     supportStyle,
+    enableWebSearch,
     verifier,
+    actionSafety,
+    toolStabilization,
     language: 'en',
     maxSteps,
     interactiveBlacklist,
@@ -1587,6 +1813,9 @@ export function AIAgent({
       telemetryRef.current?.setAgentActing(active);
     },
     onTrace: event => {
+      if (debug && (event.stage.startsWith('action_safety') || event.stage.startsWith('app_action_gate') || event.stage.startsWith('confirmation') || event.stage.startsWith('tool_stabilization'))) {
+        logger.info('AIAgent', `[trace:${event.stage}]`, JSON.stringify(event.data ?? {}));
+      }
       telemetryRef.current?.track('agent_trace', {
         traceId: event.traceId,
         stage: event.stage,
@@ -1595,14 +1824,15 @@ export function AIAgent({
         ...(event.data ?? {})
       });
     }
-  }), [mode, apiKey, resolvedProxyUrl, proxyHeaders, resolvedVoiceProxyUrl, voiceProxyHeaders, model, maxSteps, interactiveBlacklist, interactiveWhitelist, onBeforeStep, onAfterStep, onBeforeTask, onAfterTask, transformScreenContent, mergedCustomTools, resolvedInstructions, stepDelay, mcpServerUrl, router, pathname, onTokenUsage, resolvedKnowledgeBase, knowledgeMaxTokens, enableUIControl, analyticsKey, remoteConfiguredActions, screenMap, useScreenMap, maxTokenBudget, maxCostUSD, interactionMode, platformAdapter, verifier, supportStyle]);
+  }), [mode, apiKey, resolvedProxyUrl, proxyHeaders, resolvedVoiceProxyUrl, voiceProxyHeaders, model, maxSteps, interactiveBlacklist, interactiveWhitelist, onBeforeStep, onAfterStep, onBeforeTask, onAfterTask, transformScreenContent, mergedCustomTools, resolvedInstructions, stepDelay, actionSafety, toolStabilization, mcpServerUrl, router, pathname, onTokenUsage, resolvedKnowledgeBase, knowledgeMaxTokens, enableUIControl, analyticsKey, remoteConfiguredActions, screenMap, useScreenMap, maxTokenBudget, maxCostUSD, interactionMode, platformAdapter, verifier, supportStyle]);
   useEffect(() => {
     logger.info('AIAgent', `⚙️ Runtime config recomputed: mode=${mode} interactionMode=${interactionMode || 'copilot(default)'} onAskUser=${mode !== 'voice'} mergedTools=${Object.keys(mergedCustomTools).join(', ') || '(none)'}`);
   }, [mode, interactionMode, mergedCustomTools]);
-  const provider = useMemo(() => createProvider(providerName, apiKey, model, resolvedProxyUrl, effectiveProxyHeaders), [providerName, apiKey, model, resolvedProxyUrl, effectiveProxyHeaders]);
+  const provider = useMemo(() => createProvider(providerName, apiKey, model, resolvedProxyUrl, effectiveProxyHeaders, enableWebSearch), [providerName, apiKey, model, resolvedProxyUrl, effectiveProxyHeaders, enableWebSearch]);
   const runtime = useMemo(() => new AgentRuntime(provider, config, rootViewRef.current, navRef),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [provider, config]);
+  const activeRuntimeRef = useRef(null);
 
   // Update refs when they change
   useEffect(() => {
@@ -1807,17 +2037,27 @@ export function AIAgent({
   useEffect(() => {
     if (mode !== 'voice') {
       logger.info('AIAgent', `Mode ${mode} — skipping voice service init`);
+      voiceSessionActiveRef.current = false;
+      pendingVoicePermissionToolRef.current = null;
+      pendingVoiceActionToolRef.current = null;
       return;
     }
+    voiceSessionActiveRef.current = true;
+    const sessionGeneration = voiceSessionGenerationRef.current + 1;
+    voiceSessionGenerationRef.current = sessionGeneration;
+    userHasSpokenRef.current = false;
+    voiceTranscriptSeqRef.current = 0;
+    setVoiceTranscripts([]);
+    const isCurrentVoiceSession = () => voiceSessionActiveRef.current && voiceSessionGenerationRef.current === sessionGeneration;
     logger.info('AIAgent', `Mode changed to "${mode}" — initializing voice services...`);
 
     // Track async audio output init — mic MUST wait for this
-    let audioOutputInitPromise = Promise.resolve();
+    let audioOutputInitPromise = Promise.resolve(true);
 
     // Create VoiceService with runtime's built-in tools (navigate, tap, type, done, etc.)
     if (!voiceServiceRef.current) {
       logger.info('AIAgent', 'Creating VoiceService...');
-      const runtimeTools = runtime.getTools();
+      const runtimeTools = [...runtime.getTools(), VOICE_PERMISSION_TOOL];
       logger.info('AIAgent', `Registering ${runtimeTools.length} tools with VoiceService: ${runtimeTools.map(t => t.name).join(', ')}`);
       // Use voice-adapted system prompt — same core rules as text mode
       // but without agent-loop directives that trigger autonomous actions
@@ -1846,6 +2086,10 @@ export function AIAgent({
       // audio session change kills the recorder's device handle.
       audioOutputInitPromise = audioOutputRef.current.initialize().then(ok => {
         logger.info('AIAgent', `AudioOutputService initialized: ${ok}`);
+        return ok;
+      }).catch(err => {
+        logger.warn('AIAgent', `AudioOutputService initialization failed: ${err?.message || err}`);
+        return false;
       });
     }
 
@@ -1855,7 +2099,22 @@ export function AIAgent({
       audioInputRef.current = new AudioInputService({
         // Default 16kHz — Gemini Live API input standard
         onAudioChunk: chunk => {
+          if (!voiceSessionActiveRef.current) {
+            logger.debug('AIAgent', '🎤 Audio chunk ignored after voice stop');
+            return;
+          }
           logger.info('AIAgent', `🎤 onAudioChunk: ${chunk.length} chars, voiceService=${!!voiceServiceRef.current}, connected=${voiceServiceRef.current?.isConnected}`);
+          if (toolLockRef.current || pendingVoicePermissionToolRef.current || pendingVoiceActionToolRef.current) {
+            if (!pendingVoicePermissionToolRef.current) {
+              setStatusText(current => current || 'Thinking...');
+            }
+            logger.debug('AIAgent', '🎤 Audio chunk ignored while voice tool/approval is pending');
+            return;
+          }
+          if (isAISpeakingRef.current) {
+            logger.debug('AIAgent', '🎤 Audio chunk ignored while AI is speaking');
+            return;
+          }
           voiceServiceRef.current?.sendAudio(chunk);
         },
         onError: err => logger.warn('AIAgent', `AudioInput error/disabled: ${err}`),
@@ -1867,15 +2126,17 @@ export function AIAgent({
     logger.info('AIAgent', 'Connecting VoiceService...');
     void voiceServiceRef.current.connect({
       onAudioResponse: audio => {
+        if (!isCurrentVoiceSession()) return;
         logger.info('AIAgent', `🔊 Audio response: ${audio.length} chars, audioOutputRef=${!!audioOutputRef.current}`);
-        setIsAISpeaking(true);
         if (!audioOutputRef.current) {
           logger.error('AIAgent', '❌ audioOutputRef.current is NULL — cannot play audio!');
           return;
         }
+        markVoicePlaybackChunkQueued(audio);
         audioOutputRef.current.enqueue(audio);
       },
       onStatusChange: status => {
+        if (!isCurrentVoiceSession() && status !== 'disconnected') return;
         logger.info('AIAgent', `Voice status: ${status}`);
         const connected = status === 'connected';
         setIsVoiceConnected(connected);
@@ -1884,10 +2145,15 @@ export function AIAgent({
           // Wait for audio session config to finish BEFORE starting mic.
           // If mic starts while setAudioSessionOptions is in flight,
           // the native audio device gets killed (AudioDeviceStop error).
-          audioOutputInitPromise.then(() => {
+          audioOutputInitPromise.then(ok => {
+            if (!isCurrentVoiceSession()) return;
+            if (!ok) {
+              logger.warn('AIAgent', 'Audio session unavailable — mic auto-start skipped');
+              return;
+            }
             logger.info('AIAgent', '✅ Audio session ready — starting mic now...');
             audioInputRef.current?.start().then(ok => {
-              if (ok) {
+              if (ok && isCurrentVoiceSession()) {
                 setIsMicActive(true);
                 logger.info('AIAgent', '🎙️ Mic auto-started after connection');
               }
@@ -1896,17 +2162,19 @@ export function AIAgent({
         }
 
         // Handle unexpected disconnection — auto-reconnect ONLY if not intentional
-        if (status === 'disconnected' && mode === 'voice' && voiceServiceRef.current && !voiceServiceRef.current.intentionalDisconnect) {
+        if (status === 'disconnected' && isCurrentVoiceSession() && mode === 'voice' && voiceServiceRef.current && !voiceServiceRef.current.intentionalDisconnect) {
           // Stop mic & audio immediately so user isn't stuck
           audioInputRef.current?.stop();
           audioOutputRef.current?.stop();
           setIsMicActive(false);
-          setIsAISpeaking(false);
+          resetVoicePlaybackState();
           logger.warn('AIAgent', '⚠️ Voice connection dropped unexpectedly — attempting reconnect in 2s...');
 
           // Auto-reconnect after short delay
-          setTimeout(() => {
-            if (mode === 'voice' && voiceServiceRef.current && !voiceServiceRef.current.intentionalDisconnect && voiceServiceRef.current.lastCallbacks) {
+          if (voiceReconnectTimeoutRef.current) return;
+          voiceReconnectTimeoutRef.current = setTimeout(() => {
+            voiceReconnectTimeoutRef.current = null;
+            if (isCurrentVoiceSession() && mode === 'voice' && voiceServiceRef.current && !voiceServiceRef.current.intentionalDisconnect && voiceServiceRef.current.lastCallbacks) {
               logger.info('AIAgent', '🔄 Reconnecting VoiceService...');
               void voiceServiceRef.current.connect(voiceServiceRef.current.lastCallbacks);
             }
@@ -1914,23 +2182,48 @@ export function AIAgent({
         }
       },
       onTranscript: (text, isFinal, role) => {
+        if (!isCurrentVoiceSession()) return;
         logger.info('AIAgent', `Transcript [${role}] (final=${isFinal}): "${text}"`);
+        if (isFinal) appendVoiceTranscript(role, text);
         if (role === 'user') {
           userHasSpokenRef.current = true;
         }
       },
       onSetupComplete: () => {
+        if (!isCurrentVoiceSession()) return;
         logger.info('AIAgent', '✅ SDK setup complete — sending initial screen context now');
-        userHasSpokenRef.current = false;
         const initialContext = runtime.getScreenContext();
         lastScreenContextRef.current = initialContext; // Seed for screen change detection
         const passiveContext = `[SYSTEM CONTEXT — THIS IS NOT A USER REQUEST. DO NOT RESPOND. DO NOT NAVIGATE. DO NOT CALL ANY TOOLS. DO NOT SPEAK. Just silently read and memorize this screen layout. You will use it when the user speaks their first voice command.]\n\n${initialContext}`;
         logger.info('AIAgent', `📡 Initial screen context (${passiveContext.length} chars):\n${passiveContext}`);
         voiceServiceRef.current?.sendScreenContext(passiveContext);
-        logger.info('AIAgent', '📡 Initial screen context sent (turnComplete=true)');
+        logger.info('AIAgent', '📡 Initial screen context sent (passive, turnComplete=false)');
       },
       onToolCall: async toolCall => {
+        if (!isCurrentVoiceSession()) return;
         logger.info('AIAgent', `🔧 Voice tool call: ${toolCall.name}(${JSON.stringify(toolCall.args)}) [id=${toolCall.id}]`);
+        if (toolCall.name === VOICE_PERMISSION_TOOL_NAME) {
+          const rawQuestion = toolCall.args?.question;
+          const question = typeof rawQuestion === 'string' && rawQuestion.trim() ? rawQuestion.replace(/\[\d+\]/g, '').replace(/  +/g, ' ').trim() : 'The AI agent is requesting permission to perform this action.';
+          pendingVoicePermissionToolRef.current = {
+            name: toolCall.name,
+            id: toolCall.id
+          };
+          audioInputRef.current?.stop();
+          setIsMicActive(false);
+          setPendingApprovalQuestion(question);
+          setAutoExpandTrigger(prev => prev + 1);
+          setIsThinking(false);
+          setIsActing(false);
+          setStatusText('');
+          telemetryRef.current?.track('agent_trace', {
+            stage: 'voice_permission_prompt_rendered',
+            question,
+            toolName: toolCall.name,
+            toolCallId: toolCall.id
+          });
+          return;
+        }
 
         // Code-level gate: reject tool calls before the user has spoken.
         // The model sometimes auto-navigates on receiving screen context.
@@ -1941,22 +2234,50 @@ export function AIAgent({
           });
           return;
         }
+        if (UI_ACTION_TOOL_NAMES.has(toolCall.name) && !runtime.hasVoiceWorkflowApproval()) {
+          const args = toolCall.args ?? {};
+          pendingVoiceActionToolRef.current = {
+            name: toolCall.name,
+            id: toolCall.id,
+            args
+          };
+          audioInputRef.current?.stop();
+          setIsMicActive(false);
+          const question = buildVoiceActionPermissionQuestion(toolCall.name, args);
+          setPendingApprovalQuestion(question);
+          setAutoExpandTrigger(prev => prev + 1);
+          setIsThinking(false);
+          setIsActing(false);
+          setStatusText('');
+          telemetryRef.current?.track('agent_trace', {
+            stage: 'voice_direct_app_action_permission_rendered',
+            toolName: toolCall.name,
+            toolCallId: toolCall.id
+          });
+          return;
+        }
 
         // CRITICAL: Gate audio input during tool execution.
         // The Gemini Live API crashes (code 1008) if sendRealtimeInput
         // (audio) is called while a tool call is pending. Stop the mic
         // before executing the tool and resume after the response is sent.
-        audioInputRef.current?.stop();
-        logger.info('AIAgent', `🔇 Mic paused for tool execution: ${toolCall.name}`);
-
         // One-tool-at-a-time enforcement (mirrors text mode's line 752).
         if (toolLockRef.current) {
           logger.warn('AIAgent', `⏳ Tool locked — waiting for previous tool to finish before executing ${toolCall.name}`);
           while (toolLockRef.current) {
+            if (!isCurrentVoiceSession()) return;
             await new Promise(resolve => setTimeout(resolve, 50));
           }
+          if (!isCurrentVoiceSession()) return;
         }
         toolLockRef.current = true;
+        await audioInputRef.current?.stop();
+        if (!isCurrentVoiceSession()) {
+          toolLockRef.current = false;
+          return;
+        }
+        setIsMicActive(false);
+        logger.info('AIAgent', `🔇 Mic paused for tool execution: ${toolCall.name}`);
         try {
           // Trigger visual 'thinking' overlay down to ChatBar so user knows action is happening
           setIsThinking(true);
@@ -1966,10 +2287,12 @@ export function AIAgent({
 
           // Execute the tool via AgentRuntime and send result back to Gemini
           const result = await runtime.executeTool(toolCall.name, toolCall.args);
+          if (!isCurrentVoiceSession()) return;
           logger.info('AIAgent', `🔧 Tool result for ${toolCall.name}: ${result}`);
 
-          // Step delay — matches text mode's stepDelay (line 820 in AgentRuntime).
-          await new Promise(resolve => setTimeout(resolve, 300));
+          // Brief pause so the app can commit the tool result before sending context.
+          await new Promise(resolve => setTimeout(resolve, 120));
+          if (!isCurrentVoiceSession()) return;
 
           // Include updated screen context IN the tool response
           const updatedContext = runtime.getScreenContext();
@@ -1990,7 +2313,7 @@ export function AIAgent({
           // Resume mic after tool response is sent
           if (voiceServiceRef.current?.isConnected) {
             audioInputRef.current?.start().then(ok => {
-              if (ok) {
+              if (ok && isCurrentVoiceSession()) {
                 setIsMicActive(true);
                 logger.info('AIAgent', `🔊 Mic resumed after tool execution: ${toolCall.name}`);
               }
@@ -1999,18 +2322,27 @@ export function AIAgent({
         }
       },
       onError: err => {
-        logger.error('AIAgent', `VoiceService error: ${err}`);
+        if (!isCurrentVoiceSession()) return;
+        const isRecoverableConnectionLoss = typeof err === 'string' && /Connection lost \(code: (1001|1008|1011)\)/.test(err);
+        if (isRecoverableConnectionLoss) {
+          logger.warn('AIAgent', `VoiceService connection closed: ${err}`);
+        } else {
+          logger.error('AIAgent', `VoiceService error: ${err}`);
+        }
         // Stop mic & audio on error to prevent stale state
         audioInputRef.current?.stop();
         audioOutputRef.current?.stop();
         setIsMicActive(false);
-        setIsAISpeaking(false);
+        resetVoicePlaybackState();
       },
       onTurnComplete: () => {
+        if (!isCurrentVoiceSession()) return;
         logger.info('AIAgent', 'AI turn complete');
-        setIsAISpeaking(false);
-        // No cool-down or echo gate needed — hardware AEC handles everything.
-        // Mic stays active and ready for the next voice command immediately.
+        if (isAISpeakingRef.current || voicePlaybackDrainUntilRef.current > Date.now()) {
+          scheduleVoicePlaybackDrain();
+          return;
+        }
+        resetVoicePlaybackState();
       }
     });
 
@@ -2021,10 +2353,15 @@ export function AIAgent({
     const MIN_DIFF_RATIO = 0.05; // Ignore changes smaller than 5% of total length (animation flicker)
 
     screenPollIntervalRef.current = setInterval(() => {
+      if (!isCurrentVoiceSession()) return;
       if (!voiceServiceRef.current?.isConnected) return;
+      if (isMicActiveRef.current || isAISpeakingRef.current) {
+        logger.debug('AIAgent', '🔄 Screen poll skipped — realtime voice input/output active');
+        return;
+      }
       // Skip during tool execution — the enriched tool response handles that
-      if (toolLockRef.current) {
-        logger.debug('AIAgent', '🔄 Screen poll skipped — tool lock active');
+      if (toolLockRef.current || pendingVoicePermissionToolRef.current || pendingVoiceActionToolRef.current) {
+        logger.debug('AIAgent', '🔄 Screen poll skipped — voice tool/approval pending');
         return;
       }
       try {
@@ -2058,67 +2395,96 @@ export function AIAgent({
         screenPollIntervalRef.current = null;
         logger.info('AIAgent', '🔄 Screen poll stopped');
       }
+      if (voiceReconnectTimeoutRef.current) {
+        clearTimeout(voiceReconnectTimeoutRef.current);
+        voiceReconnectTimeoutRef.current = null;
+      }
       lastScreenContextRef.current = '';
+      voiceSessionActiveRef.current = false;
+      pendingVoicePermissionToolRef.current = null;
+      pendingVoiceActionToolRef.current = null;
       voiceServiceRef.current?.disconnect();
       voiceServiceRef.current = null;
       audioInputRef.current?.stop();
+      audioInputRef.current = null;
+      audioOutputRef.current?.stop();
+      audioOutputRef.current?.cleanup();
+      audioOutputRef.current = null;
       setIsMicActive(false);
-      setIsAISpeaking(false);
+      resetVoicePlaybackState();
       setIsVoiceConnected(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, apiKey, resolvedVoiceProxyUrl, effectiveVoiceProxyHeaders, effectiveProxyHeaders, runtime, resolvedInstructions, supportStyle, knowledgeBase]);
+  }, [mode, apiKey, resolvedVoiceProxyUrl, effectiveVoiceProxyHeaders, effectiveProxyHeaders, runtime, resolvedInstructions, supportStyle, knowledgeBase, appendVoiceTranscript]);
 
   // ─── Stop Voice Session (full cleanup) ─────────────────────
 
   const stopVoiceSession = useCallback(() => {
     logger.info('AIAgent', '🛑 Stopping voice session (full cleanup)...');
+    const pendingVoicePermission = pendingVoicePermissionToolRef.current;
+    const pendingVoiceAction = pendingVoiceActionToolRef.current;
+    if (pendingVoicePermission || pendingVoiceAction) {
+      runtime.rejectVoiceWorkflowApproval();
+      const pendingTool = pendingVoicePermission ?? pendingVoiceAction;
+      if (pendingTool && voiceServiceRef.current?.isConnected) {
+        voiceServiceRef.current.sendFunctionResponse(pendingTool.name, pendingTool.id, {
+          result: 'User declined the requested app action. Do not perform it.'
+        });
+      }
+    }
+    voiceSessionActiveRef.current = false;
+    voiceSessionGenerationRef.current += 1;
+    toolLockRef.current = false;
+    if (screenPollIntervalRef.current) {
+      clearInterval(screenPollIntervalRef.current);
+      screenPollIntervalRef.current = null;
+    }
+    if (voiceReconnectTimeoutRef.current) {
+      clearTimeout(voiceReconnectTimeoutRef.current);
+      voiceReconnectTimeoutRef.current = null;
+    }
     // 1. Stop mic input
     audioInputRef.current?.stop();
+    audioInputRef.current = null;
     // 2. Stop audio output (clear queued chunks)
     audioOutputRef.current?.stop();
+    audioOutputRef.current?.cleanup();
+    audioOutputRef.current = null;
     // 3. Disconnect WebSocket
     voiceServiceRef.current?.disconnect();
     voiceServiceRef.current = null;
     // 4. Reset state
     setIsMicActive(false);
-    setIsAISpeaking(false);
+    resetVoicePlaybackState();
     setIsVoiceConnected(false);
+    pendingVoicePermissionToolRef.current = null;
+    pendingVoiceActionToolRef.current = null;
+    setPendingApprovalQuestion(null);
+    setIsThinking(false);
+    setIsActing(false);
+    setStatusText('');
     // 6. Switch back to text mode (triggers cleanup effect naturally)
     setMode('text');
     logger.info('AIAgent', '🛑 Voice session fully stopped');
-  }, [runtime]);
+  }, [runtime, resetVoicePlaybackState]);
 
   // ─── Execute ──────────────────────────────────────────────────
 
-  const handleSend = useCallback(async (message, options) => {
-    // Extract images from options (passed by AgentChatBar as 2nd arg)
-    const userImages = Array.isArray(options) ? options : options?.images || undefined;
-    const hasImages = userImages && userImages.length > 0;
+  const handleSend = useCallback(async (message, imagesOrOptions, maybeOptions) => {
+    const images = Array.isArray(imagesOrOptions) ? imagesOrOptions : undefined;
+    const options = Array.isArray(imagesOrOptions) ? maybeOptions : imagesOrOptions;
+    if (!message.trim() && (!images || images.length === 0)) return;
 
-    // When images are present and agent is thinking: cancel current execution, start fresh
-    if (hasImages && isThinking) {
-      logger.info('AIAgent', 'User sent images while thinking — cancelling current execution to start fresh');
-      if (askUserResolverRef.current) {
-        const resolver = askUserResolverRef.current;
-        askUserResolverRef.current = null;
-        pendingAskUserKindRef.current = null;
-        pendingAppApprovalRef.current = false;
-        setPendingApprovalQuestion(null);
-        resolver('__CANCELLED__');
-      }
-      runtime.cancel();
-      // Poll until runtime stops (cancelAndWait pattern)
-      const deadline = Date.now() + 5000;
-      while (runtime.getIsRunning() && Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 50));
-      }
+    // When the user sends images while the agent is mid-task (e.g. initial
+    // greeting), cancel the running execution so we can start a fresh one
+    // that includes the images as inlineData.
+    if (isThinking && images?.length) {
+      logger.info('AIAgent', 'User sent images while agent thinking — cancelling current task to start fresh with images');
+      const targetRuntime = activeRuntimeRef.current ?? runtime;
+      await targetRuntime.cancelAndWait();
       setIsThinking(false);
       setStatusText('');
-      // Fall through to fresh execution below
-    } else if (!message.trim() && !hasImages) {
-      return;
-    } else if (isThinking && !hasImages) {
+    } else if (isThinking) {
       return;
     }
 
@@ -2131,6 +2497,7 @@ export function AIAgent({
     if (consentGateActive && !isHumanAgentChat) {
       pendingConsentSendRef.current = {
         message: message.trim(),
+        images,
         options
       };
       setShowConsentDialog(true);
@@ -2153,16 +2520,32 @@ export function AIAgent({
         });
         return;
       }
+      if (images?.length) {
+        for (const img of images) {
+          supportSocket.sendImage(img.base64, img.mimeType);
+        }
+      }
       if (supportSocket.sendText(message)) {
+        const contentNodes = [];
+        if (images?.length) {
+          for (const img of images) {
+            contentNodes.push(createImageNode(`data:${img.mimeType};base64,${img.base64}`, img.mimeType, img.base64, `img-${Date.now()}-${Math.random()}`));
+          }
+        }
+        contentNodes.push({
+          type: 'text',
+          content: message.trim(),
+          id: `text-${Date.now()}`
+        });
         setSupportMessages(prev => [...prev, createAIMessage({
           id: `user-${Date.now()}`,
           role: 'user',
-          content: message.trim(),
-          previewText: message.trim(),
+          content: contentNodes,
+          previewText: message.trim() || '[Image]',
           timestamp: Date.now()
         })]);
         setIsThinking(true);
-        setStatusText('Sending to agent...');
+        setStatusText('Thinking...');
         setTimeout(() => {
           setIsThinking(false);
           setStatusText('');
@@ -2179,24 +2562,29 @@ export function AIAgent({
 
     // Append user message to AI thread (with image nodes if present)
     const userContentNodes = [];
-    if (message.trim()) {
-      userContentNodes.push({ type: 'text', content: message.trim() });
-    }
-    if (hasImages) {
-      for (const img of userImages) {
-        userContentNodes.push({ type: 'image', uri: `data:${img.mimeType};base64,${img.base64}` });
+    if (images?.length) {
+      for (const img of images) {
+        userContentNodes.push(createImageNode(`data:${img.mimeType};base64,${img.base64}`, img.mimeType, img.base64, `img-${Date.now()}-${Math.random()}`));
       }
     }
+    userContentNodes.push({
+      type: 'text',
+      content: message.trim(),
+      id: `text-${Date.now()}`
+    });
     setMessages(prev => [...prev, createAIMessage({
       id: Date.now().toString() + Math.random(),
       role: 'user',
-      content: userContentNodes.length > 0 ? userContentNodes : message.trim(),
-      previewText: message.trim() || (hasImages ? `[${userImages.length} image(s)]` : ''),
+      content: userContentNodes,
+      previewText: message.trim() || '[Image]',
       timestamp: Date.now()
     })]);
 
-    // If there's a pending ask_user, resolve it instead of starting a new execution
-    if (askUserResolverRef.current) {
+    // If there's a pending ask_user, resolve it instead of starting a new execution.
+    // EXCEPTION: when the user attaches images, skip the resolver and start a fresh
+    // execution so the images reach the provider as inlineData (the resolver only
+    // passes plain text back to the running agent loop).
+    if (askUserResolverRef.current && !images?.length) {
       if (pendingAskUserKindRef.current === 'approval') {
         const resolver = askUserResolverRef.current;
         askUserResolverRef.current = null;
@@ -2211,7 +2599,7 @@ export function AIAgent({
           message: message.trim()
         });
         setIsThinking(true);
-        setStatusText('Answering your question...');
+        setStatusText('Thinking...');
         setLastResult(null);
         resolver(message.trim());
         return;
@@ -2222,7 +2610,7 @@ export function AIAgent({
       pendingAppApprovalRef.current = false; // CRITICAL FIX: Unlock the agent state
       setPendingApprovalQuestion(null);
       setIsThinking(true);
-      setStatusText('Processing your answer...');
+      setStatusText('Thinking...');
       setLastResult(null);
       logger.info('AIAgent', `✅ Resolving pending ask_user with: "${message.trim()}"`);
       telemetryRef.current?.track('agent_trace', {
@@ -2232,6 +2620,20 @@ export function AIAgent({
       });
       resolver(message);
       return;
+    }
+    // When images are present during a pending ask_user, resolve the
+    // promise (unblocking the execution loop), cancel+wait for it to
+    // finish, then fall through to start a fresh execution with images.
+    if (askUserResolverRef.current && images?.length) {
+      logger.info('AIAgent', 'Bypassing ask_user resolver — user attached images, starting fresh execution');
+      const resolver = askUserResolverRef.current;
+      askUserResolverRef.current = null;
+      pendingAskUserKindRef.current = null;
+      pendingAppApprovalRef.current = false;
+      setPendingApprovalQuestion(null);
+      resolver('__CANCELLED__');
+      const targetRuntime = activeRuntimeRef.current ?? runtime;
+      await targetRuntime.cancelAndWait();
     }
 
     // Guard: if we're mid-approval flow (waiting for button tap) but no resolver exists yet
@@ -2249,7 +2651,7 @@ export function AIAgent({
     pendingAppApprovalRef.current = false;
     queuedApprovalAnswerRef.current = null;
     setIsThinking(true);
-    setStatusText('Thinking...');
+    setStatusText('Looking at your screen...');
     setLastResult(null);
     const requestStartedAt = Date.now();
     logger.info('AIAgent', `📨 New user request received in ${mode} mode | interactionMode=${interactionMode || 'copilot(default)'} | text="${message.trim()}"`);
@@ -2269,101 +2671,14 @@ export function AIAgent({
       interactionMode: interactionMode || 'copilot'
     });
     try {
-      // ─── Business-grade escalation policy ───
-      const FRUSTRATION_REGEX = /\b(angry|frustrated|useless|terrible|hate|worst|ridiculous|awful)\b/i;
-      const HIGH_RISK_ESCALATION_REGEX = /\b(human|agent|representative|supervisor|manager|refund|chargeback|charged|billing|payment|fraud|scam|lawsuit|attorney|lawyer|sue|legal|privacy|data breach|account locked|can't log in|cannot log in)\b/i;
-      const escalateTool = customTools?.['escalate_to_human'] || autoEscalateTool;
-      const priorFrustrationCount = messages.filter(m => m.role === 'user' && FRUSTRATION_REGEX.test(m.previewText)).length;
-      if (escalateTool && !selectedTicketId) {
-        if (HIGH_RISK_ESCALATION_REGEX.test(message)) {
-          logger.warn('AIAgent', 'High-risk support signal detected — auto-escalating to human');
-          telemetryRef.current?.track('business_escalation', {
-            canonical_type: 'support_escalated',
-            message,
-            trigger: 'high_risk',
-            escalation_reason: 'high_risk',
-            topic: message.trim().slice(0, 120)
-          });
-          const escalationResult = await escalateTool.execute({
-            reason: `Customer needs human support: ${message.trim()}`
-          });
-          const customerMessage = typeof escalationResult === 'string' && escalationResult.trim().length > 0 ? escalationResult.replace(/^ESCALATED:\s*/i, '') : 'Your request has been sent to our support team. A human agent will reply here as soon as possible.';
-          const res = {
-            success: true,
-            message: customerMessage,
-            previewText: customerMessage,
-            reply: normalizeRichContent(customerMessage),
-            steps: [{
-              stepIndex: 0,
-              reflection: {
-                previousGoalEval: '',
-                memory: '',
-                plan: 'Escalate to human support for a high-risk or explicitly requested issue'
-              },
-              action: {
-                name: 'escalate_to_human',
-                input: {
-                  reason: 'business_escalation'
-                },
-                output: 'Escalated'
-              }
-            }]
-          };
-          setLastResult(res);
-          setMessages(prev => [...prev, createAIMessage({
-            id: `assistant-${Date.now()}`,
-            role: 'assistant',
-            content: res.message,
-            previewText: res.previewText || res.message,
-            timestamp: Date.now(),
-            result: res
-          })]);
-          setIsThinking(false);
-          setStatusText('');
-          return;
-        }
-        if (FRUSTRATION_REGEX.test(message)) {
-          const frustrationMessage = priorFrustrationCount > 0 ? "I'm sorry this has been frustrating. I can keep helping here, or I can connect you with a human support agent if you'd prefer." : "I'm sorry this has been frustrating. Tell me what went wrong, and I'll do my best to fix it.";
-          const res = {
-            success: true,
-            message: frustrationMessage,
-            previewText: frustrationMessage,
-            reply: normalizeRichContent(frustrationMessage),
-            steps: [{
-              stepIndex: 0,
-              reflection: {
-                previousGoalEval: '',
-                memory: '',
-                plan: priorFrustrationCount > 0 ? 'Acknowledge repeated frustration and offer escalation without forcing a handoff' : 'Acknowledge first-time frustration and continue trying to resolve the issue'
-              },
-              action: {
-                name: 'done',
-                input: {},
-                output: frustrationMessage
-              }
-            }]
-          };
-          setLastResult(res);
-          setMessages(prev => [...prev, createAIMessage({
-            id: `assistant-${Date.now()}`,
-            role: 'assistant',
-            content: frustrationMessage,
-            previewText: frustrationMessage,
-            timestamp: Date.now(),
-            result: res
-          })]);
-          setIsThinking(false);
-          setStatusText('');
-          return;
-        }
-      }
-
       // Ensure we have the latest Fiber tree ref
-      runtime.updateRefs(rootViewRef.current, navRef);
-      const result = await runtime.execute(message, messages.map(entry => ({
+      const executingRuntime = runtime;
+      activeRuntimeRef.current = executingRuntime;
+      executingRuntime.updateRefs(rootViewRef.current, navRef);
+      const result = await executingRuntime.execute(message, messages.map(entry => ({
         role: entry.role,
         content: entry.previewText
-      })), userImages);
+      })), images);
       let normalizedResult = normalizeExecutionResult(result);
       const reportStep = result.steps?.find(step => step.action.name === 'report_issue');
       if (reportStep && typeof reportStep.action.output === 'string') {
@@ -2444,66 +2759,16 @@ export function AIAgent({
         result: normalizedResult
       });
       setMessages(prev => [...prev, assistantMsg]);
-
-      // ── Persist to backend (debounced 600ms) ─────────────────────
-      if (analyticsKey) {
-        if (appendDebounceRef.current) clearTimeout(appendDebounceRef.current);
-        appendDebounceRef.current = setTimeout(async () => {
-          try {
-            await initDeviceId();
-            const deviceId = getDeviceId();
-            // Read current messages directly from ref — never use setMessages() to read state
-            const currentMsgs = messagesRef.current;
-            const newMsgs = currentMsgs.slice(lastSavedMessageCountRef.current);
-            if (newMsgs.length === 0) return;
-            if (!activeConversationIdRef.current) {
-              // First exchange — create a new conversation
-              const id = await ConversationService.startConversation({
-                analyticsKey: analyticsKey,
-                userId: userContext?.userId,
-                deviceId: deviceId || undefined,
-                messages: newMsgs
-              });
-              if (id) {
-                activeConversationIdRef.current = id;
-                lastSavedMessageCountRef.current = currentMsgs.length;
-                const newSummary = {
-                  id,
-                  title: newMsgs.find(m => m.role === 'user')?.previewText?.slice(0, 80) || 'New conversation',
-                  preview: assistantMsg.previewText.slice(0, 100),
-                  previewRole: 'assistant',
-                  messageCount: newMsgs.length,
-                  createdAt: Date.now(),
-                  updatedAt: Date.now()
-                };
-                setConversations(prev => [newSummary, ...prev]);
-                logger.info('AIAgent', `Conversation created: ${id}`);
-              }
-            } else {
-              // Subsequent turns — append only new messages
-              await ConversationService.appendMessages({
-                conversationId: activeConversationIdRef.current,
-                analyticsKey: analyticsKey,
-                messages: newMsgs
-              });
-              lastSavedMessageCountRef.current = currentMsgs.length;
-              setConversations(prev => prev.map(c => c.id === activeConversationIdRef.current ? {
-                ...c,
-                preview: assistantMsg.previewText.slice(0, 100),
-                updatedAt: Date.now(),
-                messageCount: c.messageCount + newMsgs.length
-              } : c));
-              logger.info('AIAgent', `Conversation appended: ${activeConversationIdRef.current}`);
-            }
-          } catch (err) {
-            logger.warn('AIAgent', 'Failed to persist conversation:', err);
-          }
-        }, 600);
-      }
       if (options?.onResult) {
         options.onResult(normalizedResult);
       } else {
         onResult?.(normalizedResult);
+      }
+
+      // ─── CSAT survey trigger ─────────────────────────────────
+      if (normalizedResult.success && supportMode?.csat?.enabled !== false && supportMode?.enabled && !stepsHadEscalation) {
+        const idleDelay = (supportMode.csat?.showAfterIdleSeconds ?? 10) * 1000;
+        setTimeout(() => setShowCSAT(true), idleDelay);
       }
       logger.info('AIAgent', `Result: ${normalizedResult.success ? '✅' : '❌'} ${normalizedResult.message}`);
     } catch (error) {
@@ -2530,6 +2795,9 @@ export function AIAgent({
         steps: []
       });
     } finally {
+      if (activeRuntimeRef.current === runtime) {
+        activeRuntimeRef.current = null;
+      }
       setIsActing(false);
       setIsThinking(false);
       setStatusText('');
@@ -2540,33 +2808,75 @@ export function AIAgent({
     const pending = pendingConsentSendRef.current;
     if (!pending) return;
     pendingConsentSendRef.current = null;
-    void handleSend(pending.message, pending.options);
+    void handleSend(pending.message, pending.images, pending.options);
   }, [consentGateActive, handleSend]);
   useEffect(() => {
     if (isThinking) return;
     const pending = pendingFollowUpAfterApprovalRef.current;
     if (!pending) return;
     pendingFollowUpAfterApprovalRef.current = null;
-    void handleSend(pending.message, pending.options);
+    void handleSend(pending.message, pending.images, pending.options);
   }, [isThinking, handleSend]);
 
   // ─── Context value (for useAI bridge) ─────────────────────────
 
   const handleCancel = useCallback(() => {
-    runtime.cancel();
+    const targetRuntime = activeRuntimeRef.current ?? runtime;
+    if (pendingApprovalQuestion) {
+      const resolver = askUserResolverRef.current;
+      const pendingVoicePermission = pendingVoicePermissionToolRef.current;
+      const pendingVoiceAction = pendingVoiceActionToolRef.current;
+      targetRuntime.cancel();
+      askUserResolverRef.current = null;
+      pendingAskUserKindRef.current = null;
+      pendingAppApprovalRef.current = false;
+      queuedApprovalAnswerRef.current = null;
+      pendingVoicePermissionToolRef.current = null;
+      pendingVoiceActionToolRef.current = null;
+      setPendingApprovalQuestion(null);
+      setIsThinking(false);
+      setIsActing(false);
+      setStatusText('');
+      if (pendingVoicePermission || pendingVoiceAction) {
+        targetRuntime.rejectVoiceWorkflowApproval();
+        const pendingTool = pendingVoicePermission ?? pendingVoiceAction;
+        if (pendingTool) {
+          voiceServiceRef.current?.sendFunctionResponse(pendingTool.name, pendingTool.id, {
+            result: 'User declined the requested app action. Do not perform it.'
+          });
+        }
+        if (mode === 'voice') {
+          stopVoiceSession();
+        }
+        return;
+      }
+      resolver?.('__APPROVAL_REJECTED__');
+      return;
+    }
+    if (mode === 'voice') {
+      targetRuntime.cancel();
+      stopVoiceSession();
+      return;
+    }
+    targetRuntime.cancel();
     setStatusText('Stopping...');
-  }, [runtime]);
+  }, [mode, pendingApprovalQuestion, runtime, stopVoiceSession]);
 
   // ─── Conversation History Handlers ─────────────────────────────
 
   const handleConversationSelect = useCallback(async conversationId => {
     if (!analyticsKey) return;
     try {
+      await initDeviceId();
       const msgs = await ConversationService.fetchConversation({
         conversationId,
-        analyticsKey
+        analyticsKey,
+        userId: userContext?.userId,
+        deviceId: getDeviceId() || undefined
       });
       if (msgs) {
+        clearPendingConversationSave();
+        conversationGenerationRef.current += 1;
         activeConversationIdRef.current = conversationId;
         lastSavedMessageCountRef.current = msgs.length;
         setMessages(msgs);
@@ -2575,14 +2885,121 @@ export function AIAgent({
     } catch (err) {
       logger.warn('AIAgent', 'Failed to load conversation:', err);
     }
-  }, [analyticsKey]);
+  }, [analyticsKey, clearPendingConversationSave, userContext?.userId]);
   const handleNewConversation = useCallback(() => {
+    if (activeConversationIdRef.current && analyticsKey) {
+      ConversationService.endConversation({
+        conversationId: activeConversationIdRef.current,
+        analyticsKey
+      });
+    }
+    clearPendingConversationSave();
+    conversationGenerationRef.current += 1;
     activeConversationIdRef.current = null;
     lastSavedMessageCountRef.current = 0;
     setMessages([]);
     setLastResult(null);
     setLastUserMessage(null);
-  }, []);
+  }, [clearPendingConversationSave, analyticsKey]);
+  const handlePendingApprovalAction = useCallback(async action => {
+    const resolver = askUserResolverRef.current;
+    const pendingVoicePermission = pendingVoicePermissionToolRef.current;
+    const pendingVoiceAction = pendingVoiceActionToolRef.current;
+    logger.info('AIAgent', `🔘 Approval button tapped: action=${action} | resolver=${resolver ? 'EXISTS' : 'NULL'} | voiceTool=${pendingVoicePermission ? 'EXISTS' : 'NULL'} | voiceAction=${pendingVoiceAction ? 'EXISTS' : 'NULL'} | pendingApprovalQuestion="${pendingApprovalQuestion}" | pendingAppApprovalRef=${pendingAppApprovalRef.current}`);
+    if (!resolver && !pendingVoicePermission && !pendingVoiceAction) {
+      logger.warn('AIAgent', 'Ignoring stale approval button tap; approval was already resolved.');
+      return;
+    }
+    askUserResolverRef.current = null;
+    pendingAskUserKindRef.current = null;
+    pendingAppApprovalRef.current = false;
+    queuedApprovalAnswerRef.current = null;
+    pendingVoicePermissionToolRef.current = null;
+    pendingVoiceActionToolRef.current = null;
+    setPendingApprovalQuestion(null);
+    const approvalLabel = action === 'approve' ? 'Allow' : "Don’t Allow";
+    if (!pendingVoicePermission && !pendingVoiceAction) {
+      setLastUserMessage(approvalLabel);
+      setMessages(prev => [...prev, createAIMessage({
+        id: `user-approval-${Date.now()}`,
+        role: 'user',
+        content: approvalLabel,
+        previewText: approvalLabel,
+        timestamp: Date.now()
+      })]);
+    }
+    const response = action === 'approve' ? '__APPROVAL_GRANTED__' : '__APPROVAL_REJECTED__';
+    if (action === 'approve') {
+      setIsThinking(true);
+      setStatusText('Thinking...');
+    }
+    telemetryRef.current?.track('agent_trace', {
+      stage: 'approval_button_pressed',
+      action,
+      renderedAnswer: approvalLabel
+    });
+    if (pendingVoiceAction) {
+      if (action !== 'approve') {
+        runtime.rejectVoiceWorkflowApproval();
+        voiceServiceRef.current?.sendFunctionResponse(pendingVoiceAction.name, pendingVoiceAction.id, {
+          result: 'User declined the requested app action. Do not perform it.'
+        });
+        return;
+      }
+      runtime.grantVoiceWorkflowApproval();
+      const actionGeneration = voiceSessionGenerationRef.current;
+      const isSameVoiceSession = () => voiceSessionActiveRef.current && voiceSessionGenerationRef.current === actionGeneration;
+      toolLockRef.current = true;
+      setIsActing(UI_ACTION_TOOL_NAMES.has(pendingVoiceAction.name));
+      const toolNameFriendly = pendingVoiceAction.name.replace(/_/g, ' ');
+      setStatusText(`Executing ${toolNameFriendly}...`);
+      try {
+        const result = await runtime.executeTool(pendingVoiceAction.name, pendingVoiceAction.args);
+        if (!isSameVoiceSession()) return;
+        await new Promise(resolve => setTimeout(resolve, 120));
+        if (!isSameVoiceSession()) return;
+        const updatedContext = runtime.getScreenContext();
+        lastScreenContextRef.current = updatedContext;
+        const enrichedResult = `${result}\n\n<updated_screen>\n${updatedContext}\n</updated_screen>`;
+        voiceServiceRef.current?.sendFunctionResponse(pendingVoiceAction.name, pendingVoiceAction.id, {
+          result: enrichedResult
+        });
+      } finally {
+        toolLockRef.current = false;
+        setIsActing(false);
+        setIsThinking(false);
+        setStatusText('');
+        if (isSameVoiceSession() && voiceServiceRef.current?.isConnected) {
+          audioInputRef.current?.start().then(ok => {
+            if (ok && isSameVoiceSession()) {
+              setIsMicActive(true);
+              logger.info('AIAgent', `🔊 Mic resumed after approved voice action: ${pendingVoiceAction.name}`);
+            }
+          });
+        }
+      }
+      return;
+    }
+    if (pendingVoicePermission) {
+      if (action === 'approve') {
+        runtime.grantVoiceWorkflowApproval();
+      } else {
+        runtime.rejectVoiceWorkflowApproval();
+      }
+      voiceServiceRef.current?.sendFunctionResponse(pendingVoicePermission.name, pendingVoicePermission.id, {
+        result: action === 'approve' ? 'User approved the requested app action. Continue with the approved action.' : 'User declined the requested app action. Do not perform it.'
+      });
+      if (voiceServiceRef.current?.isConnected) {
+        audioInputRef.current?.start().then(ok => {
+          if (ok && voiceSessionActiveRef.current) {
+            setIsMicActive(true);
+          }
+        });
+      }
+      return;
+    }
+    resolver?.(response);
+  }, [pendingApprovalQuestion, runtime]);
   const contextValue = useMemo(() => ({
     runtime,
     send: handleSend,
@@ -2594,6 +3011,28 @@ export function AIAgent({
     cancel: handleCancel
   }), [runtime, handleSend, handleCancel, isThinking, statusText, lastResult, messages, clearMessages]);
   const richBlocks = useMemo(() => [FactCardDefinition, ProductCardDefinition, ActionCardDefinition, ComparisonCardDefinition, FormCardDefinition, ...(blocks || [])], [blocks]);
+
+  // ─── CSAT survey element ────────────────────────────────────
+
+  const csatElement = showCSAT && supportMode?.csat ? /*#__PURE__*/_jsx(CSATSurvey, {
+    config: {
+      ...supportMode.csat,
+      onSubmit: rating => {
+        supportMode.csat.onSubmit?.(rating);
+        telemetryRef.current?.track('csat_submitted', {
+          score: rating.score,
+          surveyType: supportMode.csat.surveyType ?? 'csat'
+        });
+      }
+    },
+    metadata: {
+      conversationDuration: Date.now() - conversationStartRef.current,
+      stepsCount: messages.filter(m => m.role === 'assistant').length,
+      wasEscalated: tickets.length > 0,
+      screen: getResolvedScreenName()
+    },
+    onDismiss: () => setShowCSAT(false)
+  }) : null;
 
   // ─── Render ──────────────────────────────────────────────────
 
@@ -2685,30 +3124,9 @@ export function AIAgent({
               lastResult: lastResult,
               lastUserMessage: lastUserMessage,
               chatMessages: messages,
+              voiceTranscripts: voiceTranscripts,
               pendingApprovalQuestion: pendingApprovalQuestion,
-              onPendingApprovalAction: action => {
-                const resolver = askUserResolverRef.current;
-                logger.info('AIAgent', `🔘 Approval button tapped: action=${action} | resolver=${resolver ? 'EXISTS' : 'NULL'} | pendingApprovalQuestion="${pendingApprovalQuestion}" | pendingAppApprovalRef=${pendingAppApprovalRef.current}`);
-                if (!resolver) {
-                  logger.error('AIAgent', '🚫 ABORT: resolver is null when button was tapped — this means ask_user Promise was already resolved without clearing the buttons. This is a state sync bug.');
-                  return;
-                }
-                askUserResolverRef.current = null;
-                pendingAskUserKindRef.current = null;
-                pendingAppApprovalRef.current = false;
-                queuedApprovalAnswerRef.current = null;
-                setPendingApprovalQuestion(null);
-                const response = action === 'approve' ? '__APPROVAL_GRANTED__' : '__APPROVAL_REJECTED__';
-                if (action === 'approve') {
-                  setIsThinking(true);
-                  setStatusText('Working...');
-                }
-                telemetryRef.current?.track('agent_trace', {
-                  stage: 'approval_button_pressed',
-                  action
-                });
-                resolver(response);
-              },
+              onPendingApprovalAction: handlePendingApprovalAction,
               language: 'en',
               onDismiss: () => {
                 setLastResult(null);
@@ -2788,7 +3206,9 @@ export function AIAgent({
                 setShowConsentDialog(false);
                 consentConfig.onDecline?.();
                 logger.info('AIAgent', '❌ AI consent declined by user');
-              }
+              },
+              onQuickActionsPress: supportMode?.quickActions?.enabled ? () => setShowQuickActions(true) : undefined,
+              afterMessagesContent: csatElement
             }) : /*#__PURE__*/_jsx(ProactiveHint, {
               stage: proactiveStage,
               badgeText: proactiveBadgeText,
@@ -2802,30 +3222,9 @@ export function AIAgent({
                 lastResult: lastResult,
                 lastUserMessage: lastUserMessage,
                 chatMessages: messages,
+                voiceTranscripts: voiceTranscripts,
                 pendingApprovalQuestion: pendingApprovalQuestion,
-                onPendingApprovalAction: action => {
-                  const resolver = askUserResolverRef.current;
-                  logger.info('AIAgent', `🔘 Approval button tapped: action=${action} | resolver=${resolver ? 'EXISTS' : 'NULL'} | pendingApprovalQuestion="${pendingApprovalQuestion}" | pendingAppApprovalRef=${pendingAppApprovalRef.current}`);
-                  if (!resolver) {
-                    logger.error('AIAgent', '🚫 ABORT: resolver is null when button was tapped — this means ask_user Promise was already resolved without clearing the buttons. This is a state sync bug.');
-                    return;
-                  }
-                  askUserResolverRef.current = null;
-                  pendingAskUserKindRef.current = null;
-                  pendingAppApprovalRef.current = false;
-                  queuedApprovalAnswerRef.current = null;
-                  setPendingApprovalQuestion(null);
-                  const response = action === 'approve' ? '__APPROVAL_GRANTED__' : '__APPROVAL_REJECTED__';
-                  if (action === 'approve') {
-                    setIsThinking(true);
-                    setStatusText('Working...');
-                  }
-                  telemetryRef.current?.track('agent_trace', {
-                    stage: 'approval_button_pressed',
-                    action
-                  });
-                  resolver(response);
-                },
+                onPendingApprovalAction: handlePendingApprovalAction,
                 language: 'en',
                 onDismiss: () => {
                   setLastResult(null);
@@ -2903,13 +3302,30 @@ export function AIAgent({
                   setShowConsentDialog(false);
                   consentConfig.onDecline?.();
                   logger.info('AIAgent', '❌ AI consent declined by user');
-                }
+                },
+                onQuickActionsPress: supportMode?.quickActions?.enabled ? () => setShowQuickActions(true) : undefined,
+                afterMessagesContent: csatElement
               })
             })
           }), /*#__PURE__*/_jsx(AgentOverlay, {
             visible: overlayVisible,
             statusText: overlayStatusText,
             onCancel: handleCancel
+          }), supportMode?.quickActions?.enabled && /*#__PURE__*/_jsx(QuickActionsSheet, {
+            visible: showQuickActions,
+            config: supportMode.quickActions,
+            currentScreen: getResolvedScreenName(),
+            onClose: () => setShowQuickActions(false),
+            onChatWithAI: context => {
+              setShowQuickActions(false);
+              if (context?.topicId) {
+                const topic = supportMode.quickActions.topics.find(t => t.id === context.topicId);
+                const prefill = topic ? `I was browsing help topic "${topic.label}"${context.articleQuestion ? ` — specifically "${context.articleQuestion}"` : ''}. I need more help.` : undefined;
+                if (prefill) {
+                  handleSend(prefill);
+                }
+              }
+            }
           }), Platform.OS !== 'android' && /*#__PURE__*/_jsx(_Fragment, {
             children: /*#__PURE__*/_jsx(SupportChatModal, {
               visible: mode === 'human' && !!selectedTicketId,
