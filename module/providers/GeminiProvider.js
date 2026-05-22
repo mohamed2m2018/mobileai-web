@@ -375,6 +375,15 @@ export class GeminiProvider {
       logger.error('GeminiProvider', 'Proxy blocked: project has run out of hosted proxy credits.');
       return 'This project has run out of AI credits. Add more credits in the MobileAI dashboard to continue.';
     }
+    if (errorCode === 'session_token_budget_exhausted') {
+      return 'Session token limit reached. Please start a new conversation.';
+    }
+    if (errorCode === 'token_rate_limited' || errorCode === 'device_rate_limited') {
+      return 'You\'re sending messages too quickly. Please wait a moment and try again.';
+    }
+    if (errorCode === 'provider_rate_limited') {
+      return 'The AI service is busy. Please wait a moment and try again.';
+    }
     if (errorCode === 'hosted_proxy_disabled') {
       return 'The MobileAI hosted proxy is not enabled for this project yet.';
     }
