@@ -12,6 +12,13 @@
   },
   "main": "index.mjs",
   "types": "index.d.ts",
+  "files": [
+    "README.md",
+    "index.mjs",
+    "index.d.ts",
+    "module",
+    "src"
+  ],
   "exports": {
     ".": {
       "types": "./index.d.ts",
