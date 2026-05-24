@@ -870,7 +870,7 @@ function createBrowserAudioPlayer({
   };
 }
 
-export function AIAgentWeb({
+export function AIAgent({
   children,
   provider = 'gemini',
   apiKey,
@@ -1075,8 +1075,8 @@ export function AIAgentWeb({
   useEffect(() => {
     logger.setEnabled(debug);
     if (debug) {
-      logger.info('AIAgentWeb', '🔧 Debug logging enabled');
-      logger.info('AIAgentWeb', `⚙️ Initial config: interactionMode=${interactionMode || 'copilot(default)'} showVoiceTab=${showVoiceTab} enableVoice=${voiceEnabled} analytics=${!!analyticsKey} provider=${provider}`);
+      logger.info('AIAgent', '🔧 Debug logging enabled');
+      logger.info('AIAgent', `⚙️ Initial config: interactionMode=${interactionMode || 'copilot(default)'} showVoiceTab=${showVoiceTab} enableVoice=${voiceEnabled} analytics=${!!analyticsKey} provider=${provider}`);
     }
   }, [analyticsKey, debug, interactionMode, provider, showVoiceTab, voiceEnabled]);
 
@@ -1712,7 +1712,7 @@ export function AIAgentWeb({
     setIsLoading(true);
     setStatusText('Thinking...');
     setIsOpen(true);
-    logger.info('AIAgentWeb', `📨 Sending message in ${mode} mode: "${trimmed}"`);
+    logger.info('AIAgent', `📨 Sending message in ${mode} mode: "${trimmed}"`);
     const history = messagesRef.current.concat(userMessage);
     try {
       const rawResult = await runtime.execute(trimmed, toUserHistory(history));
@@ -1777,17 +1777,17 @@ export function AIAgentWeb({
       pendingVoiceStreamRef.current = null;
     }
     setStatusText('Requesting microphone access...');
-    logger.info('AIAgentWeb', '🎙️ Voice tab clicked — requesting microphone access from direct user gesture');
+    logger.info('AIAgent', '🎙️ Voice tab clicked — requesting microphone access from direct user gesture');
     const permission = await requestBrowserMicrophoneAccess();
     if (!permission.granted) {
-      logger.warn('AIAgentWeb', `🎙️ Browser microphone permission denied/unavailable: ${permission.issue?.message || 'Unknown microphone error'}`);
+      logger.warn('AIAgent', `🎙️ Browser microphone permission denied/unavailable: ${permission.issue?.message || 'Unknown microphone error'}`);
       setStatusText(permission.issue?.message || 'Microphone access failed.');
       setVoicePermissionIssue(permission.issue);
       setMode('voice');
       return;
     }
     pendingVoiceStreamRef.current = permission.stream;
-    logger.info('AIAgentWeb', `🎙️ Microphone stream primed from user gesture (tracks=${permission.stream?.getTracks?.().length || 0})`);
+    logger.info('AIAgent', `🎙️ Microphone stream primed from user gesture (tracks=${permission.stream?.getTracks?.().length || 0})`);
     setStatusText('Connecting voice...');
     setMode('voice');
   }, []);
@@ -1853,16 +1853,16 @@ export function AIAgentWeb({
   useEffect(() => {
     if (!voiceEnabled || mode !== 'voice' || !isOpen) return undefined;
     if (!resolvedVoiceProxyUrl && !apiKey) {
-      logger.warn('AIAgentWeb', '🎙️ Voice mode enabled but no voice transport config found (proxy or API key)');
+      logger.warn('AIAgent', '🎙️ Voice mode enabled but no voice transport config found (proxy or API key)');
       setStatusText('Voice is unavailable without a configured voice proxy or API key.');
       setIsVoiceConnected(false);
       return undefined;
     }
-    logger.info('AIAgentWeb', `🎙️ Starting voice effect: mode=${mode} open=${isOpen} voiceEnabled=${voiceEnabled} proxy=${resolvedVoiceProxyUrl}`);
+    logger.info('AIAgent', `🎙️ Starting voice effect: mode=${mode} open=${isOpen} voiceEnabled=${voiceEnabled} proxy=${resolvedVoiceProxyUrl}`);
     let didConnect = false;
     const connectionTimeout = setTimeout(() => {
       if (didConnect) return;
-      logger.warn('AIAgentWeb', `🎙️ Voice connect watchdog fired after 8s (proxy=${resolvedVoiceProxyUrl})`);
+      logger.warn('AIAgent', `🎙️ Voice connect watchdog fired after 8s (proxy=${resolvedVoiceProxyUrl})`);
       setStatusText('Voice is unavailable right now.');
       setIsVoiceConnected(false);
       setIsMicActive(false);
@@ -1904,25 +1904,25 @@ export function AIAgentWeb({
     audioPlayerRef.current = audioPlayer;
     micControllerRef.current = micController;
     setVoiceTranscript([]);
-    logger.info('AIAgentWeb', '🎙️ Calling VoiceService.connect()');
+    logger.info('AIAgent', '🎙️ Calling VoiceService.connect()');
     void voice.connect({
       onAudioResponse: audio => {
         void audioPlayer.enqueue(audio);
       },
       onToolCall: async toolCall => {
-        logger.info('AIAgentWeb', `🔧 Voice tool call: ${toolCall.name}(${JSON.stringify(toolCall.args || {})}) [id=${toolCall.id}]`);
+        logger.info('AIAgent', `🔧 Voice tool call: ${toolCall.name}(${JSON.stringify(toolCall.args || {})}) [id=${toolCall.id}]`);
         if (!userHasSpokenRef.current) {
-          logger.warn('AIAgentWeb', `🚫 Rejected tool call ${toolCall.name} — waiting for user speech`);
+          logger.warn('AIAgent', `🚫 Rejected tool call ${toolCall.name} — waiting for user speech`);
           voice.sendFunctionResponse(toolCall.name, toolCall.id, {
             result: 'Action rejected: wait for user speech before performing any actions.'
           });
           return;
         }
         await micController.mute?.();
-        logger.info('AIAgentWeb', `🔇 Mic paused for tool execution: ${toolCall.name}`);
+        logger.info('AIAgent', `🔇 Mic paused for tool execution: ${toolCall.name}`);
 
         if (toolLockRef.current) {
-          logger.warn('AIAgentWeb', `⏳ Tool locked — waiting before ${toolCall.name}`);
+          logger.warn('AIAgent', `⏳ Tool locked — waiting before ${toolCall.name}`);
           while (toolLockRef.current) {
             await new Promise(resolve => setTimeout(resolve, 50));
           }
@@ -1935,12 +1935,12 @@ export function AIAgentWeb({
           const screenContext = runtimeRef.current.getScreenContext();
           lastVoiceContextRef.current = screenContext || '';
           const enrichedResult = `${output}\n\n<updated_screen>\n${screenContext || ''}\n</updated_screen>`;
-          logger.info('AIAgentWeb', `📡 Tool result for ${toolCall.name}: ${enrichedResult}`);
+          logger.info('AIAgent', `📡 Tool result for ${toolCall.name}: ${enrichedResult}`);
           voice.sendFunctionResponse(toolCall.name, toolCall.id, {
             result: enrichedResult
           });
         } catch (error) {
-          logger.error('AIAgentWeb', `🔧 Tool call ${toolCall.name} failed: ${error?.message || error}`);
+          logger.error('AIAgent', `🔧 Tool call ${toolCall.name} failed: ${error?.message || error}`);
           voice.sendFunctionResponse(toolCall.name, toolCall.id, {
             result: `Tool execution failed: ${error?.message || error}`
           });
@@ -1951,14 +1951,14 @@ export function AIAgentWeb({
             void micController.unmute?.().then(ok => {
               if (ok) {
                 setIsMicActive(true);
-                logger.info('AIAgentWeb', `🔊 Mic resumed after tool execution: ${toolCall.name}`);
+                logger.info('AIAgent', `🔊 Mic resumed after tool execution: ${toolCall.name}`);
               }
             });
           }
         }
       },
       onTranscript: (text, isFinal, role) => {
-        logger.info('AIAgentWeb', `🎙️ Transcript [${role}] (final=${isFinal}): "${text}"`);
+        logger.info('AIAgent', `🎙️ Transcript [${role}] (final=${isFinal}): "${text}"`);
         if (role === 'user' && text?.trim()) {
           userHasSpokenRef.current = true;
         }
@@ -1974,7 +1974,7 @@ export function AIAgentWeb({
         setIsAISpeaking(false);
       },
       onStatusChange: nextStatus => {
-        logger.info('AIAgentWeb', `🎙️ Voice status → ${nextStatus}`);
+        logger.info('AIAgent', `🎙️ Voice status → ${nextStatus}`);
         setIsVoiceConnected(nextStatus === 'connected');
         if (nextStatus === 'connecting') {
           setStatusText('Connecting voice...');
@@ -1983,14 +1983,14 @@ export function AIAgentWeb({
           didConnect = true;
           clearTimeout(connectionTimeout);
           setStatusText('Voice connected');
-          logger.info('AIAgentWeb', '🎙️ Voice connected — preparing browser audio output');
+          logger.info('AIAgent', '🎙️ Voice connected — preparing browser audio output');
           void audioPlayer.prime().then(() => {
-            logger.info('AIAgentWeb', '🔊 Audio output ready');
+            logger.info('AIAgent', '🔊 Audio output ready');
           }).catch(error => {
-            logger.error('AIAgentWeb', `🎙️ Failed to prepare voice output: ${error?.message || error}`);
+            logger.error('AIAgent', `🎙️ Failed to prepare voice output: ${error?.message || error}`);
             setStatusText('Voice output unavailable, microphone will keep running');
           }).finally(() => {
-            logger.info('AIAgentWeb', '🎙️ Enabling microphone capture after voice connection');
+            logger.info('AIAgent', '🎙️ Enabling microphone capture after voice connection');
             setIsMicActive(true);
           });
         } else if (nextStatus === 'disconnected') {
@@ -2002,7 +2002,7 @@ export function AIAgentWeb({
           if (!voice.intentionalDisconnect) {
             setTimeout(() => {
               if (mode === 'voice' && voice.lastCallbacks && !voice.intentionalDisconnect) {
-                logger.info('AIAgentWeb', '🔄 Reconnecting VoiceService...');
+                logger.info('AIAgent', '🔄 Reconnecting VoiceService...');
                 void voice.connect(voice.lastCallbacks);
               }
             }, 2000);
@@ -2010,7 +2010,7 @@ export function AIAgentWeb({
         }
       },
       onError: error => {
-        logger.error('AIAgentWeb', `🎙️ Voice error → ${error}`);
+        logger.error('AIAgent', `🎙️ Voice error → ${error}`);
         clearTimeout(connectionTimeout);
         setStatusText(error);
         setIsVoiceConnected(false);
@@ -2071,7 +2071,7 @@ export function AIAgentWeb({
     const MIN_DIFF_RATIO = 0.05;
     const syncScreenContext = () => {
       if (toolLockRef.current) {
-        logger.debug('AIAgentWeb', '🔄 Screen poll skipped — tool lock active');
+        logger.debug('AIAgent', '🔄 Screen poll skipped — tool lock active');
         return;
       }
       const screenContext = runtimeRef.current.getScreenContext();
@@ -2081,13 +2081,13 @@ export function AIAgentWeb({
       const diff = Math.abs(nextLength - previousLength);
       const diffRatio = previousLength > 0 ? diff / previousLength : 1;
       if (diffRatio < MIN_DIFF_RATIO) {
-        logger.debug('AIAgentWeb', `🔄 Screen poll: minor change ignored (${diff} chars, ${(diffRatio * 100).toFixed(1)}% < ${MIN_DIFF_RATIO * 100}%)`);
+        logger.debug('AIAgent', `🔄 Screen poll: minor change ignored (${diff} chars, ${(diffRatio * 100).toFixed(1)}% < ${MIN_DIFF_RATIO * 100}%)`);
         return;
       }
       lastVoiceContextRef.current = screenContext;
       const passiveUpdate = `[SCREEN UPDATE — The UI has changed. Here is the current screen layout. This is not a user request — do not act unless the user asks.]\n\n${screenContext}`;
       voiceServiceRef.current?.sendScreenContext(passiveUpdate);
-      logger.info('AIAgentWeb', '🔄 Updated screen context sent to voice model');
+      logger.info('AIAgent', '🔄 Updated screen context sent to voice model');
     };
     syncScreenContext();
     screenPollIntervalRef.current = setInterval(syncScreenContext, SCREEN_POLL_INTERVAL);
@@ -2103,7 +2103,7 @@ export function AIAgentWeb({
       lastVoiceContextRef.current = screenContext;
       const passiveUpdate = `[SCREEN UPDATE — The UI has changed. Here is the current screen layout. This is not a user request — do not act unless the user asks.]\n\n${screenContext}`;
       voiceServiceRef.current?.sendScreenContext(passiveUpdate);
-      logger.info('AIAgentWeb', `🔄 Navigation context synced for voice session: ${pathname || 'unknown-path'}`);
+      logger.info('AIAgent', `🔄 Navigation context synced for voice session: ${pathname || 'unknown-path'}`);
     }) : null;
     return () => {
       if (frame !== null && typeof window !== 'undefined') {
@@ -2114,13 +2114,13 @@ export function AIAgentWeb({
 
   useEffect(() => {
     if (!isMicActive) {
-      logger.info('AIAgentWeb', '🎙️ Mic state -> inactive, stopping browser mic controller');
+      logger.info('AIAgent', '🎙️ Mic state -> inactive, stopping browser mic controller');
       void micControllerRef.current?.mute?.();
       return undefined;
     }
-    logger.info('AIAgentWeb', '🎙️ Mic state -> active, starting browser mic controller');
+    logger.info('AIAgent', '🎙️ Mic state -> active, starting browser mic controller');
     void micControllerRef.current?.start?.().then(ok => {
-      logger.info('AIAgentWeb', `🎙️ Browser mic controller start result: ${ok ? 'ok' : 'failed'}`);
+      logger.info('AIAgent', `🎙️ Browser mic controller start result: ${ok ? 'ok' : 'failed'}`);
       if (ok) {
         setVoicePermissionIssue(null);
         setStatusText(current => isVoiceConnected ? 'Voice connected' : current);
@@ -2129,7 +2129,7 @@ export function AIAgentWeb({
       }
     });
     return () => {
-      logger.info('AIAgentWeb', '🎙️ Mic effect cleanup, muting browser mic controller');
+      logger.info('AIAgent', '🎙️ Mic effect cleanup, muting browser mic controller');
       void micControllerRef.current?.mute?.();
     };
   }, [isMicActive, isVoiceConnected]);

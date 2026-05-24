@@ -1,4 +1,4 @@
-export { AIAgentWeb as AIAgent, AIAgentWeb } from './components/AIAgentWeb';
+export { AIAgent } from './components/AIAgent';
 export { AIZoneWeb, AIZoneWebStateContext } from './components/AIZoneWeb';
 export { RichContentRendererWeb } from './components/RichContentRendererWeb';
 export { WebPlatformAdapter } from './core/WebPlatformAdapter';

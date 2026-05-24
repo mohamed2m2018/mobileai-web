@@ -1,6 +1,6 @@
 {
   "name": "@mobileai/web",
-  "version": "0.9.39",
+  "version": "0.9.40",
   "description": "Embedded AI copilot for first-party web apps with rich chat content and DOM-first actions.",
   "repository": {
     "type": "git",

@@ -57,8 +57,6 @@ The agent renders a web chat surface by default and builds screen context from t
 - "Export this report"
 - "I need a human"
 
-`AIAgentWeb` remains available as a compatibility alias, but new web apps should import `AIAgent`.
-
 ## Next.js App Router
 
 `AIAgent` is a client component. In Next.js App Router, create a small client shell.
