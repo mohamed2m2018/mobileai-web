@@ -980,6 +980,7 @@ export function AIAgent({
   const csatEnabled = supportModeEnabled && supportMode?.csat?.enabled !== false;
   const showVoiceTab = !!enableVoice;
   const voiceEnabled = showVoiceTab && !!(voiceProxyUrl || analyticsKey || proxyUrl || apiKey);
+  const visibleModeCount = 1 + (showVoiceTab ? 1 : 0) + (tickets.length > 0 ? 1 : 0);
   const quickReplies = useMemo(() => normalizeQuickReplies(supportMode?.quickReplies), [supportMode?.quickReplies]);
   const supportPrompt = useMemo(() => supportModeEnabled ? buildSupportPrompt(supportMode) : '', [supportMode, supportModeEnabled]);
   const resolvedSupportStyle = supportMode?.persona?.preset || supportStyle;
@@ -3170,12 +3171,12 @@ export function AIAgent({
           }), !showHistory ? /*#__PURE__*/_jsxs("div", {
             style: {
               position: 'absolute',
-              top: 42,
-              left: 14,
+              top: 12,
+              left: 16,
               zIndex: 3,
               display: 'flex',
               alignItems: 'center',
-              gap: 10
+              gap: 8
             },
             children: [/*#__PURE__*/_jsx("button", {
               type: "button",
@@ -3186,8 +3187,8 @@ export function AIAgent({
               },
               title: "View conversation history",
               style: {
-                width: 34,
-                height: 34,
+                width: 24,
+                height: 24,
                 borderRadius: 999,
                 border: 'none',
                 background: 'transparent',
@@ -3198,14 +3199,14 @@ export function AIAgent({
                 padding: 0
               },
               children: /*#__PURE__*/_jsx(WebHistoryIcon, {
-                size: 19,
+                size: 18,
                 color: "rgba(255,255,255,0.55)"
               })
             }), conversationHistory.length > 0 ? /*#__PURE__*/_jsx("div", {
               style: {
                 position: 'absolute',
-                left: 18,
-                top: -6,
+                left: 14,
+                top: -8,
                 minWidth: 18,
                 height: 18,
                 borderRadius: 999,
@@ -3228,11 +3229,11 @@ export function AIAgent({
               },
               title: "Start new conversation",
               style: {
-                width: 34,
-                height: 34,
+                width: 24,
+                height: 24,
                 borderRadius: 999,
                 border: 'none',
-                background: 'transparent',
+                background: 'rgba(255,255,255,0.08)',
                 color: '#fff',
                 cursor: 'pointer',
                 display: 'flex',
@@ -3242,14 +3243,14 @@ export function AIAgent({
               },
               children: /*#__PURE__*/_jsx(WebNewChatIcon, {
                 size: 16,
-                color: "#fff"
+                color: "rgba(255,255,255,0.78)"
               })
             })]
-          }) : null, /*#__PURE__*/_jsxs("div", {
+          }) : null, visibleModeCount > 1 && !showHistory ? /*#__PURE__*/_jsxs("div", {
             style: {
               display: 'flex',
               flexDirection: 'row',
-              marginTop: showHistory ? 0 : 50,
+              marginTop: 0,
               marginBottom: 12,
               borderRadius: 12,
               background: 'rgba(255,255,255,0.08)',
@@ -3329,7 +3330,7 @@ export function AIAgent({
                 children: totalUnread > 99 ? '99+' : totalUnread
               }) : null]
             }) : null]
-          }), mode === 'text' ? showHistory ? renderHistoryPanel() : renderChatMessages() : mode === 'voice' ? renderVoiceMode() : renderHumanMode(), mode === 'text' ? /*#__PURE__*/_jsxs("div", {
+          }) : null, mode === 'text' ? showHistory ? renderHistoryPanel() : renderChatMessages() : mode === 'voice' ? renderVoiceMode() : renderHumanMode(), mode === 'text' && !showHistory ? /*#__PURE__*/_jsxs("div", {
             style: {
               display: 'flex',
               alignItems: 'center',
@@ -3339,28 +3340,7 @@ export function AIAgent({
               borderTop: '1px solid rgba(255,255,255,0.08)',
               minWidth: 0
             },
-            children: [(isLoading || pendingPrompt?.kind === 'freeform') ? /*#__PURE__*/_jsx("button", {
-              type: "button",
-              onClick: () => {
-                if (isLoading) {
-                  cancel();
-                  return;
-                }
-                cancelPendingFreeformPrompt();
-              },
-              style: {
-                height: 44,
-                borderRadius: 18,
-                border: '1px solid rgba(255,255,255,0.14)',
-                background: 'rgba(255,255,255,0.08)',
-                color: '#fff',
-                padding: '0 14px',
-                cursor: 'pointer',
-                flexShrink: 0,
-                fontWeight: 700
-              },
-              children: "Cancel"
-            }) : null, !showHistory ? /*#__PURE__*/_jsx("input", {
+            children: [/*#__PURE__*/_jsx("input", {
               value: input,
               placeholder: inputPlaceholder,
               onChange: event => setInput(event.target.value),
@@ -3382,14 +3362,16 @@ export function AIAgent({
               style: {
                 flex: 1,
                 minWidth: 0,
-                borderRadius: 18,
+                borderRadius: 24,
                 border: '1px solid rgba(255,255,255,0.08)',
                 background: 'rgba(255,255,255,0.08)',
                 color: '#fff',
-                padding: '12px 14px',
-                outline: 'none'
+                padding: '13px 18px',
+                outline: 'none',
+                fontSize: 16,
+                minHeight: 48
               }
-            }) : null, !showHistory ? /*#__PURE__*/_jsx("button", {
+            }), /*#__PURE__*/_jsx("button", {
               type: "button",
               onClick: () => {
                 if (isLoading) {
@@ -3432,7 +3414,7 @@ export function AIAgent({
                 size: 18,
                 color: "#fff"
               })
-            }) : null]
+            })]
           }) : null]
         }) : /*#__PURE__*/_jsx("div", {
           "data-mobileai-ignore": "true",
