@@ -184,6 +184,33 @@ function WebCloseIcon({
   }));
 }
 
+function WebTrashIcon({
+  size = 14,
+  color = 'rgba(255,255,255,0.62)'
+}) {
+  return React.createElement('svg', {
+    width: size,
+    height: size,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: color,
+    strokeWidth: 2,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    'aria-hidden': true
+  }, React.createElement('path', {
+    d: 'M3 6h18'
+  }), React.createElement('path', {
+    d: 'M8 6V4h8v2'
+  }), React.createElement('path', {
+    d: 'M19 6l-1 14H6L5 6'
+  }), React.createElement('path', {
+    d: 'M10 11v5'
+  }), React.createElement('path', {
+    d: 'M14 11v5'
+  }));
+}
+
 function WebHistoryIcon({
   size = 18,
   color = '#fff'
@@ -1767,6 +1794,20 @@ export function AIAgent({
     remoteConversationHydratedRef.current = true;
   }, []);
 
+  const deleteConversationHistoryEntry = useCallback(conversation => {
+    if (!conversation?.id) return;
+    const id = String(conversation.id);
+    setConversationHistory(prev => {
+      const next = prev.filter(entry => String(entry.id) !== id);
+      persistConversationHistory(persistenceKey, next);
+      return next;
+    });
+    const isActiveConversation = conversationId === id || localConversationKey === id;
+    if (isActiveConversation) {
+      clearMessages();
+    }
+  }, [clearMessages, conversationId, localConversationKey, persistenceKey]);
+
   const cancel = useCallback(options => {
     if (options?.source === 'composer') {
       const elapsed = Date.now() - requestStartedAtRef.current;
@@ -2434,78 +2475,116 @@ export function AIAgent({
         gap: 8,
         paddingRight: 4
       },
-      children: conversationHistory.map(conversation => /*#__PURE__*/_jsxs("button", {
-        type: "button",
-        onClick: () => {
-          setMessages(Array.isArray(conversation.messages) ? conversation.messages : []);
-          setConversationId(conversation.id && !String(conversation.id).startsWith('local-') ? conversation.id : null);
-          setLocalConversationKey(String(conversation.id || `local-${Date.now()}`));
-          setLastResult(null);
-          setMode('text');
-          setShowHistory(false);
-          setIsOpen(true);
-        },
+      children: conversationHistory.map(conversation => /*#__PURE__*/_jsxs("div", {
         style: {
+          position: 'relative',
           border: '1px solid rgba(255,255,255,0.08)',
           background: 'rgba(255,255,255,0.06)',
           borderRadius: 16,
-          padding: '12px 14px',
           color: '#fff',
-          textAlign: 'left',
-          cursor: 'pointer'
+          overflow: 'hidden'
         },
+        children: [/*#__PURE__*/_jsxs("button", {
+          type: "button",
+          onClick: () => {
+            setMessages(Array.isArray(conversation.messages) ? conversation.messages : []);
+            setConversationId(conversation.id && !String(conversation.id).startsWith('local-') ? conversation.id : null);
+            setLocalConversationKey(String(conversation.id || `local-${Date.now()}`));
+            setLastResult(null);
+            setMode('text');
+            setShowHistory(false);
+            setIsOpen(true);
+          },
+          style: {
+            width: '100%',
+            border: 'none',
+            background: 'transparent',
+            padding: '12px 48px 12px 14px',
+            color: '#fff',
+            textAlign: 'left',
+            cursor: 'pointer'
+          },
           children: [/*#__PURE__*/_jsxs("div", {
             style: {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-            gap: 10,
-            marginBottom: 6
-          },
-          children: [/*#__PURE__*/_jsx("div", {
+              gap: 10,
+              marginBottom: 6
+            },
+            children: [/*#__PURE__*/_jsx("div", {
+              style: {
+                fontSize: 13,
+                fontWeight: 700,
+                color: '#fff',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              },
+              children: conversation.title || 'Conversation'
+            }), /*#__PURE__*/_jsx("div", {
+              style: {
+                minWidth: 18,
+                height: 18,
+                borderRadius: 999,
+                background: 'rgba(255,255,255,0.12)',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 6px',
+                fontSize: 10,
+                fontWeight: 700,
+                flexShrink: 0
+              },
+              children: Array.isArray(conversation.messages) ? conversation.messages.length : 0
+            })]
+          }), /*#__PURE__*/_jsx("div", {
             style: {
-              fontSize: 13,
-              fontWeight: 700,
-              color: '#fff',
+              fontSize: 12,
+              lineHeight: 1.4,
+              color: 'rgba(255,255,255,0.72)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap'
             },
-            children: conversation.title || 'Conversation'
+            children: conversation.preview || 'No preview available'
           }), /*#__PURE__*/_jsx("div", {
             style: {
-              minWidth: 18,
-              height: 18,
-              borderRadius: 999,
-              background: 'rgba(255,255,255,0.12)',
-              color: '#fff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '0 6px',
-              fontSize: 10,
-              fontWeight: 700,
-              flexShrink: 0
+              marginTop: 6,
+              fontSize: 11,
+              color: 'rgba(255,255,255,0.56)'
             },
-            children: Array.isArray(conversation.messages) ? conversation.messages.length : 0
+            children: formatRelativeTimestamp(conversation.updatedAt)
           })]
-        }), /*#__PURE__*/_jsx("div", {
-          style: {
-            fontSize: 12,
-            lineHeight: 1.4,
-            color: 'rgba(255,255,255,0.72)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap'
+        }), /*#__PURE__*/_jsx("button", {
+          type: "button",
+          onClick: event => {
+            event.preventDefault();
+            event.stopPropagation();
+            deleteConversationHistoryEntry(conversation);
           },
-          children: conversation.preview || 'No preview available'
-        }), /*#__PURE__*/_jsx("div", {
+          title: "Delete conversation",
+          "aria-label": "Delete conversation",
           style: {
-            marginTop: 6,
-            fontSize: 11,
-            color: 'rgba(255,255,255,0.56)'
+            position: 'absolute',
+            right: 12,
+            top: 12,
+            width: 30,
+            height: 30,
+            borderRadius: 999,
+            border: '1px solid rgba(255,255,255,0.1)',
+            background: 'rgba(255,255,255,0.08)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            padding: 0
           },
-          children: formatRelativeTimestamp(conversation.updatedAt)
+          children: /*#__PURE__*/_jsx(WebTrashIcon, {
+            size: 14,
+            color: "rgba(255,255,255,0.62)"
+          })
         })]
       }, conversation.id))
     })]
