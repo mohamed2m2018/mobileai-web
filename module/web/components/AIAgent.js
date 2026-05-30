@@ -54,12 +54,12 @@ function getEstimatedPopupSize() {
   if (typeof window === 'undefined') {
     return {
       width: WEB_POPUP_WIDTH,
-      height: 520
+      height: 180
     };
   }
   return {
     width: Math.min(WEB_POPUP_WIDTH, window.innerWidth - 32),
-    height: Math.min(window.innerHeight * 0.65, 520)
+    height: Math.min(220, window.innerHeight * 0.65)
   };
 }
 
@@ -2286,7 +2286,8 @@ export function AIAgent({
       display: 'flex',
       flexDirection: 'column',
       gap: 8,
-      minHeight: 200,
+      maxHeight: 'calc(min(65vh, 520px) - 178px)',
+      flexShrink: 1,
       paddingRight: 4
     },
     children: [supportModeEnabled && messages.length === 0 && !isLoading ? /*#__PURE__*/_jsxs("div", {
@@ -3246,7 +3247,6 @@ export function AIAgent({
           left: popupPosition?.left,
           top: popupPosition?.top,
           width: WEB_POPUP_WIDTH,
-          height: 'min(65vh, 520px)',
           maxWidth: 'calc(100vw - 32px)',
           maxHeight: 'min(65vh, 520px)',
           zIndex: 9999,
@@ -3472,9 +3472,8 @@ export function AIAgent({
               display: 'flex',
               alignItems: 'center',
               gap: 8,
-              paddingTop: 14,
-              marginTop: 14,
-              borderTop: '1px solid rgba(255,255,255,0.08)',
+              paddingTop: 0,
+              marginTop: messages.length > 0 || pendingPrompt ? 12 : 0,
               minWidth: 0
             },
             children: [/*#__PURE__*/_jsx("input", {
@@ -3505,6 +3504,7 @@ export function AIAgent({
                 color: '#fff',
                 padding: '13px 18px',
                 outline: 'none',
+                boxShadow: 'none',
                 fontSize: 16,
                 minHeight: 48
               }
