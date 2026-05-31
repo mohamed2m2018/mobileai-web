@@ -13,6 +13,7 @@ import { logger } from "../utils/logger.js";
 import { DiscoveryTooltip } from "./DiscoveryTooltip.js";
 import { resolveConsentDialogContent } from "./AIConsentDialog.js";
 import { RichContentRenderer } from "./rich-content/RichContentRenderer.js";
+import { markdownToPlainText } from "../core/richContent.js";
 
 // ─── Props ─────────────────────────────────────────────────────
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
@@ -1075,7 +1076,7 @@ export function AgentChatBar({
               children: [/*#__PURE__*/_jsx(Text, {
                 style: styles.ticketReason,
                 numberOfLines: 2,
-                children: ticket.history.length > 0 ? ticket.history[ticket.history.length - 1]?.content ?? ticket.reason : ticket.reason
+                children: markdownToPlainText(ticket.history.length > 0 ? ticket.history[ticket.history.length - 1]?.content ?? ticket.reason : ticket.reason)
               }), unreadCount > 0 && /*#__PURE__*/_jsx(View, {
                 style: styles.unreadBadge,
                 children: /*#__PURE__*/_jsx(Text, {

@@ -29,6 +29,10 @@ function decodeLooseStringValue(value) {
 function readLooseStringMatch(match, startIndex = 1) {
   return match.slice(startIndex).find(value => typeof value === 'string') ?? '';
 }
+export function markdownToPlainText(input) {
+  if (typeof input !== 'string') return '';
+  return input.replace(/`([^`]+)`/g, '$1').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1').replace(/(^|\s)\*([^*\n]+)\*/g, '$1$2').replace(/(^|\s)_([^_\n]+)_/g, '$1$2').replace(/(^|\n)\s*[-*]\s+/g, '$1');
+}
 function pushLooseTextNodes(input, nodes, seen) {
   const valuePattern = `(?:"((?:\\\\.|[^"\\\\])*)"|'((?:\\\\.|[^'\\\\])*)')`;
   const patterns = [new RegExp(`\\{[\\s\\S]*?["']type["']\\s*:\\s*["']text["'][\\s\\S]*?["']content["']\\s*:\\s*${valuePattern}[\\s\\S]*?\\}`, 'g'), new RegExp(`\\{[\\s\\S]*?["']content["']\\s*:\\s*${valuePattern}[\\s\\S]*?["']type["']\\s*:\\s*["']text["'][\\s\\S]*?\\}`, 'g')];
@@ -138,21 +142,23 @@ export function richContentToPlainText(input, fallbackText = '') {
   const content = normalizeRichContent(input, fallbackText);
   const parts = content.flatMap(node => {
     if (node.type === 'text') {
-      return node.content.trim() ? [node.content.trim()] : [];
+      const plain = markdownToPlainText(node.content).trim();
+      return plain ? [plain] : [];
     }
     const props = node.props || {};
     const textBits = [typeof props.title === 'string' ? props.title : '', typeof props.subtitle === 'string' ? props.subtitle : '', typeof props.description === 'string' ? props.description : '', typeof props.body === 'string' ? props.body : '', typeof props.text === 'string' ? props.text : '', typeof props.headline === 'string' ? props.headline : ''].filter(Boolean);
-    return Array.from(new Set(textBits));
+    return Array.from(new Set(textBits.map(markdownToPlainText)));
   });
   return parts.join('\n').trim() || fallbackText;
 }
 export function createAIMessage(params) {
   const content = normalizeRichContent(params.content);
+  const explicitPreview = typeof params.previewText === 'string' ? markdownToPlainText(params.previewText).trim() : '';
   return {
     id: params.id,
     role: params.role,
     content,
-    previewText: params.previewText || richContentToPlainText(content),
+    previewText: explicitPreview || richContentToPlainText(content),
     timestamp: params.timestamp,
     result: params.result,
     promptKind: params.promptKind
@@ -160,7 +166,7 @@ export function createAIMessage(params) {
 }
 export function normalizeExecutionResult(result) {
   const reply = normalizeRichContent(result.reply || result.message, result.message);
-  const previewText = result.previewText || richContentToPlainText(reply, result.message);
+  const previewText = (typeof result.previewText === 'string' ? markdownToPlainText(result.previewText).trim() : '') || richContentToPlainText(reply, result.message);
   return {
     ...result,
     reply,

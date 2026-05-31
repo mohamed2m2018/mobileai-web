@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBridgeProvider } from "../../core/ActionBridge.js";
 import { AgentRuntime } from "../../core/AgentRuntime.js";
 import { buildVoiceSystemPrompt } from "../../core/systemPrompt.js";
-import { createAIMessage, normalizeExecutionResult } from "../../core/richContent.js";
+import { createAIMessage, markdownToPlainText, normalizeExecutionResult, richContentToPlainText } from "../../core/richContent.js";
 import { createProvider } from "../../providers/ProviderFactory.js";
 import { startConversation, appendMessages, fetchConversations, fetchConversation } from "../../services/ConversationService.js";
 import { VoiceService } from "../../services/VoiceService.js";
@@ -441,10 +441,12 @@ function buildConversationSummary(id, messages) {
   const lastMessage = safeMessages[safeMessages.length - 1];
   const titleSource = firstUserMessage?.previewText || firstUserMessage?.content || lastMessage?.previewText || 'Conversation';
   const previewSource = lastMessage?.previewText || lastMessage?.content || '';
+  const titleText = Array.isArray(titleSource) ? richContentToPlainText(titleSource, 'Conversation') : markdownToPlainText(String(titleSource || 'Conversation')).trim();
+  const previewText = Array.isArray(previewSource) ? richContentToPlainText(previewSource, '') : markdownToPlainText(String(previewSource || '')).trim();
   return {
     id,
-    title: typeof titleSource === 'string' ? titleSource.slice(0, 60) : 'Conversation',
-    preview: typeof previewSource === 'string' ? previewSource.slice(0, 120) : '',
+    title: titleText.slice(0, 60) || 'Conversation',
+    preview: previewText.slice(0, 120),
     updatedAt: lastMessage?.timestamp || Date.now(),
     messageCount: safeMessages.length,
     messages: safeMessages.map(message => ({
@@ -519,11 +521,12 @@ function shouldReplaceVoiceTranscript(currentText, nextText) {
 }
 
 function toSupportMessage(ticketId, role, content, timestamp) {
+  const previewText = typeof content === 'string' ? markdownToPlainText(content).trim() : richContentToPlainText(content, '');
   return createAIMessage({
     id: `${ticketId}-${role}-${timestamp || Date.now()}-${Math.random()}`,
     role: role === 'user' ? 'user' : 'assistant',
     content,
-    previewText: content,
+    previewText,
     timestamp: timestamp || Date.now()
   });
 }
@@ -2828,7 +2831,11 @@ export function AIAgent({
           color: '#fff',
           opacity: entry.final ? 1 : 0.72
         },
-        children: entry.text
+        children: /*#__PURE__*/_jsx(RichContentRendererWeb, {
+          content: entry.text,
+          surface: "chat",
+          isUser: entry.role === 'user'
+        })
       }, entry.id))
     })]
     })]
@@ -2878,7 +2885,7 @@ export function AIAgent({
               style: {
                 fontWeight: 700
               },
-              children: ticket.reason || 'Human support'
+              children: markdownToPlainText(ticket.reason || 'Human support')
             }), unreadCounts[ticket.id] ? /*#__PURE__*/_jsx("div", {
               style: {
                 minWidth: 20,
