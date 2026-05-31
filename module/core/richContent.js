@@ -7,8 +7,27 @@ function makeTextNode(content, id) {
     id
   };
 }
+function makeBlockNode(node, index) {
+  const props = node.props && typeof node.props === 'object' ? {
+    ...node.props
+  } : {};
+  if (node.blockType === 'FactCard' && typeof props.text === 'string' && typeof props.body !== 'string') {
+    props.body = props.text;
+  }
+  return {
+    type: 'block',
+    blockType: node.blockType,
+    props,
+    id: node.id || `block-${index}`,
+    placement: node.placement,
+    lifecycle: node.lifecycle
+  };
+}
 function decodeLooseStringValue(value) {
   return value.replace(/\\u([0-9a-fA-F]{4})/g, (_, code) => String.fromCharCode(parseInt(code, 16))).replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t').replace(/\\(["'\\])/g, '$1');
+}
+function readLooseStringMatch(match, startIndex = 1) {
+  return match.slice(startIndex).find(value => typeof value === 'string') ?? '';
 }
 function pushLooseTextNodes(input, nodes, seen) {
   const valuePattern = `(?:"((?:\\\\.|[^"\\\\])*)"|'((?:\\\\.|[^'\\\\])*)')`;
@@ -16,7 +35,7 @@ function pushLooseTextNodes(input, nodes, seen) {
   patterns.forEach(pattern => {
     let match;
     while ((match = pattern.exec(input)) !== null) {
-      const content = match[1] ?? match[2] ?? match[3] ?? match[4] ?? '';
+      const content = readLooseStringMatch(match);
       const decoded = decodeLooseStringValue(content);
       if (!seen.has(decoded)) {
         seen.add(decoded);
@@ -25,13 +44,36 @@ function pushLooseTextNodes(input, nodes, seen) {
     }
   });
 }
+function pushLooseBlockFallbackNodes(input, nodes, seen) {
+  if (!/["']blockType["']\s*:/.test(input) && !/["']type["']\s*:\s*["']block["']/.test(input)) {
+    return;
+  }
+  const valuePattern = `(?:"((?:\\\\.|[^"\\\\])*)"|'((?:\\\\.|[^'\\\\])*)')`;
+  const propPattern = new RegExp(`["'](title|subtitle|headline|body|text|description)["']\\s*:\\s*${valuePattern}`, 'g');
+  const parts = [];
+  const localSeen = new Set();
+  let match;
+  while ((match = propPattern.exec(input)) !== null) {
+    const decoded = decodeLooseStringValue(readLooseStringMatch(match, 2)).trim();
+    if (decoded && !localSeen.has(decoded)) {
+      localSeen.add(decoded);
+      parts.push(decoded);
+    }
+  }
+  const content = parts.join('\n').trim();
+  if (content && !seen.has(content)) {
+    seen.add(content);
+    nodes.push(makeTextNode(content, `text-${nodes.length}`));
+  }
+}
 function tryParseLooseRichContentString(candidate) {
-  if (!/["'](?:type|content|reply)["']\s*:/.test(candidate)) {
+  if (!/["'](?:type|content|reply|blockType|props)["']\s*:/.test(candidate)) {
     return null;
   }
   const nodes = [];
   const seen = new Set();
   pushLooseTextNodes(candidate, nodes, seen);
+  pushLooseBlockFallbackNodes(candidate, nodes, seen);
   return nodes.length > 0 ? nodes : null;
 }
 function tryParseRichContentString(input) {
@@ -68,14 +110,7 @@ export function normalizeRichContent(input, fallbackText = '') {
         return makeTextNode(typeof node.content === 'string' ? node.content : '', node.id || `text-${index}`);
       }
       if (node.type === 'block' && typeof node.blockType === 'string') {
-        return {
-          type: 'block',
-          blockType: node.blockType,
-          props: node.props && typeof node.props === 'object' ? node.props : {},
-          id: node.id || `block-${index}`,
-          placement: node.placement,
-          lifecycle: node.lifecycle
-        };
+        return makeBlockNode(node, index);
       }
       return null;
     });
@@ -106,8 +141,8 @@ export function richContentToPlainText(input, fallbackText = '') {
       return node.content.trim() ? [node.content.trim()] : [];
     }
     const props = node.props || {};
-    const textBits = [typeof props.title === 'string' ? props.title : '', typeof props.subtitle === 'string' ? props.subtitle : '', typeof props.description === 'string' ? props.description : '', typeof props.body === 'string' ? props.body : '', typeof props.headline === 'string' ? props.headline : ''].filter(Boolean);
-    return textBits;
+    const textBits = [typeof props.title === 'string' ? props.title : '', typeof props.subtitle === 'string' ? props.subtitle : '', typeof props.description === 'string' ? props.description : '', typeof props.body === 'string' ? props.body : '', typeof props.text === 'string' ? props.text : '', typeof props.headline === 'string' ? props.headline : ''].filter(Boolean);
+    return Array.from(new Set(textBits));
   });
   return parts.join('\n').trim() || fallbackText;
 }
