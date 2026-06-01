@@ -27,6 +27,59 @@ function isDocumentNode(node) {
 function isHTMLElementLike(node) {
   return !!node && typeof node === 'object' && 'tagName' in node;
 }
+function getScrollPosition(target) {
+  if (isHTMLElementLike(target)) {
+    return {
+      top: target.scrollTop || 0,
+      left: target.scrollLeft || 0
+    };
+  }
+  return {
+    top: target?.scrollY || target?.pageYOffset || 0,
+    left: target?.scrollX || target?.pageXOffset || 0
+  };
+}
+function getScrollLimits(target, doc) {
+  if (isHTMLElementLike(target)) {
+    return {
+      top: Math.max(0, target.scrollHeight - target.clientHeight),
+      left: Math.max(0, target.scrollWidth - target.clientWidth)
+    };
+  }
+  const body = doc?.body;
+  const element = doc?.documentElement;
+  return {
+    top: Math.max(0, Math.max(element?.scrollHeight || 0, body?.scrollHeight || 0) - (target?.innerHeight || 0)),
+    left: Math.max(0, Math.max(element?.scrollWidth || 0, body?.scrollWidth || 0) - (target?.innerWidth || 0))
+  };
+}
+function isScrollableTarget(node, win) {
+  if (!isHTMLElementLike(node) || !win?.getComputedStyle) return false;
+  const style = win.getComputedStyle(node);
+  const hasScrollableY = /(auto|scroll|overlay)/.test(style?.overflowY || '');
+  return hasScrollableY && node.scrollHeight > node.clientHeight;
+}
+function findScrollableTarget(node, win) {
+  let current = isHTMLElementLike(node) ? node : null;
+  while (current) {
+    if (isScrollableTarget(current, win)) return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+function getScrollTargetName(target) {
+  if (isHTMLElementLike(target)) {
+    const id = target.id ? `#${target.id}` : '';
+    return `${target.tagName.toLowerCase()}${id}`;
+  }
+  return 'page';
+}
+function waitForScrollSettle(win) {
+  return new Promise(resolve => {
+    const schedule = win?.requestAnimationFrame ? callback => win.requestAnimationFrame(callback) : callback => setTimeout(callback, 16);
+    schedule(() => schedule(resolve));
+  });
+}
 function parsePropsArg(rawProps) {
   if (!rawProps) return {};
   if (typeof rawProps === 'string') {
@@ -280,45 +333,71 @@ export class WebPlatformAdapter {
     const root = this.options.getRoot();
     const doc = isDocumentNode(root) ? root : root?.ownerDocument || (typeof document !== 'undefined' ? document : null);
     const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
-    const delta = amount === 'toEnd' || amount === 'toStart' ? undefined : (win?.innerHeight || 700) * 0.85;
+    if (!win || !doc) {
+      return '❌ Could not find a scrollable target.';
+    }
+    const delta = amount === 'toEnd' || amount === 'toStart' ? undefined : (win.innerHeight || 700) * 0.85;
     let target = win;
     if (typeof containerIndex === 'number') {
-      target = this.getDomNode(containerIndex);
-    }
-    if (!target && typeof containerIndex === 'number') {
       const element = this.getDomNode(containerIndex);
-      target = PageControllerWeb.findNearestScrollableContainer(element);
+      if (!element) {
+        return `❌ Element with index ${containerIndex} not found.`;
+      }
+      target = findScrollableTarget(element, win) || PageControllerWeb.findNearestScrollableContainer(element);
+    } else if (isHTMLElementLike(doc.activeElement)) {
+      target = findScrollableTarget(doc.activeElement, win) || win;
     }
     if (!target) {
       return '❌ Could not find a scrollable target.';
     }
     const topDirection = direction === 'down' ? 1 : -1;
+    const before = getScrollPosition(target);
+    const limits = getScrollLimits(target, doc);
     if ('scrollTo' in target && typeof target.scrollTo === 'function' && amount) {
       if (amount === 'toStart') {
         target.scrollTo({
           top: 0,
-          behavior: 'smooth'
+          behavior: 'auto'
         });
       } else if (amount === 'toEnd') {
         if (isHTMLElementLike(target)) {
           target.scrollTo({
             top: target.scrollHeight,
-            behavior: 'smooth'
+            behavior: 'auto'
           });
         } else {
           target.scrollTo({
             top: doc?.body?.scrollHeight || 0,
-            behavior: 'smooth'
+            behavior: 'auto'
           });
         }
       }
     } else if ('scrollBy' in target && typeof target.scrollBy === 'function') {
       target.scrollBy({
         top: (delta || 0) * topDirection,
-        behavior: 'smooth'
+        behavior: 'auto'
       });
     }
-    return `✅ Scrolled ${direction}`;
+    await waitForScrollSettle(win);
+    const after = getScrollPosition(target);
+    const moved = after.top - before.top;
+    const targetName = getScrollTargetName(target);
+    if (Math.abs(moved) < 1) {
+      if (topDirection > 0 && before.top >= limits.top - 1) {
+        return `⚠️ Already at the bottom of ${targetName}. Cannot scroll down further.`;
+      }
+      if (topDirection < 0 && before.top <= 1) {
+        return `⚠️ Already at the top of ${targetName}. Cannot scroll up further.`;
+      }
+      return `⚠️ Tried to scroll ${targetName}, but its scroll position did not change.`;
+    }
+    if (topDirection > 0 && after.top >= limits.top - 1) {
+      return `✅ Scrolled ${targetName} by ${Math.round(moved)}px. Reached the bottom.`;
+    }
+    if (topDirection < 0 && after.top <= 1) {
+      return `✅ Scrolled ${targetName} by ${Math.round(moved)}px. Reached the top.`;
+    }
+    return `✅ Scrolled ${targetName} by ${Math.round(moved)}px.`;
   }
   async adjustSlider(index, value) {
     const element = this.getSnapshotElement(index);

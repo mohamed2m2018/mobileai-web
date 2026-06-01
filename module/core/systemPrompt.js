@@ -31,6 +31,7 @@ Interactive elements are listed as [index]<type attrs>label />
 - label: visible text content of the element
 
 Only elements with [index] are interactive. Use the index to tap or type into them.
+Elements tagged with *[index] are newly appeared since the agent last inspected the page.
 Pure text elements without [] are NOT interactive — they are informational content you can read.
 </screen_state>`;
 

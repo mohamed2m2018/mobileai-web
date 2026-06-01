@@ -16,7 +16,9 @@ const STRUCTURE_VIEWPORT_CONFIG = {
   viewportMode: 'expanded',
   viewportExpansion: 240
 };
+const MAX_STRUCTURE_LINES = 120;
 const BROAD_CONTAINER_KINDS = new Set(['main', 'section', 'article', 'aside', 'dialog', 'header', 'footer']);
+const seenInteractiveElements = new WeakSet();
 function isHTMLElement(value) {
   return !!value && typeof value === 'object' && 'tagName' in value;
 }
@@ -557,6 +559,8 @@ function buildPageStateLines(doc, win, screenName, availableScreens) {
   }
   lines.push(`Viewport: ${win.innerWidth}x${win.innerHeight} | Page: ${pageWidth}x${pageHeight}`);
   lines.push(`Scroll position: ${pixelsAbove}px above, ${pixelsBelow}px below, page ${Math.max(1, Math.round(currentPage + 1))} of ${Math.max(1, Math.round(totalPages))}`);
+  lines.push(pixelsAbove > 4 ? `Scroll hint above: ... ${pixelsAbove}px above (${(pixelsAbove / Math.max(1, win.innerHeight)).toFixed(1)} pages) - scroll up to see more ...` : 'Scroll hint above: [Start of page]');
+  lines.push(pixelsBelow > 4 ? `Scroll hint below: ... ${pixelsBelow}px below (${(pixelsBelow / Math.max(1, win.innerHeight)).toFixed(1)} pages) - scroll down to see more ...` : 'Scroll hint below: [End of page]');
   if (scrollX > 0) {
     lines.push(`Horizontal scroll: ${Math.round(scrollX)}px from the left edge`);
   }
@@ -758,6 +762,10 @@ export class PageControllerWeb {
         requiresConfirmation: element.getAttribute('data-ai-confirm') === 'true',
         analyticsZoneId: getZoneId(element) || null
       };
+      if (!seenInteractiveElements.has(element)) {
+        interactive.props.isNew = true;
+        seenInteractiveElements.add(element);
+      }
       this.interactives.push(interactive);
       this.interactiveNodes.set(interactive.index, element);
       node.interactiveIndex = interactive.index;
@@ -831,12 +839,12 @@ export class PageControllerWeb {
     const fallbackStructureLines = [];
     const emitted = new Set();
     const emitStructureLine = (target, node, depth) => {
-      if (target.length >= 44 || emitted.has(node.id)) return;
+      if (target.length >= MAX_STRUCTURE_LINES || emitted.has(node.id)) return;
       emitted.add(node.id);
       target.push(`${'  '.repeat(Math.max(0, depth))}- ${node.summary}`);
     };
     const walk = (node, depth, parentInViewport = false) => {
-      if ((viewportStructureLines.length >= 44 && fallbackStructureLines.length >= 44) || !node) return;
+      if ((viewportStructureLines.length >= MAX_STRUCTURE_LINES && fallbackStructureLines.length >= MAX_STRUCTURE_LINES) || !node) return;
       const nodeInViewport = node.kind === 'element' ? elementIntersectsViewport(node.element, getNodeWindow(node.element), STRUCTURE_VIEWPORT_CONFIG) : parentInViewport;
       if (node.kind === 'element') {
         const summary = node.summary;
@@ -844,16 +852,16 @@ export class PageControllerWeb {
         if (shouldEmit) {
           if (nodeInViewport && !BROAD_CONTAINER_KINDS.has(node.semanticKind)) {
             emitStructureLine(viewportStructureLines, node, depth);
-          } else if (fallbackStructureLines.length < 44 && !emitted.has(node.id)) {
+          } else if (fallbackStructureLines.length < MAX_STRUCTURE_LINES && !emitted.has(node.id)) {
             fallbackStructureLines.push(`${'  '.repeat(Math.max(0, depth))}- ${summary}`);
           }
         }
         if (node.semanticKind === 'metric-card') return;
       } else if (node.kind === 'text' && node.text.length >= 48) {
         const line = `${'  '.repeat(Math.max(0, depth))}- Text: ${truncateText(node.text, 160)}`;
-        if (nodeInViewport && viewportStructureLines.length < 44) {
+        if (nodeInViewport && viewportStructureLines.length < MAX_STRUCTURE_LINES) {
           viewportStructureLines.push(line);
-        } else if (fallbackStructureLines.length < 44) {
+        } else if (fallbackStructureLines.length < MAX_STRUCTURE_LINES) {
           fallbackStructureLines.push(line);
         }
       }
@@ -885,7 +893,17 @@ export class PageControllerWeb {
   }
   buildInteractiveLines() {
     const lines = ['Interactive elements:'];
-    this.interactives.slice(0, 100).forEach(entry => {
+    const visibleEntries = [];
+    const otherEntries = [];
+    this.interactives.forEach(entry => {
+      const node = entry.props?.domNode;
+      if (isHTMLElement(node) && elementIntersectsViewport(node, getNodeWindow(node), STRUCTURE_VIEWPORT_CONFIG)) {
+        visibleEntries.push(entry);
+      } else {
+        otherEntries.push(entry);
+      }
+    });
+    [...visibleEntries, ...otherEntries].slice(0, 100).forEach(entry => {
       const node = entry.props?.domNode;
       const hints = [];
       if (isAnchorElement(node)) {
@@ -919,7 +937,8 @@ export class PageControllerWeb {
       const selector = typeof entry.props?.selector === 'string' ? truncateText(entry.props.selector, 80) : '';
       if (selector) hints.push(`selector="${selector}"`);
       const suffix = hints.length > 0 ? ` ${hints.join(' ')}` : '';
-      lines.push(`[${entry.index}]<${entry.type}>${truncateText(entry.label || 'Unlabeled element', 120)}</>${suffix}`);
+      const newPrefix = entry.props?.isNew === true ? '*' : '';
+      lines.push(`${newPrefix}[${entry.index}]<${entry.type}>${truncateText(entry.label || 'Unlabeled element', 120)}</>${suffix}`);
     });
     return lines;
   }
