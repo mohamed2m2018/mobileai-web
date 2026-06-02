@@ -2346,6 +2346,7 @@ export function AIAgent({
     }) : null, messages.map(message => {
       const isUser = message.role === 'user';
       return /*#__PURE__*/_jsx("div", {
+        className: "mobileai-web-chat-bubble",
         style: {
           alignSelf: isUser ? 'flex-end' : 'flex-start',
           maxWidth: '85%',
@@ -3047,6 +3048,26 @@ export function AIAgent({
         children: [/*#__PURE__*/_jsx("div", {
           ref: appRootRef,
           children: children
+        }), /*#__PURE__*/_jsx("style", {
+          children: `
+            .mobileai-web-chat-bubble,
+            .mobileai-web-chat-bubble * {
+              -webkit-user-select: text;
+              user-select: text;
+            }
+            .mobileai-web-chat-bubble::selection,
+            .mobileai-web-chat-bubble *::selection {
+              color: #ffffff;
+              background: rgba(123, 104, 238, 0.68);
+              text-shadow: none;
+            }
+            .mobileai-web-chat-bubble::-moz-selection,
+            .mobileai-web-chat-bubble *::-moz-selection {
+              color: #ffffff;
+              background: rgba(123, 104, 238, 0.68);
+              text-shadow: none;
+            }
+          `
         }), guide ? /*#__PURE__*/_jsxs("div", {
           "data-mobileai-ignore": "true",
           style: {
