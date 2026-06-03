@@ -370,6 +370,44 @@ test("WebPlatformAdapter resolves navigation targets from live anchor labels", a
   }
 });
 
+test("WebPlatformAdapter prefers live anchors over router fallback guesses", async () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`
+    <main>
+      <nav>
+        <a href="/dashboard/analytics/funnels">Where people drop off</a>
+      </nav>
+    </main>
+  `, "https://example.com/dashboard");
+  try {
+    const {
+      document
+    } = dom.window;
+    let pushedHref = null;
+    const adapter = new WebPlatformAdapter({
+      getRoot: () => document,
+      router: {
+        resolveHref: screen => `/${String(screen).toLowerCase().replace(/\s+/g, '-')}`,
+        push: href => {
+          pushedHref = href;
+        }
+      },
+      getCurrentScreenName: () => '/dashboard',
+      getAvailableScreens: () => []
+    });
+    const result = await adapter.executeAction({
+      type: 'navigate',
+      screen: 'Where people drop off'
+    });
+    assert.equal(pushedHref, '/dashboard/analytics/funnels');
+    assert.match(result, /Navigated to "\/dashboard\/analytics\/funnels" for "Where people drop off"/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("PageControllerWeb attaches nearby text and filters covered interactive elements", () => {
   const {
     dom,
