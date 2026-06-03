@@ -74,6 +74,45 @@ function getScrollTargetName(target) {
   }
   return 'page';
 }
+function normalizeRouteText(value) {
+  return String(value || '').toLowerCase().replace(/[?#].*$/, '').replace(/[-_/]+/g, ' ').replace(/\b(open|go|to|the|page|screen|tab|section|please)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function getElementText(element) {
+  return String(element?.getAttribute?.('aria-label') || element?.getAttribute?.('title') || element?.textContent || '').replace(/\s+/g, ' ').trim();
+}
+function normalizeHref(rawHref, win) {
+  if (!rawHref || rawHref.startsWith('javascript:') || rawHref.startsWith('mailto:') || rawHref.startsWith('tel:')) {
+    return null;
+  }
+  try {
+    const url = new URL(rawHref, win?.location?.href || 'https://example.com/');
+    if (win?.location?.origin && url.origin !== win.location.origin) {
+      return url.href;
+    }
+    return `${url.pathname}${url.search}${url.hash}` || '/';
+  } catch {
+    return rawHref.startsWith('/') || rawHref.startsWith('#') ? rawHref : null;
+  }
+}
+function routeMatchScore(target, anchor, href) {
+  const targetText = normalizeRouteText(target);
+  if (!targetText) return 0;
+  const label = normalizeRouteText(getElementText(anchor));
+  const hrefText = normalizeRouteText(href);
+  const pathname = normalizeRouteText(href.split(/[?#]/)[0].split('/').filter(Boolean).pop() || href);
+  if (label && label === targetText) return 120;
+  if (hrefText && hrefText === targetText) return 110;
+  if (pathname && pathname === targetText) return 95;
+  const targetParts = targetText.split(' ').filter(Boolean);
+  if (targetParts.length > 0 && label && targetParts.every(part => label.includes(part))) return 85;
+  if (targetParts.length > 0 && hrefText && targetParts.every(part => hrefText.includes(part))) return 75;
+  return 0;
+}
+function getDocumentFromRoot(root) {
+  if (!root) return typeof document !== 'undefined' ? document : null;
+  if (isDocumentNode(root)) return root;
+  return root.ownerDocument || null;
+}
 function waitForScrollSettle(win) {
   return new Promise(resolve => {
     const schedule = win?.requestAnimationFrame ? callback => win.requestAnimationFrame(callback) : callback => setTimeout(callback, 16);
@@ -524,21 +563,50 @@ export class WebPlatformAdapter {
     return `❌ Cannot restore zone "${zoneId}": Controller not attached.`;
   }
   async navigate(screen, params) {
-    if (this.options.router?.navigate) {
-      this.options.router.navigate(screen, params);
-      return `✅ Navigated to "${screen}"`;
-    }
-    const href = this.options.router?.resolveHref?.(screen, params) || (screen.startsWith('/') ? screen : null);
+    const href = this.resolveNavigationHref(screen, params);
     if (href && this.options.router?.push) {
       this.options.router.push(href);
-      return `✅ Navigated to "${href}"`;
+      return `✅ Navigated to "${href}"${href !== screen ? ` for "${screen}"` : ''}`;
+    }
+    if (href && this.options.router?.navigate) {
+      this.options.router.navigate(href, params);
+      return `✅ Navigated to "${href}"${href !== screen ? ` for "${screen}"` : ''}`;
     }
     if (href && typeof window !== 'undefined') {
       window.history.pushState({}, '', href);
       window.dispatchEvent(new PopStateEvent('popstate'));
-      return `✅ Navigated to "${href}"`;
+      return `✅ Navigated to "${href}"${href !== screen ? ` for "${screen}"` : ''}`;
+    }
+    if (this.options.router?.navigate) {
+      this.options.router.navigate(screen, params);
+      return `✅ Navigated to "${screen}"`;
     }
     return `❌ Cannot navigate to "${screen}" on web without a router adapter or absolute path.`;
+  }
+  resolveNavigationHref(screen, params) {
+    const target = typeof screen === 'string' ? screen.trim() : '';
+    if (!target) return null;
+    const resolved = this.options.router?.resolveHref?.(target, params);
+    if (resolved) return resolved;
+    if (target.startsWith('/') || target.startsWith('#')) return target;
+    const root = this.options.getRoot?.();
+    const doc = getDocumentFromRoot(root);
+    const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+    const queryRoot = isDocumentNode(root) ? root : root || doc;
+    let best = null;
+    Array.from(queryRoot?.querySelectorAll?.('a[href]') || []).forEach(anchor => {
+      if (!isHTMLElementLike(anchor) || anchor.closest?.('[data-mobileai-ignore="true"]')) return;
+      const href = normalizeHref(anchor.getAttribute('href') || '', win);
+      if (!href) return;
+      const score = routeMatchScore(target, anchor, href);
+      if (score > 0 && (!best || score > best.score)) {
+        best = {
+          href,
+          score
+        };
+      }
+    });
+    return best?.href || null;
   }
 }
 //# sourceMappingURL=WebPlatformAdapter.js.map

@@ -1,6 +1,6 @@
 {
   "name": "@mobileai/web",
-  "version": "0.9.47",
+  "version": "0.9.48",
   "description": "React web SDK for MobileAI Cloud by Twomilia with DOM-first actions, rich chat content, and support escalation.",
   "repository": {
     "type": "git",
