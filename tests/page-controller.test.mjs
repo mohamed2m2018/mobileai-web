@@ -395,6 +395,32 @@ test("PageControllerWeb discovers routes inside shadow roots and same-origin ifr
   }
 });
 
+test("PageControllerWeb tolerates arbitrary framework class names", () => {
+  const {
+    dom,
+    cleanup
+  } = createDom(`
+    <main>
+      <section class=":pb-3>* [grid-area:items] w-[10px]">
+        <h1>Framework generated classes</h1>
+        <ul class="[grid-area:items]">
+          <li>First item</li>
+          <li>Second item</li>
+        </ul>
+        <a class="hover:[&>*]:underline" href="/framework-route">Framework route</a>
+      </section>
+    </main>
+  `, "https://example.com/framework");
+  try {
+    const controller = new PageControllerWeb(dom.window.document);
+    const snapshot = controller.buildScreenSnapshot('/framework', []);
+    assert.match(snapshot.elementsText, /\/framework-route \(Framework route\)/);
+    assert.match(snapshot.elementsText, /Framework generated classes/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("PageControllerWeb lists viewport interactive elements before offscreen elements", () => {
   const {
     dom,
