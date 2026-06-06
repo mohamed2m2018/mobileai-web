@@ -1310,7 +1310,10 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 16,
     marginBottom: 8,
-    maxWidth: '85%'
+    maxWidth: '85%',
+    minWidth: 0,
+    flexShrink: 1,
+    overflow: 'hidden'
   },
   messageBubbleUser: {
     alignSelf: 'flex-end',
@@ -1324,7 +1327,15 @@ const styles = StyleSheet.create({
   },
   messageText: {
     fontSize: 14,
-    lineHeight: 20
+    lineHeight: 20,
+    maxWidth: '100%',
+    minWidth: 0,
+    flexShrink: 1,
+    flexWrap: 'wrap',
+    ...(Platform.OS === 'web' ? {
+      overflowWrap: 'anywhere',
+      wordBreak: 'break-word'
+    } : null)
   },
   messageTextUser: {
     color: '#fff'

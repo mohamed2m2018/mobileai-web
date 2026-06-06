@@ -6,7 +6,7 @@ import { useBlockRegistry, useRichUITheme } from "../../components/rich-content/
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 function renderInlineMarkdown(text, keyPrefix = 'md') {
   const parts = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*)/g;
   let lastIndex = 0;
   let match;
   while ((match = pattern.exec(text)) !== null) {
@@ -19,7 +19,9 @@ function renderInlineMarkdown(text, keyPrefix = 'md') {
       parts.push(/*#__PURE__*/_jsx("code", {
         style: {
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-          fontSize: '0.92em'
+          fontSize: '0.92em',
+          overflowWrap: 'anywhere',
+          wordBreak: 'break-word'
         },
         children: token.slice(1, -1)
       }, key));
@@ -67,7 +69,9 @@ function MarkdownText({
           style: {
             display: 'flex',
             gap: 8,
-            alignItems: 'flex-start'
+            alignItems: 'flex-start',
+            minWidth: 0,
+            maxWidth: '100%'
           },
           children: [/*#__PURE__*/_jsx("span", {
             "aria-hidden": "true",
@@ -77,11 +81,23 @@ function MarkdownText({
             },
             children: "\u2022"
           }), /*#__PURE__*/_jsx("span", {
+            style: {
+              minWidth: 0,
+              maxWidth: '100%',
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word'
+            },
             children: renderInlineMarkdown(bulletMatch[1], `line-${index}`)
           })]
         }, `line-${index}`);
       }
       return /*#__PURE__*/_jsx("div", {
+        style: {
+          minWidth: 0,
+          maxWidth: '100%',
+          overflowWrap: 'anywhere',
+          wordBreak: 'break-word'
+        },
         children: renderInlineMarkdown(line, `line-${index}`)
       }, `line-${index}`);
     })
@@ -100,7 +116,9 @@ export function RichContentRendererWeb({
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: theme.spacing.sm
+      gap: theme.spacing.sm,
+      minWidth: 0,
+      maxWidth: '100%'
     },
     children: nodes.map((node, index) => {
       if (node.type === 'text') {
@@ -110,6 +128,10 @@ export function RichContentRendererWeb({
             lineHeight: 1.55,
             color: isUser || surface === 'chat' || surface === 'support' ? theme.colors.inverseText : theme.colors.primaryText,
             whiteSpace: 'normal',
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
+            minWidth: 0,
+            maxWidth: '100%',
             ...textStyle
           },
           text: node.content
@@ -123,7 +145,9 @@ export function RichContentRendererWeb({
           borderRadius: theme.shape.cardRadius,
           overflow: 'hidden',
           border: surface === 'chat' || surface === 'support' ? `1px solid ${theme.colors.subtleBorder}` : undefined,
-          background: surface === 'chat' || surface === 'support' ? theme.colors.richMessageContainer : undefined
+          background: surface === 'chat' || surface === 'support' ? theme.colors.richMessageContainer : undefined,
+          minWidth: 0,
+          maxWidth: '100%'
         },
         children: /*#__PURE__*/_jsx(BlockComponent, {
           ...node.props

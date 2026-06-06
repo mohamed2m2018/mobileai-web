@@ -6,7 +6,7 @@ import { useBlockRegistry, useRichUITheme } from "./RichUIContext.js";
 import { jsx as _jsx } from "react/jsx-runtime";
 function renderInlineMarkdown(text, keyPrefix = 'md') {
   const parts = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*)/g;
   let lastIndex = 0;
   let match;
   while ((match = pattern.exec(text)) !== null) {
@@ -87,11 +87,21 @@ export function RichContentRenderer({
 }
 const styles = StyleSheet.create({
   container: {
-    gap: 12
+    gap: 12,
+    minWidth: 0,
+    maxWidth: '100%'
   },
   text: {
     fontSize: 15,
-    lineHeight: 22
+    lineHeight: 22,
+    maxWidth: '100%',
+    minWidth: 0,
+    flexShrink: 1,
+    flexWrap: 'wrap',
+    ...(Platform.OS === 'web' ? {
+      overflowWrap: 'anywhere',
+      wordBreak: 'break-word'
+    } : null)
   },
   bold: {
     fontWeight: '800'
@@ -105,12 +115,20 @@ const styles = StyleSheet.create({
       android: 'monospace',
       default: 'monospace'
     }),
-    fontSize: 14
+    fontSize: 14,
+    maxWidth: '100%',
+    flexShrink: 1,
+    ...(Platform.OS === 'web' ? {
+      overflowWrap: 'anywhere',
+      wordBreak: 'break-word'
+    } : null)
   },
   blockWrapper: {
     borderRadius: 20,
     overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: '100%',
+    minWidth: 0
   }
 });
 //# sourceMappingURL=RichContentRenderer.js.map
