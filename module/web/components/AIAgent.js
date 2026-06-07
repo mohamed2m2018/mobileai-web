@@ -3008,7 +3008,7 @@ export function AIAgent({
           marginTop: 14,
           borderTop: '1px solid rgba(255,255,255,0.08)'
         },
-        children: [/*#__PURE__*/_jsx("input", {
+        children: [/*#__PURE__*/_jsx("textarea", {
           value: supportInput,
           placeholder: "Message the human agent…",
           onChange: event => setSupportInput(event.target.value),
@@ -3024,7 +3024,13 @@ export function AIAgent({
             background: 'rgba(255,255,255,0.08)',
             color: '#fff',
             padding: '12px 14px',
-            outline: 'none'
+            outline: 'none',
+            minHeight: 44,
+            maxHeight: 120,
+            lineHeight: 1.35,
+            resize: 'none',
+            overflowY: 'auto',
+            font: 'inherit'
           }
         }), /*#__PURE__*/_jsx("button", {
           type: "button",
@@ -3520,7 +3526,7 @@ export function AIAgent({
               marginTop: messages.length > 0 || pendingPrompt ? 12 : 0,
               minWidth: 0
             },
-            children: [/*#__PURE__*/_jsx("input", {
+            children: [/*#__PURE__*/_jsx("textarea", {
               value: input,
               placeholder: inputPlaceholder,
               onChange: event => setInput(event.target.value),
@@ -3550,7 +3556,12 @@ export function AIAgent({
                 outline: 'none',
                 boxShadow: 'none',
                 fontSize: 16,
-                minHeight: 48
+                minHeight: 48,
+                maxHeight: 140,
+                lineHeight: 1.35,
+                resize: 'none',
+                overflowY: 'auto',
+                font: 'inherit'
               }
             }), /*#__PURE__*/_jsx("button", {
               type: "button",
