@@ -187,10 +187,6 @@ function TextInputRow({
     inputRef.current?.clear();
   };
   const handlePrimaryAction = () => {
-    if (isThinking) {
-      onCancel?.();
-      return;
-    }
     if (!text.trim()) return;
     handleSendWithClear();
   };
@@ -212,21 +208,28 @@ function TextInputRow({
       blurOnSubmit: false,
       editable: !isThinking,
       multiline: true
-    }), /*#__PURE__*/_jsx(DictationButton, {
+    }), isThinking ? /*#__PURE__*/_jsx(Pressable, {
+      style: [styles.stopButton, theme?.primaryColor ? {
+        borderColor: theme.primaryColor
+      } : undefined],
+      onPress: onCancel,
+      accessibilityLabel: "Stop AI Agent request",
+      children: /*#__PURE__*/_jsx(StopIcon, {
+        size: 18,
+        color: theme?.textColor || '#fff'
+      })
+    }) : null, /*#__PURE__*/_jsx(DictationButton, {
       language: isArabic ? 'ar' : 'en',
       onTranscript: t => setText(t),
       disabled: isThinking
     }), /*#__PURE__*/_jsx(Pressable, {
-      style: [styles.sendButton, isThinking && styles.sendButtonDisabled, theme?.primaryColor ? {
+      style: [styles.sendButton, (!text.trim() || isThinking) && styles.sendButtonDisabled, theme?.primaryColor ? {
         backgroundColor: theme.primaryColor
       } : undefined],
       onPress: handlePrimaryAction,
-      disabled: !isThinking && !text.trim(),
-      accessibilityLabel: isThinking ? 'Stop AI Agent request' : 'Send request to AI Agent',
-      children: isThinking ? /*#__PURE__*/_jsx(StopIcon, {
-        size: 18,
-        color: theme?.textColor || '#fff'
-      }) : /*#__PURE__*/_jsx(SendArrowIcon, {
+      disabled: isThinking || !text.trim(),
+      accessibilityLabel: "Send request to AI Agent",
+      children: /*#__PURE__*/_jsx(SendArrowIcon, {
         size: 18,
         color: theme?.textColor || '#fff'
       })
@@ -1477,6 +1480,16 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     opacity: 0.5
+  },
+  stopButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    justifyContent: 'center',
+    alignItems: 'center'
   },
   sendButtonText: {
     fontSize: 18
