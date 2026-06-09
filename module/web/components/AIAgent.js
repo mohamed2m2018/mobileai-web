@@ -1864,8 +1864,7 @@ export function AIAgent({
       }
     }
     runtime.cancel();
-    setIsLoading(false);
-    setStatusText('');
+    setStatusText('Stopping...');
   }, [runtime]);
 
   const enterVoiceMode = useCallback(async () => {
