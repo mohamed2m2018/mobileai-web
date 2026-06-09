@@ -45,14 +45,14 @@ export class GeminiProvider {
     }
     this.model = model;
   }
-  async generateContent(systemPrompt, userMessage, tools, history, screenshot) {
-    logger.info('GeminiProvider', `Sending request. Model: ${this.model}, Tools: ${tools.length}${screenshot ? ', with screenshot' : ''}`);
+  async generateContent(systemPrompt, userMessage, tools, history, screenshot, _chatHistory, userImages) {
+    logger.info('GeminiProvider', `Sending request. Model: ${this.model}, Tools: ${tools.length}${screenshot ? ', with screenshot' : ''}${userImages?.length ? `, with ${userImages.length} user image(s)` : ''}`);
 
     // Build single agent_step function declaration
     const agentStepDeclaration = this.buildAgentStepDeclaration(tools);
 
-    // Build contents (user message + optional screenshot)
-    const contents = this.buildContents(userMessage, history, screenshot);
+    // Build contents (user message + optional screenshot + optional user images)
+    const contents = this.buildContents(userMessage, history, screenshot, userImages);
     const startTime = Date.now();
     try {
       const response = await fetch(this.buildGenerateContentUrl(), {
@@ -169,10 +169,23 @@ export class GeminiProvider {
    * Builds contents for the generateContent call.
    * Single-turn: user message + optional screenshot as inlineData.
    */
-  buildContents(userMessage, _history, screenshot) {
+  buildContents(userMessage, _history, screenshot, userImages) {
     const parts = [{
       text: userMessage
     }];
+
+    // Append user-attached images as inlineData
+    if (userImages?.length) {
+      for (const img of userImages) {
+        parts.push({
+          inlineData: {
+            mimeType: img.mimeType,
+            data: img.base64,
+          },
+        });
+      }
+      parts.push({ text: '\n[The user attached the above image(s) to their message. Describe what you see if relevant to their request.]' });
+    }
 
     // Append screenshot as inlineData for Gemini vision
     if (screenshot) {

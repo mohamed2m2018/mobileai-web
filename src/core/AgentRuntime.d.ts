@@ -8,7 +8,7 @@
  * 4. Parse tool call → execute (tap, type, navigate, done)
  * 5. If not done, repeat from step 1 (re-dehydrate after UI change)
  */
-import type { AIProvider, AgentConfig, ExecutionResult, ToolDefinition } from './types';
+import type { AIProvider, AgentConfig, ExecutionResult, ToolDefinition, UserImage } from './types';
 export declare class AgentRuntime {
     private provider;
     private config;
@@ -122,7 +122,12 @@ export declare class AgentRuntime {
     execute(userMessage: string, chatHistory?: {
         role: string;
         content: string;
-    }[]): Promise<ExecutionResult>;
+    }[], userImages?: UserImage[]): Promise<ExecutionResult>;
+    /**
+     * Cancel the running task and wait until the runtime has fully stopped.
+     * Polls `isRunning` every 50ms up to the given timeout.
+     */
+    cancelAndWait(timeoutMs?: number): Promise<void>;
     /** Update refs (called when component re-renders) */
     updateRefs(_rootRef: any, _navRef: any): void;
     /** Check if agent is currently executing */

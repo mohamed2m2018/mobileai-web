@@ -7,10 +7,11 @@ export { ProductCardWeb, FactCardWeb, ActionCardWeb, ComparisonCardWeb, FormCard
 export { useAction, useData, useAI } from '../hooks/useAction';
 export { RichUIProvider } from '../components/rich-content/RichUIContext';
 export { VoiceService } from '../services/VoiceService';
-export { CSATSurvey, buildSupportPrompt, createEscalateTool, createReportIssueTool, EscalationSocket, } from '../support';
-export type { AgentConfig, AgentMode, AIMessage, AIRichNode, BlockDefinition, PlatformAdapter, ScreenSnapshot, NavigationSnapshot, ActionIntent, } from '../core/types';
+export { CSATSurvey, buildSupportPrompt, createEscalateTool, createReportIssueTool, EscalationSocket, createOutboundCallTool, OutboundCallWatcher, getOutboundCallStatus, } from '../support';
+export type { AgentConfig, AgentMode, AIMessage, AIRichNode, BlockDefinition, PlatformAdapter, ScreenSnapshot, NavigationSnapshot, ActionIntent, UserImage, } from '../core/types';
 export type { RichUITheme, RichUIThemeOverride } from '../theme/RichUITheme';
 export type { VoiceServiceConfig, VoiceServiceCallbacks, VoiceStatus, } from '../services/VoiceService';
 export type { SupportModeConfig, QuickReply, EscalationConfig, EscalationContext, CSATConfig, CSATRating, BusinessHoursConfig, SupportTicket, ReportedIssue, ReportedIssueCustomerStatus, ReportedIssueStatusUpdate, } from '../support';
 export type { SupportStyle } from '../support';
+export type { OutboundCallConfig, OutboundCallToolDeps, OutboundCallEvent, OutboundCallTerminal } from '../support';
 //# sourceMappingURL=index.d.ts.map

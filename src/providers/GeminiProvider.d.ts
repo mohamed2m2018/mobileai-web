@@ -9,12 +9,12 @@
  * Implements the AIProvider interface so it can be swapped
  * with OpenAIProvider, AnthropicProvider, etc.
  */
-import type { AIProvider, ToolDefinition, AgentStep, ProviderResult } from '../core/types';
+import type { AIProvider, ToolDefinition, AgentStep, ProviderResult, UserImage } from '../core/types';
 export declare class GeminiProvider implements AIProvider {
     private ai;
     private model;
     constructor(apiKey?: string, model?: string, proxyUrl?: string, proxyHeaders?: Record<string, string>);
-    generateContent(systemPrompt: string, userMessage: string, tools: ToolDefinition[], history: AgentStep[], screenshot?: string): Promise<ProviderResult>;
+    generateContent(systemPrompt: string, userMessage: string, tools: ToolDefinition[], history: AgentStep[], screenshot?: string, _chatHistory?: unknown, userImages?: UserImage[]): Promise<ProviderResult>;
     /**
      * Builds a single `agent_step` function declaration that keeps Gemini's
      * served schema intentionally narrow:

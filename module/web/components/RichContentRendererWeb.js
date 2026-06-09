@@ -121,6 +121,18 @@ export function RichContentRendererWeb({
       maxWidth: '100%'
     },
     children: nodes.map((node, index) => {
+      if (node.type === 'image' && node.uri) {
+        return /*#__PURE__*/_jsx("img", {
+          src: node.uri,
+          alt: "user attachment",
+          style: {
+            maxWidth: '100%',
+            borderRadius: 12,
+            aspectRatio: '4 / 3',
+            objectFit: 'cover'
+          }
+        }, node.id || `image-${index}`);
+      }
       if (node.type === 'text') {
         return /*#__PURE__*/_jsx(MarkdownText, {
           style: {

@@ -2,6 +2,10 @@
  * Core types for the React Native AI SDK.
  */
 import type React from 'react';
+export interface UserImage {
+    base64: string;
+    mimeType: string;
+}
 export type AgentMode = 'text' | 'voice' | 'human';
 /**
  * Controls how the agent handles irreversible actions.

@@ -21,5 +21,8 @@ export const {
   createEscalateTool,
   createReportIssueTool,
   EscalationSocket,
+  createOutboundCallTool,
+  OutboundCallWatcher,
+  getOutboundCallStatus,
 } = web;
 export default web;

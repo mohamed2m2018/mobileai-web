@@ -1045,10 +1045,14 @@ export class PageControllerWeb {
         pageStateLines.splice(2, 0, routesLine);
       }
     }
+    // Strip base64 data: URIs from dehydrated text to prevent multi-MB payloads to the LLM
+    const rawText = pageStateLines.join('\n');
+    const strippedText = rawText.replace(/\bsrc="data:[^"]*"/g, 'src="[inline-image]"')
+                                .replace(/\bsrc='data:[^']*'/g, "src='[inline-image]'");
     return dehydrateScreen({
       screenName,
       availableScreens,
-      elementsText: pageStateLines.join('\n'),
+      elementsText: strippedText,
       elements: this.interactives
     });
   }

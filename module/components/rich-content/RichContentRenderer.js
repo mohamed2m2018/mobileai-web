@@ -60,6 +60,12 @@ export function RichContentRenderer({
   return /*#__PURE__*/_jsx(View, {
     style: styles.container,
     children: nodes.map((node, index) => {
+      if (node.type === 'image' && node.uri) {
+        // Render image nodes in chat using a View placeholder (RN Image not imported for web compat)
+        return /*#__PURE__*/_jsx(View, {
+          style: { maxWidth: '100%', borderRadius: 12, aspectRatio: 4 / 3, backgroundColor: 'rgba(255,255,255,0.1)', overflow: 'hidden' }
+        }, node.id || `image-${index}`);
+      }
       if (node.type === 'text') {
         return /*#__PURE__*/_jsx(Text, {
           style: [styles.text, {
