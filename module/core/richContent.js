@@ -116,6 +116,9 @@ export function normalizeRichContent(input, fallbackText = '') {
       if (node.type === 'block' && typeof node.blockType === 'string') {
         return makeBlockNode(node, index);
       }
+      if (node.type === 'image' && node.uri) {
+        return { type: 'image', uri: node.uri, id: node.id || `image-${index}` };
+      }
       return null;
     });
     return normalizedNodes.filter(node => node !== null);
