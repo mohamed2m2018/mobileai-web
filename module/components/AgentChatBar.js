@@ -8,12 +8,12 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { View, TextInput, Pressable, Text, StyleSheet, Animated, PanResponder, ScrollView, Keyboard, Platform, useWindowDimensions, Linking } from 'react-native';
-import { MicIcon, SpeakerIcon, SendArrowIcon, StopIcon, LoadingDots, AIBadge, HistoryIcon, NewChatIcon, CloseIcon } from "./Icons.js";
+import { Image } from 'react-native';
+import { MicIcon, SpeakerIcon, SendArrowIcon, StopIcon, LoadingDots, AIBadge, HistoryIcon, NewChatIcon, CloseIcon, ImageIcon } from "./Icons.js";
 import { logger } from "../utils/logger.js";
 import { DiscoveryTooltip } from "./DiscoveryTooltip.js";
 import { resolveConsentDialogContent } from "./AIConsentDialog.js";
 import { RichContentRenderer } from "./rich-content/RichContentRenderer.js";
-import { markdownToPlainText } from "../core/richContent.js";
 
 // ─── Props ─────────────────────────────────────────────────────
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
@@ -101,10 +101,15 @@ function AudioControlButton({
  */
 let SpeechModule = null;
 try {
-  // Static require — Metro needs a literal string for bundling.
   SpeechModule = require('expo-speech-recognition');
 } catch {
   // Not installed — dictation button won't appear
+}
+let ImagePickerModule = null;
+try {
+  ImagePickerModule = require('expo-image-picker');
+} catch {
+  // Not installed — image picker button won't appear
 }
 function DictationButton({
   language,
@@ -169,58 +174,45 @@ function DictationButton({
 
 // ─── Text Input Row ────────────────────────────────────────────
 
-// ─── Image Compression Helper (Web Canvas) ───────────────────
-
-function compressImageWeb(base64Data, mimeType) {
-  return new Promise((resolve) => {
-    if (typeof document === 'undefined') {
-      resolve({ base64: base64Data, mimeType });
-      return;
+function ImagePickerButton({
+  onImagePicked,
+  disabled
+}) {
+  if (!ImagePickerModule) return null;
+  const pickImage = async () => {
+    try {
+      const result = await ImagePickerModule.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        base64: true,
+        quality: 0.3,
+        allowsMultipleSelection: false,
+        maxWidth: 1024,
+        maxHeight: 1024
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      if (!asset.base64) return;
+      onImagePicked({
+        uri: asset.uri,
+        base64: asset.base64,
+        mimeType: asset.mimeType || 'image/jpeg'
+      });
+    } catch {
+      // Permission denied or picker error
     }
-    const img = new Image();
-    img.onload = () => {
-      const MAX_DIM = 1024;
-      let { width, height } = img;
-      if (width > MAX_DIM || height > MAX_DIM) {
-        const scale = MAX_DIM / Math.max(width, height);
-        width = Math.round(width * scale);
-        height = Math.round(height * scale);
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      const compressed = canvas.toDataURL('image/jpeg', 0.3);
-      const compressedBase64 = compressed.split(',')[1] || compressed;
-      resolve({ base64: compressedBase64, mimeType: 'image/jpeg' });
-    };
-    img.onerror = () => {
-      resolve({ base64: base64Data, mimeType });
-    };
-    const prefix = base64Data.startsWith('data:') ? base64Data : `data:${mimeType};base64,${base64Data}`;
-    img.src = prefix;
-  });
-}
-
-// ─── Attachment Icon ──────────────────────────────────────────
-
-function AttachmentIcon({ size = 18, color = '#fff' }) {
-  return /*#__PURE__*/_jsx("svg", {
-    width: size,
-    height: size,
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: color,
-    strokeWidth: 2,
-    strokeLinecap: "round",
-    strokeLinejoin: "round",
-    children: /*#__PURE__*/_jsx("path", {
-      d: "M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"
+  };
+  return /*#__PURE__*/_jsx(Pressable, {
+    style: [styles.imagePickerButton, disabled && styles.sendButtonDisabled],
+    onPress: pickImage,
+    disabled: disabled,
+    accessibilityLabel: "Attach image",
+    hitSlop: 8,
+    children: /*#__PURE__*/_jsx(ImageIcon, {
+      size: 18,
+      color: "#fff"
     })
   });
 }
-
 function TextInputRow({
   text,
   setText,
@@ -229,100 +221,63 @@ function TextInputRow({
   isThinking,
   isArabic,
   theme,
+  compact = false,
   pendingImages,
-  setPendingImages
+  onImagePicked,
+  onRemoveImage
 }) {
   const inputRef = useRef(null);
-  const fileInputRef = useRef(null);
-  const hasImages = pendingImages && pendingImages.length > 0;
-  const canSend = text.trim() || hasImages;
+  const handleImagePicked = image => {
+    onImagePicked(image);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus?.();
+    });
+  };
   const handleSendWithClear = () => {
     onSend();
-    // Imperatively clear the native TextInput — controlled `value=''` can be
-    // ignored by the iOS native layer when editable flips to false in the same
-    // render batch.
     inputRef.current?.clear();
   };
   const handlePrimaryAction = () => {
-    // Allow send with images even when isThinking (bypass like RN)
-    if (hasImages) {
-      handleSendWithClear();
+    if (isThinking && !pendingImages.length) {
+      onCancel?.();
       return;
     }
-    if (!text.trim()) return;
+    if (!text.trim() && pendingImages.length === 0) return;
     handleSendWithClear();
   };
-  const handleFileChange = async (event) => {
-    const files = event?.target?.files;
-    if (!files || files.length === 0) return;
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (!file.type.startsWith('image/')) continue;
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const dataUrl = e.target?.result;
-        if (typeof dataUrl !== 'string') return;
-        const rawBase64 = dataUrl.split(',')[1] || '';
-        const compressed = await compressImageWeb(rawBase64, file.type);
-        setPendingImages(prev => [...prev, compressed]);
-      };
-      reader.readAsDataURL(file);
-    }
-    // Reset file input so the same file can be picked again
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-  const removePendingImage = (idx) => {
-    setPendingImages(prev => prev.filter((_, i) => i !== idx));
-  };
-  const isWeb = Platform.OS === 'web';
+  const canSend = isThinking || text.trim().length > 0 || pendingImages.length > 0;
   return /*#__PURE__*/_jsxs(View, {
-    style: { gap: 8, flexShrink: 0 },
-    children: [hasImages && /*#__PURE__*/_jsx(View, {
-      style: styles.pendingImagesRow,
-      children: pendingImages.map((img, idx) => /*#__PURE__*/_jsxs(View, {
-        style: styles.pendingImageThumb,
-        children: [isWeb ? /*#__PURE__*/_jsx("img", {
-          src: `data:${img.mimeType};base64,${img.base64}`,
-          style: { width: 56, height: 56, borderRadius: 8, objectFit: 'cover' },
-          alt: "pending"
-        }) : /*#__PURE__*/_jsx(View, {
-          style: { width: 56, height: 56, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.1)' }
+    children: [pendingImages.length > 0 && /*#__PURE__*/_jsx(ScrollView, {
+      horizontal: true,
+      showsHorizontalScrollIndicator: false,
+      style: styles.imagePreviewRow,
+      children: pendingImages.map((img, index) => /*#__PURE__*/_jsxs(View, {
+        style: styles.imagePreviewThumb,
+        children: [/*#__PURE__*/_jsx(Image, {
+          source: {
+            uri: img.uri
+          },
+          style: styles.imagePreviewImage,
+          resizeMode: "cover"
         }), /*#__PURE__*/_jsx(Pressable, {
-          style: styles.pendingImageRemove,
-          onPress: () => removePendingImage(idx),
-          accessibilityLabel: "Remove image",
+          style: styles.imagePreviewRemove,
+          onPress: () => onRemoveImage(index),
           hitSlop: 6,
-          children: /*#__PURE__*/_jsx(Text, {
-            style: styles.pendingImageRemoveText,
-            children: "×"
+          accessibilityLabel: "Remove image",
+          children: /*#__PURE__*/_jsx(CloseIcon, {
+            size: 10,
+            color: "#fff"
           })
         })]
-      }, `pending-img-${idx}`))
+      }, `pending-img-${index}`))
     }), /*#__PURE__*/_jsxs(View, {
       style: styles.inputRow,
-      children: [isWeb && /*#__PURE__*/_jsx("input", {
-        ref: fileInputRef,
-        type: "file",
-        accept: "image/*",
-        multiple: true,
-        style: { display: 'none' },
-        onChange: handleFileChange
-      }), /*#__PURE__*/_jsx(Pressable, {
-        style: [styles.attachButton],
-        onPress: () => {
-          if (isWeb && fileInputRef.current) {
-            fileInputRef.current.click();
-          }
-        },
-        accessibilityLabel: "Attach image",
-        hitSlop: 8,
-        children: /*#__PURE__*/_jsx(AttachmentIcon, {
-          size: 18,
-          color: theme?.textColor || '#fff'
-        })
+      children: [/*#__PURE__*/_jsx(ImagePickerButton, {
+        onImagePicked: handleImagePicked,
+        disabled: isThinking
       }), /*#__PURE__*/_jsx(TextInput, {
         ref: inputRef,
-        style: [styles.input, isArabic && styles.inputRTL, theme?.inputBackgroundColor ? {
+        style: [styles.input, compact && styles.inputCompact, isArabic && styles.inputRTL, theme?.inputBackgroundColor ? {
           backgroundColor: theme.inputBackgroundColor
         } : undefined, theme?.textColor ? {
           color: theme.textColor
@@ -334,30 +289,23 @@ function TextInputRow({
         onSubmitEditing: handleSendWithClear,
         returnKeyType: "default",
         blurOnSubmit: false,
-        editable: !isThinking || hasImages,
+        editable: !isThinking,
         multiline: true
-      }), isThinking && !hasImages ? /*#__PURE__*/_jsx(Pressable, {
-        style: [styles.stopButton, theme?.primaryColor ? {
-          borderColor: theme.primaryColor
-        } : undefined],
-        onPress: onCancel,
-        accessibilityLabel: "Stop AI Agent request",
-        children: /*#__PURE__*/_jsx(StopIcon, {
-          size: 18,
-          color: theme?.textColor || '#fff'
-        })
-      }) : null, /*#__PURE__*/_jsx(DictationButton, {
+      }), /*#__PURE__*/_jsx(DictationButton, {
         language: isArabic ? 'ar' : 'en',
         onTranscript: t => setText(t),
-        disabled: isThinking && !hasImages
+        disabled: isThinking
       }), /*#__PURE__*/_jsx(Pressable, {
         style: [styles.sendButton, !canSend && styles.sendButtonDisabled, theme?.primaryColor ? {
           backgroundColor: theme.primaryColor
         } : undefined],
         onPress: handlePrimaryAction,
-        disabled: !canSend && !hasImages,
-        accessibilityLabel: "Send request to AI Agent",
-        children: /*#__PURE__*/_jsx(SendArrowIcon, {
+        disabled: !canSend,
+        accessibilityLabel: isThinking ? 'Stop AI Agent request' : 'Send request to AI Agent',
+        children: isThinking ? /*#__PURE__*/_jsx(StopIcon, {
+          size: 18,
+          color: theme?.textColor || '#fff'
+        }) : /*#__PURE__*/_jsx(SendArrowIcon, {
           size: 18,
           color: theme?.textColor || '#fff'
         })
@@ -459,6 +407,7 @@ export function AgentChatBar({
   discoveryTooltipMessage,
   onTooltipDismiss,
   chatMessages = [],
+  voiceTranscripts = [],
   conversations = [],
   isLoadingHistory = false,
   onConversationSelect,
@@ -472,7 +421,9 @@ export function AgentChatBar({
   consentProvider = 'gemini',
   consentConfig,
   onConsentApprove,
-  onConsentDecline
+  onConsentDecline,
+  onQuickActionsPress,
+  afterMessagesContent
 }) {
   const [text, setText] = useState('');
   const [pendingImages, setPendingImages] = useState([]);
@@ -480,6 +431,7 @@ export function AgentChatBar({
   const [localUnread, setLocalUnread] = useState(0);
   const [fabX, setFabX] = useState(10);
   const [showHistory, setShowHistory] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const prevMsgCount = useRef(chatMessages.length);
   const scrollRef = useRef(null);
   const {
@@ -502,15 +454,26 @@ export function AgentChatBar({
   });
   const panelHeightRef = useRef(0);
   const isExpandedRef = useRef(false);
+  const prevVoiceTranscriptCount = useRef(mode === 'voice' ? voiceTranscripts.filter(item => item.text.trim()).length : 0);
   const isAndroidNativeWindow = renderMode === 'android-native-window';
   const metricsFrameRef = useRef(null);
   const pendingMetricsRef = useRef(null);
+  const keyboardAwareMode = isExpanded && mode === 'text';
+  const getExpandedMaxHeight = useCallback((panelY = panPositionRef.current.y) => {
+    const baseMaxHeight = Math.min(height * 0.65, 520);
+    if (!keyboardAwareMode || keyboardHeight <= 0) return baseMaxHeight;
+    const keyboardMargin = 12;
+    const topInset = 10;
+    const availableAboveKeyboard = height - keyboardHeight - keyboardMargin - Math.max(panelY, topInset);
+    return Math.max(140, Math.min(baseMaxHeight, availableAboveKeyboard));
+  }, [height, keyboardAwareMode, keyboardHeight]);
   const getExpandedWindowHeight = useCallback(measuredPanelHeight => {
-    const minExpandedHeight = mode === 'voice' ? 150 : showHistory ? 280 : mode === 'human' ? 240 : consentVisible ? 320 : pendingApprovalQuestion ? 220 : 164;
-    const maxExpandedHeight = Math.min(height * 0.65, 520);
+    const minExpandedHeight = mode === 'voice' ? 150 : showHistory ? 280 : mode === 'human' ? 240 : consentVisible ? 320 : pendingApprovalQuestion ? 220 : pendingImages.length > 0 ? 220 : 164;
+    const maxExpandedHeight = getExpandedMaxHeight();
     const naturalHeight = measuredPanelHeight > 0 ? measuredPanelHeight : minExpandedHeight;
-    return Math.max(minExpandedHeight, Math.min(naturalHeight, maxExpandedHeight));
-  }, [consentVisible, height, mode, pendingApprovalQuestion, showHistory]);
+    const effectiveMinHeight = Math.min(minExpandedHeight, maxExpandedHeight);
+    return Math.max(effectiveMinHeight, Math.min(naturalHeight, maxExpandedHeight));
+  }, [consentVisible, getExpandedMaxHeight, mode, pendingApprovalQuestion, pendingImages.length, showHistory]);
   const getWindowSize = useCallback((expanded = isExpandedRef.current, measuredPanelHeight = panelHeightRef.current) => {
     return {
       width: expanded ? 340 : 60,
@@ -571,6 +534,7 @@ export function AgentChatBar({
       publishWindowMetrics(pending.x, pending.y, pending.expanded, pending.measuredPanelHeight);
     });
   }, [onWindowMetricsChange, publishWindowMetrics]);
+  const visibleVoiceTranscripts = mode === 'voice' ? voiceTranscripts.filter(item => item.text.trim()) : [];
 
   // Track incoming AI messages while collapsed
   useEffect(() => {
@@ -579,27 +543,40 @@ export function AgentChatBar({
     }
     prevMsgCount.current = chatMessages.length;
   }, [chatMessages.length, isExpanded]);
-  const displayUnread = totalUnread + localUnread;
-
-  // Auto-expand when triggered (e.g. on escalation)
   useEffect(() => {
-    if (autoExpandTrigger > 0) {
-      setLocalUnread(0);
-      setIsExpanded(true);
+    if (mode === 'voice') {
+      prevVoiceTranscriptCount.current = visibleVoiceTranscripts.length;
+    } else {
+      prevVoiceTranscriptCount.current = 0;
     }
-  }, [autoExpandTrigger]);
+    // Only reset when changing modes. New transcripts are handled below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
   useEffect(() => {
-    if (!consentVisible) return;
-    autoCollapsedForThinkingRef.current = false;
-    setShowHistory(false);
-    setLocalUnread(0);
-    setIsExpanded(true);
-  }, [consentVisible]);
+    const nextCount = visibleVoiceTranscripts.length;
+    if (mode === 'voice' && nextCount > prevVoiceTranscriptCount.current && !isExpanded) {
+      setLocalUnread(prev => prev + (nextCount - prevVoiceTranscriptCount.current));
+    }
+    prevVoiceTranscriptCount.current = nextCount;
+  }, [isExpanded, mode, visibleVoiceTranscripts.length]);
+  const displayUnread = totalUnread + localUnread;
+  const showMessageList = mode !== 'human' && (chatMessages.length > 0 || visibleVoiceTranscripts.length > 0 || Boolean(pendingApprovalQuestion) || isThinking && mode !== 'voice');
   useEffect(() => {
     if (isExpanded && localUnread > 0) {
       setLocalUnread(0);
     }
   }, [isExpanded, localUnread]);
+
+  // Auto-expand when triggered (e.g. on escalation)
+  useEffect(() => {
+    if (autoExpandTrigger > 0) setIsExpanded(true);
+  }, [autoExpandTrigger]);
+  useEffect(() => {
+    if (!consentVisible) return;
+    autoCollapsedForThinkingRef.current = false;
+    setShowHistory(false);
+    setIsExpanded(true);
+  }, [consentVisible]);
   useEffect(() => {
     return () => {
       if (metricsFrameRef.current != null) {
@@ -615,7 +592,6 @@ export function AgentChatBar({
       setIsExpanded(false);
     }
     if (pendingApprovalQuestion) {
-      setLocalUnread(0);
       setIsExpanded(true);
       autoCollapsedForThinkingRef.current = false;
     }
@@ -642,6 +618,17 @@ export function AgentChatBar({
   }, [isAndroidNativeWindow, pan, windowMetrics]);
   const tooltipSide = fabX < width / 2 ? 'right' : 'left';
   const expandedContentMinHeight = getExpandedWindowHeight(0);
+  const hasKeyboardDockContent = chatMessages.length > 0 || pendingImages.length > 0 || isThinking || Boolean(pendingApprovalQuestion) || consentVisible;
+  const keyboardDockHeight = keyboardAwareMode && keyboardHeight > 0 ? hasKeyboardDockContent ? Math.max(180, Math.min(300, height - keyboardHeight - 16)) : Math.min(166, Math.max(146, height - keyboardHeight - 16)) : 0;
+  const expandedContentMaxHeight = keyboardDockHeight || getExpandedMaxHeight();
+  const fixedChatChromeHeight = keyboardDockHeight > 0 ? 214 : 178;
+  const messageListMaxHeight = Math.max(keyboardDockHeight > 0 ? 40 : 72, expandedContentMaxHeight - fixedChatChromeHeight);
+  const keyboardDockStyle = keyboardDockHeight > 0 && !isAndroidNativeWindow ? {
+    left: Math.max(10, Math.round((width - 340) / 2)),
+    top: Math.max(10, height - keyboardHeight - keyboardDockHeight - 8),
+    height: keyboardDockHeight,
+    maxHeight: keyboardDockHeight
+  } : null;
   useEffect(() => {
     isExpandedRef.current = isExpanded;
     const clampedPosition = clampWindowPosition(panPositionRef.current.x, panPositionRef.current.y, isExpanded);
@@ -683,17 +670,23 @@ export function AgentChatBar({
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
     const keyboardMargin = 12;
     const showSub = Keyboard.addListener(showEvent, e => {
-      if (!isExpanded || mode !== 'text' || panelHeight <= 0) return;
+      const nextKeyboardHeight = e.endCoordinates.height;
+      setKeyboardHeight(nextKeyboardHeight);
+      setTimeout(() => scrollRef.current?.scrollToEnd?.({
+        animated: true
+      }), 80);
+      if (!isExpanded || mode !== 'text') return;
+      const effectivePanelHeight = getExpandedWindowHeight(panelHeight);
       if (isAndroidNativeWindow) {
         const currentY = panPositionRef.current.y;
-        const targetY = Math.max(keyboardMargin, height - e.endCoordinates.height - panelHeight - keyboardMargin);
+        const targetY = Math.max(keyboardMargin, height - nextKeyboardHeight - effectivePanelHeight - keyboardMargin);
         preKeyboardYRef.current = currentY;
         if (currentY <= targetY) return;
         publishNativeWindowPosition(panPositionRef.current.x, targetY);
         return;
       }
       pan.y.stopAnimation(currentY => {
-        const targetY = Math.max(keyboardMargin, height - e.endCoordinates.height - panelHeight - keyboardMargin);
+        const targetY = Math.max(keyboardMargin, height - nextKeyboardHeight - effectivePanelHeight - keyboardMargin);
 
         // Preserve the pre-keyboard position so we can restore it on hide.
         preKeyboardYRef.current = currentY;
@@ -708,6 +701,7 @@ export function AgentChatBar({
       });
     });
     const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
       const restoreY = preKeyboardYRef.current;
       if (restoreY == null) return;
       preKeyboardYRef.current = null;
@@ -725,7 +719,25 @@ export function AgentChatBar({
       showSub.remove();
       hideSub.remove();
     };
-  }, [height, isAndroidNativeWindow, isExpanded, mode, pan.y, panelHeight, publishNativeWindowPosition]);
+  }, [getExpandedWindowHeight, height, isAndroidNativeWindow, isExpanded, mode, pan.y, panelHeight, publishNativeWindowPosition]);
+  useEffect(() => {
+    if (!isExpanded || mode !== 'text' || keyboardHeight <= 0 || panelHeight <= 0) {
+      return;
+    }
+    const keyboardMargin = 12;
+    const targetY = Math.max(keyboardMargin, height - keyboardHeight - panelHeight - keyboardMargin);
+    const currentY = panPositionRef.current.y;
+    if (Math.abs(currentY - targetY) <= 2) return;
+    if (isAndroidNativeWindow) {
+      publishNativeWindowPosition(panPositionRef.current.x, targetY);
+      return;
+    }
+    Animated.timing(pan.y, {
+      toValue: targetY,
+      duration: 160,
+      useNativeDriver: false
+    }).start();
+  }, [height, isAndroidNativeWindow, isExpanded, keyboardHeight, mode, pan.y, panelHeight, publishNativeWindowPosition]);
   const panResponder = useMemo(() => PanResponder.create({
     onMoveShouldSetPanResponder: (_, gestureState) => {
       return Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5;
@@ -777,24 +789,27 @@ export function AgentChatBar({
     }
   }), [clampWindowPosition, isAndroidNativeWindow, pan, publishNativeWindowPosition, scheduleWindowMetricsPublish]);
   const jsDragHandlers = isAndroidNativeWindow ? undefined : panResponder.panHandlers;
-  const popupSideStyle = tooltipSide === 'right' ? styles.popupFromLeft : styles.popupFromRight;
   const handleSend = () => {
-    const hasImages = pendingImages.length > 0;
-    if (hasImages) {
-      // Allow send with images even when isThinking (bypass like RN)
-      onSend(text.trim() || '', pendingImages);
-      setText('');
-      setPendingImages([]);
-      return;
-    }
-    if (text.trim() && !isThinking) {
-      onSend(text.trim());
-      setText('');
-    }
+    const hasContent = text.trim() || pendingImages.length > 0;
+    if (!hasContent) return;
+    if (isThinking && !pendingImages.length) return;
+    const images = pendingImages.length > 0 ? pendingImages.map(({
+      base64,
+      mimeType
+    }) => ({
+      base64,
+      mimeType
+    })) : undefined;
+    onSend(text.trim() || '[Image]', images);
+    setText('');
+    setPendingImages([]);
   };
 
   // ─── HEAVY DEBUG LOGGING ──────────────────────────────────────
   logger.info('ChatBar', '★★★ RENDER — mode:', mode, '| selectedTicketId:', selectedTicketId, '| tickets:', tickets.length, '| availableModes:', availableModes, '| lastResult:', lastResult ? lastResult.message.substring(0, 60) : 'null', '| isExpanded:', isExpanded);
+  const hasCollapsedStatus = (isThinking || isActing || !!statusText?.trim() || mode === 'voice' && isAISpeaking) && !pendingApprovalQuestion && !isAndroidNativeWindow;
+  const showCollapsedUnread = !hasCollapsedStatus && localUnread > 0 && (chatMessages.length > 0 || visibleVoiceTranscripts.length > 0) && !isAndroidNativeWindow;
+  const showCollapsedDiscovery = !hasCollapsedStatus && !showCollapsedUnread && showDiscoveryTooltip && !isAndroidNativeWindow;
 
   // ─── FAB (Compressed) ──────────────────────────────────────
 
@@ -802,7 +817,7 @@ export function AgentChatBar({
     return /*#__PURE__*/_jsxs(Animated.View, {
       style: [styles.fabContainer, isAndroidNativeWindow ? styles.fabContainerNativeWindow : pan.getLayout()],
       ...(jsDragHandlers ?? {}),
-      children: [/*#__PURE__*/_jsx(Pressable, {
+      children: [/*#__PURE__*/_jsxs(Pressable, {
         style: [styles.fab, theme?.primaryColor ? {
           backgroundColor: theme.primaryColor
         } : undefined],
@@ -810,23 +825,34 @@ export function AgentChatBar({
           onTooltipDismiss?.();
           setLocalUnread(0);
           autoCollapsedForThinkingRef.current = false;
-          setIsExpanded(true);
+          if (onQuickActionsPress) {
+            onQuickActionsPress();
+          } else {
+            setIsExpanded(true);
+          }
         },
         accessibilityLabel: displayUnread > 0 ? `Open AI Agent Chat - ${displayUnread} unread messages` : 'Open AI Agent Chat',
-        children: isThinking ? /*#__PURE__*/_jsx(LoadingDots, {
+        children: [isThinking ? /*#__PURE__*/_jsx(LoadingDots, {
           size: 28,
           color: theme?.textColor || '#fff'
         }) : /*#__PURE__*/_jsx(AIBadge, {
           size: 28
-        })
-      }), showDiscoveryTooltip && !isAndroidNativeWindow && /*#__PURE__*/_jsx(DiscoveryTooltip, {
+        }), displayUnread > 0 && /*#__PURE__*/_jsx(View, {
+          style: styles.fabUnreadBadge,
+          pointerEvents: "none",
+          children: /*#__PURE__*/_jsx(Text, {
+            style: styles.fabUnreadBadgeText,
+            children: displayUnread > 99 ? '99+' : displayUnread
+          })
+        })]
+      }), showCollapsedDiscovery && /*#__PURE__*/_jsx(DiscoveryTooltip, {
         language: language,
         primaryColor: theme?.primaryColor,
         message: discoveryTooltipMessage,
         side: tooltipSide,
         onDismiss: () => onTooltipDismiss?.()
-      }), localUnread > 0 && chatMessages.length > 0 && !isAndroidNativeWindow && /*#__PURE__*/_jsx(Pressable, {
-        style: [styles.unreadPopup, popupSideStyle, isArabic ? styles.unreadPopupRTL : styles.unreadPopupLTR],
+      }), showCollapsedUnread && /*#__PURE__*/_jsx(Pressable, {
+        style: [styles.unreadPopup, tooltipSide === 'right' ? styles.collapsedPopupRight : styles.collapsedPopupLeft, isArabic ? styles.unreadPopupRTL : styles.unreadPopupLTR],
         onPress: () => {
           onTooltipDismiss?.();
           setLocalUnread(0);
@@ -836,16 +862,21 @@ export function AgentChatBar({
           style: [styles.unreadPopupText, {
             textAlign: isArabic ? 'right' : 'left'
           }],
-          numberOfLines: 2,
+          numberOfLines: 4,
           children: (() => {
+            if (mode === 'voice' && visibleVoiceTranscripts.length > 0) {
+              const unseenVoiceTranscripts = visibleVoiceTranscripts.slice(Math.max(0, visibleVoiceTranscripts.length - localUnread));
+              const previewText = unseenVoiceTranscripts.map(item => item.text.trim()).filter(Boolean).join('\n');
+              return previewText || (isArabic ? 'رسالة جديدة' : 'New message');
+            }
             const lastMsg = [...chatMessages].reverse().find(m => m.role === 'assistant');
             if (!lastMsg) return isArabic ? 'رسالة جديدة' : 'New message';
-            const content = Array.isArray(lastMsg.content) ? lastMsg.content.map(c => c.type === 'text' ? c.content : '').join('') : markdownToPlainText(String(lastMsg.previewText || lastMsg.content || '')).trim();
+            const content = Array.isArray(lastMsg.content) ? lastMsg.content.map(c => c.type === 'text' ? c.content : '').join('') : '';
             return content || (isArabic ? 'رسالة جديدة' : 'New message');
           })()
         })
-      }), isThinking && !pendingApprovalQuestion && !isAndroidNativeWindow && /*#__PURE__*/_jsxs(Pressable, {
-        style: [styles.statusPopup, popupSideStyle, isArabic ? styles.unreadPopupRTL : styles.unreadPopupLTR],
+      }), hasCollapsedStatus && /*#__PURE__*/_jsxs(Pressable, {
+        style: [styles.statusPopup, tooltipSide === 'right' ? styles.collapsedPopupRight : styles.collapsedPopupLeft, isArabic ? styles.unreadPopupRTL : styles.unreadPopupLTR],
         onPress: () => {
           autoCollapsedForThinkingRef.current = false;
           setIsExpanded(true);
@@ -858,15 +889,8 @@ export function AgentChatBar({
             textAlign: isArabic ? 'right' : 'left'
           }],
           numberOfLines: 2,
-          children: statusText || (isArabic ? 'جاري التنفيذ...' : 'Working...')
+          children: statusText || (mode === 'voice' && isAISpeaking ? 'Speaking...' : isArabic ? 'جاري التنفيذ...' : 'Working...')
         })]
-      }), displayUnread > 0 && /*#__PURE__*/_jsx(View, {
-        style: styles.fabUnreadBadge,
-        pointerEvents: "none",
-        children: /*#__PURE__*/_jsx(Text, {
-          style: styles.fabUnreadBadgeText,
-          children: displayUnread > 99 ? '99+' : displayUnread
-        })
       })]
     });
   }
@@ -877,8 +901,8 @@ export function AgentChatBar({
     style: [styles.expandedContainer, isAndroidNativeWindow ? styles.expandedContainerNativeWindow : pan.getLayout(), isAndroidNativeWindow ? {
       minHeight: expandedContentMinHeight
     } : null, {
-      maxHeight: height * 0.65
-    }, theme?.backgroundColor ? {
+      maxHeight: expandedContentMaxHeight
+    }, keyboardDockStyle, theme?.backgroundColor ? {
       backgroundColor: theme.backgroundColor
     } : undefined],
     onLayout: event => {
@@ -1099,9 +1123,9 @@ export function AgentChatBar({
         })
       })]
     }), !showHistory && /*#__PURE__*/_jsxs(_Fragment, {
-      children: [mode !== 'human' && chatMessages.length > 0 && /*#__PURE__*/_jsxs(ScrollView, {
+      children: [showMessageList && /*#__PURE__*/_jsxs(ScrollView, {
         style: [styles.messageList, {
-          maxHeight: height * 0.65 - 178
+          maxHeight: messageListMaxHeight
         }],
         nestedScrollEnabled: true,
         ref: scrollRef,
@@ -1123,13 +1147,26 @@ export function AgentChatBar({
               }]
             })
           }, msg.id || `${msg.role}-${Math.random()}`);
-        }), isThinking && /*#__PURE__*/_jsx(View, {
+        }), visibleVoiceTranscripts.map(transcript => {
+          const isUser = transcript.role === 'user';
+          return /*#__PURE__*/_jsx(View, {
+            style: [styles.messageBubble, isUser ? styles.messageBubbleUser : styles.messageBubbleAI, isUser && theme?.primaryColor ? {
+              backgroundColor: theme.primaryColor
+            } : undefined],
+            children: /*#__PURE__*/_jsx(Text, {
+              style: [styles.messageText, isUser ? styles.messageTextUser : styles.messageTextAI, {
+                textAlign: isArabic ? 'right' : 'left'
+              }],
+              children: transcript.text
+            })
+          }, transcript.id);
+        }), isThinking && mode !== 'voice' && /*#__PURE__*/_jsx(View, {
           style: [styles.messageBubble, styles.messageBubbleAI],
           children: /*#__PURE__*/_jsx(LoadingDots, {
             size: 18,
             color: "#fff"
           })
-        })]
+        }), afterMessagesContent]
       }), mode === 'text' && /*#__PURE__*/_jsxs(_Fragment, {
         children: [consentVisible ? /*#__PURE__*/_jsxs(View, {
           style: styles.approvalPanel,
@@ -1204,8 +1241,10 @@ export function AgentChatBar({
           isThinking: isThinking,
           isArabic: isArabic,
           theme: theme,
+          compact: keyboardDockHeight > 0,
           pendingImages: pendingImages,
-          setPendingImages: setPendingImages
+          onImagePicked: img => setPendingImages(prev => [...prev, img]),
+          onRemoveImage: idx => setPendingImages(prev => prev.filter((_, i) => i !== idx))
         })]
       }), mode === 'human' && !selectedTicketId && /*#__PURE__*/_jsx(ScrollView, {
         style: styles.ticketList,
@@ -1223,7 +1262,7 @@ export function AgentChatBar({
               children: [/*#__PURE__*/_jsx(Text, {
                 style: styles.ticketReason,
                 numberOfLines: 2,
-                children: markdownToPlainText(ticket.history.length > 0 ? ticket.history[ticket.history.length - 1]?.content ?? ticket.reason : ticket.reason)
+                children: ticket.history.length > 0 ? ticket.history[ticket.history.length - 1]?.content ?? ticket.reason : ticket.reason
               }), unreadCount > 0 && /*#__PURE__*/_jsx(View, {
                 style: styles.unreadBadge,
                 children: /*#__PURE__*/_jsx(Text, {
@@ -1240,7 +1279,38 @@ export function AgentChatBar({
             })]
           }, ticket.id);
         })
-      }), mode === 'human' && selectedTicketId && null, mode === 'voice' && /*#__PURE__*/_jsx(VoiceControlsRow, {
+      }), mode === 'human' && selectedTicketId && null, mode === 'voice' && pendingApprovalQuestion && onPendingApprovalAction && /*#__PURE__*/_jsxs(View, {
+        style: styles.approvalPanel,
+        children: [/*#__PURE__*/_jsx(View, {
+          style: [styles.messageBubble, styles.messageBubbleAI],
+          children: /*#__PURE__*/_jsx(Text, {
+            style: [styles.messageText, styles.messageTextAI, {
+              textAlign: isArabic ? 'right' : 'left'
+            }],
+            children: pendingApprovalQuestion
+          })
+        }), /*#__PURE__*/_jsx(Text, {
+          style: styles.approvalHint,
+          children: "The AI agent is requesting permission to perform this action. Tap \"Allow\" to approve, or \"Don\u2019t Allow\" to cancel."
+        }), /*#__PURE__*/_jsxs(View, {
+          style: styles.approvalActions,
+          children: [/*#__PURE__*/_jsx(Pressable, {
+            style: [styles.approvalActionBtn, styles.approvalActionSecondary],
+            onPress: () => onPendingApprovalAction('reject'),
+            children: /*#__PURE__*/_jsx(Text, {
+              style: [styles.approvalActionText, styles.approvalActionSecondaryText],
+              children: "Don\u2019t Allow"
+            })
+          }), /*#__PURE__*/_jsx(Pressable, {
+            style: [styles.approvalActionBtn, styles.approvalActionPrimary],
+            onPress: () => onPendingApprovalAction('approve'),
+            children: /*#__PURE__*/_jsx(Text, {
+              style: [styles.approvalActionText, styles.approvalActionPrimaryText],
+              children: "Allow"
+            })
+          })]
+        })]
+      }), mode === 'voice' && /*#__PURE__*/_jsx(VoiceControlsRow, {
         isMicActive: isMicActive,
         isSpeakerMuted: isSpeakerMuted,
         onMicToggle: onMicToggle || (() => {}),
@@ -1286,6 +1356,7 @@ const styles = StyleSheet.create({
   unreadPopup: {
     position: 'absolute',
     bottom: 70,
+    // Float above the FAB
     width: 200,
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -1298,6 +1369,12 @@ const styles = StyleSheet.create({
     },
     shadowOpacity: 0.25,
     shadowRadius: 5
+  },
+  collapsedPopupRight: {
+    left: 0
+  },
+  collapsedPopupLeft: {
+    right: 0
   },
   unreadPopupLTR: {
     borderBottomLeftRadius: 4
@@ -1331,12 +1408,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8
-  },
-  popupFromLeft: {
-    left: 0
-  },
-  popupFromRight: {
-    right: 0
   },
   statusPopupText: {
     color: '#111827',
@@ -1454,10 +1525,7 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 16,
     marginBottom: 8,
-    maxWidth: '85%',
-    minWidth: 0,
-    flexShrink: 1,
-    overflow: 'hidden'
+    maxWidth: '85%'
   },
   messageBubbleUser: {
     alignSelf: 'flex-end',
@@ -1471,15 +1539,7 @@ const styles = StyleSheet.create({
   },
   messageText: {
     fontSize: 14,
-    lineHeight: 20,
-    maxWidth: '100%',
-    minWidth: 0,
-    flexShrink: 1,
-    flexWrap: 'wrap',
-    ...(Platform.OS === 'web' ? {
-      overflowWrap: 'anywhere',
-      wordBreak: 'break-word'
-    } : null)
+    lineHeight: 20
   },
   messageTextUser: {
     color: '#fff'
@@ -1607,6 +1667,9 @@ const styles = StyleSheet.create({
     minHeight: 48,
     maxHeight: 120 // wrap up to ~5 lines before scrolling internal
   },
+  inputCompact: {
+    maxHeight: 72
+  },
   inputRTL: {
     textAlign: 'right',
     writingDirection: 'rtl'
@@ -1622,18 +1685,43 @@ const styles = StyleSheet.create({
   sendButtonDisabled: {
     opacity: 0.5
   },
-  stopButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.16)',
+  sendButtonText: {
+    fontSize: 18
+  },
+  imagePickerButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
     justifyContent: 'center',
     alignItems: 'center'
   },
-  sendButtonText: {
-    fontSize: 18
+  imagePreviewRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+    maxHeight: 56
+  },
+  imagePreviewThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    marginRight: 6,
+    overflow: 'hidden'
+  },
+  imagePreviewImage: {
+    width: 48,
+    height: 48
+  },
+  imagePreviewRemove: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   dictationButton: {
     width: 44,
@@ -1645,43 +1733,6 @@ const styles = StyleSheet.create({
   },
   dictationButtonActive: {
     backgroundColor: 'rgba(255, 59, 48, 0.3)'
-  },
-  attachButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  pendingImagesRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 4,
-    flexWrap: 'wrap'
-  },
-  pendingImageThumb: {
-    position: 'relative',
-    width: 56,
-    height: 56
-  },
-  pendingImageRemove: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(220, 53, 69, 0.9)',
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  pendingImageRemoveText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 18,
-    textAlign: 'center'
   },
   ticketList: {
     maxHeight: 260,

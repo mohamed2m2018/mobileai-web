@@ -1,9 +1,16 @@
 "use strict";
 
-import React, { useState } from 'react';
-import { MobileAI } from "../services/telemetry/MobileAI.js";
-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+/**
+ * CSAT Survey — Customer Satisfaction component.
+ *
+ * Shown after a support conversation ends (or after idle timeout).
+ * Supports three rating types: emoji, stars, thumbs.
+ */
 
+import { useState } from 'react';
+import { View, Text, TouchableOpacity, TextInput, StyleSheet } from 'react-native';
+import { MobileAI } from "../services/telemetry/index.js";
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 const EMOJI_OPTIONS = [{
   emoji: '😡',
   label: 'Terrible',
@@ -41,17 +48,11 @@ const CES_OPTIONS = [{
   label: 'Very Easy',
   score: 5
 }];
+const NPS_SCALE = Array.from({
+  length: 11
+}, (_, i) => i); // 0–10
 
-function baseButtonStyle(selected, primaryColor) {
-  return {
-    border: `1px solid ${selected ? primaryColor : 'rgba(255,255,255,0.1)'}`,
-    background: selected ? `${primaryColor}22` : 'rgba(255,255,255,0.04)',
-    color: '#fff',
-    borderRadius: 16,
-    cursor: 'pointer'
-  };
-}
-
+const STAR_COUNT = 5;
 export function CSATSurvey({
   config,
   metadata,
@@ -61,13 +62,14 @@ export function CSATSurvey({
   const [selectedScore, setSelectedScore] = useState(null);
   const [feedback, setFeedback] = useState('');
   const [submitted, setSubmitted] = useState(false);
-  const primary = theme?.primaryColor ?? '#7B68EE';
+  const primary = theme?.primaryColor ?? '#8b5cf6';
   const textColor = theme?.textColor ?? '#ffffff';
-  const backgroundColor = theme?.backgroundColor ?? 'rgba(26, 26, 46, 0.98)';
+  const bgColor = theme?.backgroundColor ?? 'rgba(26, 26, 46, 0.98)';
   const surveyType = config.surveyType ?? 'csat';
   const ratingType = config.ratingType ?? 'emoji';
-  const question = config.question ?? (surveyType === 'ces' ? 'How easy was it to get the help you needed?' : 'How was your experience?');
-  const submit = () => {
+  const defaultQuestion = surveyType === 'nps' ? 'How likely are you to recommend us to a friend or colleague?' : surveyType === 'ces' ? 'How easy was it to get the help you needed?' : 'How was your experience?';
+  const question = config.question ?? defaultQuestion;
+  const handleSubmit = () => {
     if (selectedScore === null) return;
     const rating = {
       score: selectedScore,
@@ -76,8 +78,10 @@ export function CSATSurvey({
     };
     config.onSubmit(rating);
     setSubmitted(true);
-    const fcrAchieved = selectedScore >= 4 || ratingType === 'thumbs' && selectedScore === 1;
-    const eventName = surveyType === 'ces' ? 'ces_response' : 'csat_response';
+
+    // Track CSAT/CES/NPS response
+    const fcrAchieved = surveyType === 'nps' ? selectedScore >= 9 : selectedScore >= 4 || ratingType === 'thumbs' && selectedScore === 5;
+    const eventName = surveyType === 'nps' ? 'nps_response' : surveyType === 'ces' ? 'ces_response' : 'csat_response';
     MobileAI.track(eventName, {
       score: selectedScore,
       fcrAchieved,
@@ -89,195 +93,325 @@ export function CSATSurvey({
         ticketId: metadata?.ticketId
       });
     }
-    setTimeout(() => {
-      onDismiss();
-    }, 1200);
+
+    // Auto-dismiss after 1.5s
+    setTimeout(onDismiss, 1500);
   };
   if (submitted) {
-    return /*#__PURE__*/_jsx("div", {
-      style: {
-        width: 360,
-        maxWidth: 'calc(100vw - 40px)',
-        borderRadius: 24,
-        padding: 24,
-        background: backgroundColor,
-        color: textColor,
-        boxShadow: '0 24px 60px rgba(0,0,0,0.36)',
-        textAlign: 'center',
-        fontSize: 16,
-        fontWeight: 700
-      },
-      children: "Thank you for your feedback."
+    return /*#__PURE__*/_jsx(View, {
+      style: [styles.container, {
+        backgroundColor: bgColor
+      }],
+      children: /*#__PURE__*/_jsx(Text, {
+        style: [styles.thankYou, {
+          color: textColor
+        }],
+        children: "Thank you for your feedback! \uD83D\uDE4F"
+      })
     });
   }
-  return /*#__PURE__*/_jsxs("div", {
-    style: {
-      width: 380,
-      maxWidth: 'calc(100vw - 40px)',
-      borderRadius: 24,
-      padding: 24,
-      background: backgroundColor,
-      color: textColor,
-      boxShadow: '0 24px 60px rgba(0,0,0,0.36)',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 16
-    },
-    children: [/*#__PURE__*/_jsx("div", {
-      style: {
-        fontSize: 18,
-        fontWeight: 800,
-        lineHeight: 1.3
-      },
+  return /*#__PURE__*/_jsxs(View, {
+    style: [styles.container, {
+      backgroundColor: bgColor
+    }],
+    children: [/*#__PURE__*/_jsx(Text, {
+      style: [styles.question, {
+        color: textColor
+      }],
       children: question
-    }), surveyType === 'ces' ? /*#__PURE__*/_jsx("div", {
-      style: {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
-        gap: 8
-      },
-      children: CES_OPTIONS.map(option => /*#__PURE__*/_jsxs("button", {
-        type: "button",
-        onClick: () => setSelectedScore(option.score),
-        style: {
-          ...baseButtonStyle(selectedScore === option.score, primary),
-          padding: '12px 8px'
-        },
-        children: [/*#__PURE__*/_jsx("div", {
-          style: {
-            fontSize: 18,
-            fontWeight: 800,
-            marginBottom: 4
-          },
-          children: option.score
-        }), /*#__PURE__*/_jsx("div", {
-          style: {
-            fontSize: 11,
-            color: selectedScore === option.score ? textColor : 'rgba(255,255,255,0.72)'
-          },
-          children: option.label
+    }), /*#__PURE__*/_jsxs(View, {
+      style: styles.ratingContainer,
+      children: [surveyType === 'ces' && /*#__PURE__*/_jsx(View, {
+        style: styles.cesRow,
+        children: CES_OPTIONS.map(opt => /*#__PURE__*/_jsxs(TouchableOpacity, {
+          onPress: () => setSelectedScore(opt.score),
+          style: [styles.cesButton, selectedScore === opt.score && {
+            backgroundColor: `${primary}30`,
+            borderColor: primary
+          }],
+          activeOpacity: 0.7,
+          children: [/*#__PURE__*/_jsx(Text, {
+            style: [styles.cesNumber, {
+              color: selectedScore === opt.score ? primary : textColor
+            }],
+            children: opt.score
+          }), /*#__PURE__*/_jsx(Text, {
+            style: [styles.cesLabel, {
+              color: selectedScore === opt.score ? primary : '#71717a'
+            }],
+            children: opt.label
+          })]
+        }, opt.score))
+      }), surveyType === 'nps' && /*#__PURE__*/_jsxs(View, {
+        children: [/*#__PURE__*/_jsx(View, {
+          style: styles.npsRow,
+          children: NPS_SCALE.map(score => /*#__PURE__*/_jsx(TouchableOpacity, {
+            onPress: () => setSelectedScore(score),
+            style: [styles.npsButton, selectedScore === score && {
+              backgroundColor: `${primary}30`,
+              borderColor: primary
+            }],
+            activeOpacity: 0.7,
+            children: /*#__PURE__*/_jsx(Text, {
+              style: [styles.npsNumber, {
+                color: selectedScore === score ? primary : textColor
+              }],
+              children: score
+            })
+          }, score))
+        }), /*#__PURE__*/_jsxs(View, {
+          style: styles.npsLabels,
+          children: [/*#__PURE__*/_jsx(Text, {
+            style: {
+              color: '#71717a',
+              fontSize: 10
+            },
+            children: "Not likely"
+          }), /*#__PURE__*/_jsx(Text, {
+            style: {
+              color: '#71717a',
+              fontSize: 10
+            },
+            children: "Very likely"
+          })]
         })]
-      }, option.score))
-    }) : ratingType === 'stars' ? /*#__PURE__*/_jsx("div", {
-      style: {
-        display: 'flex',
-        justifyContent: 'center',
-        gap: 8
-      },
-      children: [1, 2, 3, 4, 5].map(score => /*#__PURE__*/_jsx("button", {
-        type: "button",
-        onClick: () => setSelectedScore(score),
-        style: {
-          border: 'none',
-          background: 'transparent',
-          fontSize: 34,
-          cursor: 'pointer',
-          color: selectedScore !== null && score <= selectedScore ? '#fbbf24' : 'rgba(255,255,255,0.28)'
-        },
-        children: "★"
-      }, score))
-    }) : ratingType === 'thumbs' ? /*#__PURE__*/_jsxs("div", {
-      style: {
-        display: 'flex',
-        justifyContent: 'center',
-        gap: 12
-      },
-      children: [/*#__PURE__*/_jsx("button", {
-        type: "button",
-        onClick: () => setSelectedScore(0),
-        style: {
-          ...baseButtonStyle(selectedScore === 0, '#ef4444'),
-          padding: '14px 18px',
-          fontSize: 28
-        },
-        children: "👎"
-      }), /*#__PURE__*/_jsx("button", {
-        type: "button",
-        onClick: () => setSelectedScore(1),
-        style: {
-          ...baseButtonStyle(selectedScore === 1, primary),
-          padding: '14px 18px',
-          fontSize: 28
-        },
-        children: "👍"
+      }), surveyType === 'csat' && ratingType === 'emoji' && /*#__PURE__*/_jsx(View, {
+        style: styles.emojiRow,
+        children: EMOJI_OPTIONS.map(opt => /*#__PURE__*/_jsxs(TouchableOpacity, {
+          onPress: () => setSelectedScore(opt.score),
+          style: [styles.emojiButton, selectedScore === opt.score && {
+            backgroundColor: `${primary}30`,
+            borderColor: primary
+          }],
+          activeOpacity: 0.7,
+          children: [/*#__PURE__*/_jsx(Text, {
+            style: styles.emoji,
+            children: opt.emoji
+          }), /*#__PURE__*/_jsx(Text, {
+            style: [styles.emojiLabel, {
+              color: selectedScore === opt.score ? primary : '#71717a'
+            }],
+            children: opt.label
+          })]
+        }, opt.score))
+      }), surveyType === 'csat' && ratingType === 'stars' && /*#__PURE__*/_jsx(View, {
+        style: styles.starsRow,
+        children: Array.from({
+          length: STAR_COUNT
+        }, (_, i) => i + 1).map(star => /*#__PURE__*/_jsx(TouchableOpacity, {
+          onPress: () => setSelectedScore(star),
+          activeOpacity: 0.7,
+          children: /*#__PURE__*/_jsx(Text, {
+            style: [styles.star, {
+              color: selectedScore !== null && star <= selectedScore ? '#fbbf24' : '#52525b'
+            }],
+            children: "\u2605"
+          })
+        }, star))
+      }), surveyType === 'csat' && ratingType === 'thumbs' && /*#__PURE__*/_jsxs(View, {
+        style: styles.thumbsRow,
+        children: [/*#__PURE__*/_jsx(TouchableOpacity, {
+          onPress: () => setSelectedScore(1),
+          style: [styles.thumbButton, selectedScore === 1 && {
+            backgroundColor: 'rgba(239, 68, 68, 0.2)',
+            borderColor: '#ef4444'
+          }],
+          activeOpacity: 0.7,
+          children: /*#__PURE__*/_jsx(Text, {
+            style: [styles.thumbEmoji, selectedScore === 1 && {
+              opacity: 1
+            }],
+            children: "\uD83D\uDC4E"
+          })
+        }), /*#__PURE__*/_jsx(TouchableOpacity, {
+          onPress: () => setSelectedScore(5),
+          style: [styles.thumbButton, selectedScore === 5 && {
+            backgroundColor: 'rgba(34, 197, 94, 0.2)',
+            borderColor: '#22c55e'
+          }],
+          activeOpacity: 0.7,
+          children: /*#__PURE__*/_jsx(Text, {
+            style: [styles.thumbEmoji, selectedScore === 5 && {
+              opacity: 1
+            }],
+            children: "\uD83D\uDC4D"
+          })
+        })]
       })]
-    }) : /*#__PURE__*/_jsx("div", {
-      style: {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
-        gap: 8
-      },
-      children: EMOJI_OPTIONS.map(option => /*#__PURE__*/_jsxs("button", {
-        type: "button",
-        onClick: () => setSelectedScore(option.score),
-        style: {
-          ...baseButtonStyle(selectedScore === option.score, primary),
-          padding: '12px 8px'
-        },
-        children: [/*#__PURE__*/_jsx("div", {
-          style: {
-            fontSize: 24,
-            marginBottom: 4
-          },
-          children: option.emoji
-        }), /*#__PURE__*/_jsx("div", {
-          style: {
-            fontSize: 11,
-            color: selectedScore === option.score ? textColor : 'rgba(255,255,255,0.72)'
-          },
-          children: option.label
-        })]
-      }, option.score))
-    }), /*#__PURE__*/_jsx("textarea", {
+    }), selectedScore !== null && /*#__PURE__*/_jsx(TextInput, {
+      style: [styles.feedbackInput, {
+        color: textColor
+      }],
+      placeholder: "Any additional feedback? (optional)",
+      placeholderTextColor: "#52525b",
       value: feedback,
-      onChange: event => setFeedback(event.target.value),
-      placeholder: "Anything you'd like us to know? (optional)",
-      rows: 3,
-      style: {
-        width: '100%',
-        borderRadius: 16,
-        border: '1px solid rgba(255,255,255,0.1)',
-        background: 'rgba(255,255,255,0.04)',
-        color: textColor,
-        padding: '12px 14px',
-        resize: 'vertical',
-        outline: 'none',
-        font: 'inherit',
-        boxSizing: 'border-box'
-      }
-    }), /*#__PURE__*/_jsxs("div", {
-      style: {
-        display: 'flex',
-        gap: 10,
-        justifyContent: 'flex-end'
-      },
-      children: [/*#__PURE__*/_jsx("button", {
-        type: "button",
-        onClick: onDismiss,
-        style: {
-          border: '1px solid rgba(255,255,255,0.12)',
-          background: 'transparent',
-          color: textColor,
-          borderRadius: 999,
-          padding: '10px 14px',
-          cursor: 'pointer'
-        },
-        children: "Skip"
-      }), /*#__PURE__*/_jsx("button", {
-        type: "button",
-        disabled: selectedScore === null,
-        onClick: submit,
-        style: {
-          border: 'none',
-          background: selectedScore === null ? 'rgba(123,104,238,0.45)' : primary,
-          color: '#fff',
-          borderRadius: 999,
-          padding: '10px 16px',
-          cursor: selectedScore === null ? 'default' : 'pointer',
-          fontWeight: 700
-        },
-        children: "Submit"
+      onChangeText: setFeedback,
+      multiline: true,
+      maxLength: 500
+    }), /*#__PURE__*/_jsxs(View, {
+      style: styles.actions,
+      children: [/*#__PURE__*/_jsx(TouchableOpacity, {
+        onPress: onDismiss,
+        activeOpacity: 0.7,
+        children: /*#__PURE__*/_jsx(Text, {
+          style: styles.dismissText,
+          children: "Skip"
+        })
+      }), selectedScore !== null && /*#__PURE__*/_jsx(TouchableOpacity, {
+        style: [styles.submitButton, {
+          backgroundColor: primary
+        }],
+        onPress: handleSubmit,
+        activeOpacity: 0.7,
+        children: /*#__PURE__*/_jsx(Text, {
+          style: [styles.submitText, {
+            color: textColor
+          }],
+          children: "Submit"
+        })
       })]
     })]
   });
 }
+const styles = StyleSheet.create({
+  container: {
+    borderRadius: 16,
+    padding: 20,
+    margin: 12
+  },
+  question: {
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 16
+  },
+  thankYou: {
+    fontSize: 16,
+    fontWeight: '500',
+    textAlign: 'center',
+    paddingVertical: 12
+  },
+  ratingContainer: {
+    marginBottom: 12
+  },
+  emojiRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8
+  },
+  emojiButton: {
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'transparent'
+  },
+  emoji: {
+    fontSize: 28
+  },
+  emojiLabel: {
+    fontSize: 10,
+    marginTop: 4,
+    fontWeight: '500'
+  },
+  npsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 2
+  },
+  npsButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 36,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'transparent'
+  },
+  npsNumber: {
+    fontSize: 14,
+    fontWeight: '600'
+  },
+  npsLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    paddingHorizontal: 2
+  },
+  cesRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 4
+  },
+  cesButton: {
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    minWidth: 60
+  },
+  cesNumber: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    marginBottom: 4
+  },
+  cesLabel: {
+    fontSize: 9,
+    fontWeight: '600',
+    textAlign: 'center'
+  },
+  starsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8
+  },
+  star: {
+    fontSize: 36
+  },
+  thumbsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 20
+  },
+  thumbButton: {
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'transparent'
+  },
+  thumbEmoji: {
+    fontSize: 36
+  },
+  feedbackInput: {
+    borderWidth: 1,
+    borderColor: '#3f3f46',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 14,
+    minHeight: 60,
+    textAlignVertical: 'top',
+    marginBottom: 12
+  },
+  actions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  dismissText: {
+    color: '#71717a',
+    fontSize: 14
+  },
+  submitButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10
+  },
+  submitText: {
+    fontSize: 14,
+    fontWeight: '600'
+  }
+});
+//# sourceMappingURL=CSATSurvey.js.map
