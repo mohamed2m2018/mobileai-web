@@ -6,6 +6,7 @@ import { AgentRuntime } from '../../core/AgentRuntime.js';
 import { actionRegistry } from '../../core/ActionRegistry.js';
 import { IdleDetector } from '../../core/IdleDetector.js';
 import { buildVoiceSystemPrompt } from '../../core/systemPrompt.js';
+import { setTwomiliaBase } from '../../config/endpoints.js';
 import {
   createAIMessage,
   markdownToPlainText,
@@ -1425,6 +1426,17 @@ export function AIAgent({
   useEffect(() => {
     selectedTicketIdRef.current = selectedTicketId;
   }, [selectedTicketId]);
+  // Route conversation history, telemetry, flags and escalation to the host's
+  // OWN backend (the proxyUrl origin) instead of the Twomilia cloud default —
+  // so self-hosted / local setups capture their own data. No proxyUrl → cloud.
+  useEffect(() => {
+    if (!proxyUrl || typeof window === 'undefined') return;
+    try {
+      setTwomiliaBase(new URL(proxyUrl, window.location.href).origin);
+    } catch {
+      /* invalid proxyUrl → keep cloud default */
+    }
+  }, [proxyUrl]);
   useEffect(() => {
     let cancelled = false;
     void initDeviceId()

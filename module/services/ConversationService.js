@@ -22,7 +22,11 @@ import { logger } from "../utils/logger.js";
 function toPayload(msgs) {
   return msgs.filter(m => m.role === 'user' || m.role === 'assistant').filter(m => m.previewText.trim().length > 0).map(m => ({
     role: m.role,
-    content: m.content,
+    // The backend stores content as a plain string. Web messages carry
+    // rich-content nodes (arrays/objects), so flatten to text before sending —
+    // otherwise prisma.aiConversation.create() rejects the non-string value
+    // (500). RN already sends string content, so this is a no-op there.
+    content: typeof m.content === 'string' ? m.content : richContentToPlainText(m.content),
     previewText: m.previewText,
     timestamp: m.timestamp
   }));

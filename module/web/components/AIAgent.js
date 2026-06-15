@@ -5,6 +5,7 @@ import { AgentRuntime } from "../../core/AgentRuntime.js";
 import { actionRegistry } from "../../core/ActionRegistry.js";
 import { IdleDetector } from "../../core/IdleDetector.js";
 import { buildVoiceSystemPrompt } from "../../core/systemPrompt.js";
+import { setTwomiliaBase } from "../../config/endpoints.js";
 import {
   createAIMessage,
   markdownToPlainText,
@@ -1367,6 +1368,13 @@ function AIAgent({
   useEffect(() => {
     selectedTicketIdRef.current = selectedTicketId;
   }, [selectedTicketId]);
+  useEffect(() => {
+    if (!proxyUrl || typeof window === "undefined") return;
+    try {
+      setTwomiliaBase(new URL(proxyUrl, window.location.href).origin);
+    } catch {
+    }
+  }, [proxyUrl]);
   useEffect(() => {
     let cancelled = false;
     void initDeviceId().then((id) => {
