@@ -145,7 +145,7 @@ const routeRequirements = [
     navigate: ["Safe route", "/safe"]
   },
   {
-    name: "ignored MobileAI overlay route is excluded",
+    name: "ignored Twomilia overlay route is excluded",
     html: `
       <a data-mobileai-ignore="true" href="/overlay-action">Overlay action</a>
       <a href="/real-action">Real action</a>

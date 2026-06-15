@@ -1,5 +1,5 @@
 /**
- * Codegen spec for MobileAIFloatingOverlay native view.
+ * Codegen spec for the Twomilia floating overlay native view.
  *
  * This file is required by React Native's Codegen (New Architecture / Fabric).
  * It defines the TypeScript interface for the native view. During the build,

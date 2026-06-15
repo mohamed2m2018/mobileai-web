@@ -74,11 +74,27 @@ function isIFrameElement(node) {
 function isShadowRootNode(node) {
   return !!node && typeof node === 'object' && 'host' in node && typeof node.querySelectorAll === 'function';
 }
+// data-twomilia-ignore is canonical; data-mobileai-ignore kept for back-compat.
+// Hosts can also pass `ignoreSelectors` to init() to hide regions WITHOUT markup.
+const BASE_IGNORE_SELECTOR = '[data-twomilia-ignore="true"], [data-mobileai-ignore="true"]';
+let configuredIgnoreSelector = '';
+function setConfiguredIgnoreSelector(selectors) {
+  configuredIgnoreSelector = Array.isArray(selectors) && selectors.length ? selectors.join(', ') : '';
+}
 function isIgnoredByAgent(element) {
-  return !!element.closest('[data-mobileai-ignore="true"]');
+  const sel = configuredIgnoreSelector ? `${BASE_IGNORE_SELECTOR}, ${configuredIgnoreSelector}` : BASE_IGNORE_SELECTOR;
+  try {
+    return !!element.closest(sel);
+  } catch {
+    return !!element.closest(BASE_IGNORE_SELECTOR);
+  }
 }
 function isIgnoredHitTarget(target) {
-  return !!target && typeof target.closest === 'function' && !!target.closest('[data-mobileai-ignore="true"]');
+  // The agent's own widget (the mount host [data-mobileai-root] and any
+  // [data-mobileai-ignore] overlay) floats over the page. It must NOT count as
+  // occlusion in the top-element check, otherwise the agent goes blind to any
+  // element sitting behind its own panel (e.g. login fields under the chat).
+  return !!target && typeof target.closest === 'function' && !!target.closest('[data-twomilia-ignore="true"], [data-mobileai-ignore="true"], [data-mobileai-root]');
 }
 function getClientRectsSafe(element) {
   try {
@@ -105,6 +121,10 @@ function elementIntersectsViewport(element, win, config = STRUCTURE_VIEWPORT_CON
   if (!win || !isHTMLElement(element)) return false;
   return getClientRectsSafe(element).some(rect => rectIntersectsViewport(rect, win, config));
 }
+function isFormControl(element) {
+  const tag = element.tagName?.toLowerCase();
+  return tag === 'input' || tag === 'select' || tag === 'textarea';
+}
 function isVisible(element, win, config = DEFAULT_CONFIG) {
   if (!win) return false;
   const rects = getClientRectsSafe(element);
@@ -114,7 +134,14 @@ function isVisible(element, win, config = DEFAULT_CONFIG) {
   if (!win.getComputedStyle) return true;
   const style = win.getComputedStyle(element);
   if (!style) return true;
-  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+  if (style.display === 'none' || style.visibility === 'hidden') {
+    return false;
+  }
+  // Design systems overlay a real but opacity:0 form control on a styled proxy
+  // (the "visually-hidden input" accessibility pattern, e.g. custom checkboxes,
+  // radios, switches, file pickers). Such sized controls are the real click
+  // targets, so keep them visible to the agent rather than dropping them.
+  if (style.opacity === '0' && !isFormControl(element)) {
     return false;
   }
   if (modeRequiresViewport(config)) {
@@ -192,6 +219,73 @@ function getInputLabel(element) {
   }
   return element.name?.trim() || fallback || 'Input field';
 }
+// Icon-only controls (theme toggle, menu, search, close, …) usually carry no
+// text/aria-label — their meaning lives in the icon class name. Recover a usable
+// label from the icon library's class token, framework-agnostically. Covers
+// PrimeIcons (pi-), Font Awesome (fa-), Bootstrap (bi-), Tabler (ti-), Material
+// (icons/symbols ligature text), MDI, Feather/Lucide, Ionicons, Boxicons, etc.
+const ICON_CLASS_RE = /^(?:pi|fa[srlbdk]?|bi|ti|mdi|glyphicon|icon|feather|lucide|ion|ionic|eva|bx[srl]?|la[srb]?|tabler|ph|gg|carbon|vaadin)-([a-z0-9]+(?:-[a-z0-9]+)*)$/i;
+const ICON_STYLE_WORDS = new Set(['solid', 'regular', 'light', 'thin', 'duotone', 'brands', 'sharp', 'fw', 'lg', 'sm', 'xs', 'xl', '2x', '3x', '4x', '5x', 'spin', 'pulse', 'border', 'rotate', 'flip', 'stack', 'inverse', 'active', 'disabled', 'icon', 'svg']);
+const ICON_SYNONYMS = {
+  bars: 'menu', menu: 'menu', list: 'menu', hamburger: 'menu',
+  sun: 'light mode', moon: 'dark mode', palette: 'theme', brush: 'theme', 'paint-bucket': 'theme',
+  ellipsis: 'more options', 'ellipsis-v': 'more options', 'ellipsis-h': 'more options', 'dots-vertical': 'more options', 'dots-horizontal': 'more options', 'more-vertical': 'more options', 'more-horizontal': 'more options', 'dots-3': 'more options',
+  cog: 'settings', cogs: 'settings', gear: 'settings', settings: 'settings', sliders: 'settings', 'sliders-h': 'settings', adjustments: 'settings',
+  search: 'search', 'magnifying-glass': 'search',
+  times: 'close', xmark: 'close', x: 'close', close: 'close', 'times-circle': 'close', 'x-circle': 'close',
+  bell: 'notifications', 'bell-o': 'notifications',
+  user: 'account', 'user-circle': 'account', person: 'account', account: 'account',
+  trash: 'delete', 'trash-2': 'delete', 'trash-can': 'delete', bin: 'delete',
+  pencil: 'edit', 'pencil-square': 'edit', edit: 'edit', pen: 'edit',
+  plus: 'add', 'plus-circle': 'add', add: 'add',
+  'chevron-down': 'expand', 'chevron-right': 'expand', 'angle-down': 'expand', 'angle-right': 'expand', 'caret-down': 'expand', 'caret-right': 'expand',
+  download: 'download', upload: 'upload', filter: 'filter', refresh: 'refresh', sync: 'refresh',
+  heart: 'favorite', star: 'favorite', share: 'share', 'share-alt': 'share', 'sign-out': 'log out', logout: 'log out', 'sign-in': 'log in', login: 'log in',
+  home: 'home', envelope: 'mail', mail: 'mail', calendar: 'calendar', cart: 'cart', 'shopping-cart': 'cart', 'shopping-bag': 'cart'
+};
+function humanizeIconToken(token) {
+  const key = String(token || '').toLowerCase().trim();
+  if (!key) return '';
+  if (ICON_SYNONYMS[key]) return ICON_SYNONYMS[key];
+  return key.replace(/[-_]+/g, ' ').trim();
+}
+function deriveIconLabel(element) {
+  if (!element || typeof element.querySelectorAll !== 'function') return '';
+  const candidates = [element];
+  Array.from(element.querySelectorAll('i, span, svg, use, [class]')).slice(0, 12).forEach(el => candidates.push(el));
+  for (const el of candidates) {
+    const cls = el.getAttribute && typeof el.getAttribute('class') === 'string' ? el.getAttribute('class') : '';
+    // Material Icons / Symbols: the ligature text content IS the icon name.
+    if (/material-(icons|symbols)/i.test(cls)) {
+      const text = normalizeText(el.textContent || '');
+      if (text && /^[a-z0-9_ ]{2,28}$/i.test(text)) return humanizeIconToken(text.replace(/\s+/g, '-'));
+    }
+    if (cls) {
+      for (const tok of cls.split(/\s+/)) {
+        const match = tok.match(ICON_CLASS_RE);
+        if (match && match[1] && match[1].length > 1 && !ICON_STYLE_WORDS.has(match[1].toLowerCase())) {
+          return humanizeIconToken(match[1]);
+        }
+      }
+    }
+    // <use href="#icon-sun"> sprite references.
+    const href = el.getAttribute && (el.getAttribute('href') || el.getAttribute('xlink:href'));
+    if (href && href.includes('#')) {
+      const name = href.split('#').pop().replace(/^icon[-_]?/i, '');
+      if (name && /^[a-z0-9_-]{2,28}$/i.test(name)) return humanizeIconToken(name);
+    }
+    // data-icon attribute (Font Awesome SVG, others).
+    const dataIcon = el.getAttribute && el.getAttribute('data-icon');
+    if (dataIcon && /^[a-z0-9_-]{2,28}$/i.test(dataIcon)) return humanizeIconToken(dataIcon);
+  }
+  // <svg><title>…</title></svg> accessible name.
+  const svgTitle = element.querySelector && element.querySelector('title');
+  if (svgTitle) {
+    const text = normalizeText(svgTitle.textContent || '');
+    if (text) return text;
+  }
+  return '';
+}
 function getElementLabel(element, doc) {
   const aria = getLabelFromAria(element, doc);
   if (aria) return aria;
@@ -199,18 +293,18 @@ function getElementLabel(element, doc) {
     return getInputLabel(element);
   }
   if (isAnchorElement(element)) {
-    return getTextContent(element) || element.href || 'Link';
+    return getTextContent(element) || deriveIconLabel(element) || element.href || 'Link';
   }
   if (isButtonElement(element)) {
-    return getTextContent(element) || element.name?.trim() || 'Button';
+    return getTextContent(element) || deriveIconLabel(element) || element.name?.trim() || 'Button';
   }
   if (element.isContentEditable) {
     return getTextContent(element) || element.getAttribute('data-placeholder') || 'Editable field';
   }
   const role = element.getAttribute('role');
-  if (role === 'tab') return getTextContent(element) || 'Tab';
-  if (role === 'menuitem' || role === 'option') return getTextContent(element) || 'Menu item';
-  return getTextContent(element) || element.getAttribute('title')?.trim() || role || element.tagName.toLowerCase();
+  if (role === 'tab') return getTextContent(element) || deriveIconLabel(element) || 'Tab';
+  if (role === 'menuitem' || role === 'option') return getTextContent(element) || deriveIconLabel(element) || 'Menu item';
+  return getTextContent(element) || element.getAttribute('title')?.trim() || deriveIconLabel(element) || role || element.tagName.toLowerCase();
 }
 function getElementName(element, doc) {
   return normalizeText(getLabelFromAria(element, doc) || element.getAttribute('title') || '');
@@ -304,7 +398,21 @@ function isScrollable(element, win) {
   return !!getScrollData(element, win);
 }
 function getZoneId(element) {
-  return element.closest('[data-mobileai-zone-id]')?.getAttribute('data-mobileai-zone-id') || undefined;
+  const zoneEl = element.closest('[data-twomilia-zone-id], [data-mobileai-zone-id]');
+  return zoneEl?.getAttribute('data-twomilia-zone-id') || zoneEl?.getAttribute('data-mobileai-zone-id') || undefined;
+}
+function hasOwnPointerCursor(element) {
+  // A computed `cursor: pointer` is the universal, framework-agnostic signal that
+  // an element is meant to be clicked — catches custom controls built from plain
+  // <div>/<span> wired via Vue/React/Svelte listeners (no role/onclick attr).
+  // `cursor` inherits, so only treat the OUTERMOST pointer element as the click
+  // boundary, not its children.
+  const win = element.ownerDocument?.defaultView;
+  if (!win?.getComputedStyle) return false;
+  if (win.getComputedStyle(element).cursor !== 'pointer') return false;
+  const parent = element.parentElement;
+  if (parent && parent.ownerDocument && win.getComputedStyle(parent).cursor === 'pointer') return false;
+  return true;
 }
 function getElementType(element) {
   const role = element.getAttribute('role');
@@ -339,7 +447,21 @@ function getElementType(element) {
   if (role === 'slider' || role === 'spinbutton' || role === 'scrollbar') return 'slider';
   if (role === 'button' || role === 'link' || role === 'tab' || role === 'menuitem' || role === 'option' || role === 'treeitem' || role === 'gridcell' || role === 'rowheader' || role === 'columnheader') return 'pressable';
   if (typeof element.onclick === 'function') return 'pressable';
+  const tabindex = element.getAttribute('tabindex');
+  if (tabindex !== null && tabindex !== '' && Number(tabindex) >= 0) return 'pressable';
+  if (hasOwnPointerCursor(element)) return 'pressable';
   return null;
+}
+// Recognizes generic "card"/stat/tile/panel containers on arbitrary sites (any
+// framework) so short but high-value content — KPI labels and numbers like
+// "Customers 28441" — is captured even without the legacy Twomilia card classes.
+const GENERIC_CARD_SELECTOR = '[class*="card"], [class*="tile"], [class*="widget"], [class*="metric"], [class*="stat"], [class*="kpi"], [class*="panel"]';
+function isGenericCardLike(element) {
+  if (!element.matches?.(GENERIC_CARD_SELECTOR)) return false;
+  // Only leaf-level cards — skip grids/wrappers that merely group other cards.
+  if (element.querySelector(GENERIC_CARD_SELECTOR)) return false;
+  const text = normalizeText(element.textContent || '');
+  return text.length >= 2 && text.length <= 600;
 }
 function getElementSemanticKind(element) {
   const tag = element.tagName.toLowerCase();
@@ -362,6 +484,7 @@ function getElementSemanticKind(element) {
   if (role === 'listbox' || tag === 'ul' || tag === 'ol' || role === 'list') return 'list';
   if (element.matches(HEADING_SELECTOR)) return 'heading';
   if (element.matches(TEXT_CONTAINER_SELECTOR)) return 'text';
+  if (isGenericCardLike(element)) return 'card';
   return 'generic';
 }
 function escapeCssIdentifier(value) {
@@ -609,6 +732,16 @@ function getStructureSummary(element, doc, win) {
       const text = normalizeText(element.textContent || '');
       return text ? `Heading: ${truncateText(text, 140)}` : '';
     }
+    case 'card': {
+      const heading = normalizeText(element.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="label"], [class*="header"]')?.textContent || '');
+      const snippets = collectTextSnippets(element, win, {
+        minLength: 2,
+        maxItems: 6,
+        skipNestedInteractive: true
+      });
+      const parts = uniqueStrings([heading, ...snippets], 6);
+      return parts.length > 0 ? `Card: ${truncateText(parts.join(' · '), 180)}` : '';
+    }
     case 'text': {
       const text = normalizeText(element.textContent || '');
       return text.length >= 28 ? `Text: ${truncateText(text, 160)}` : '';
@@ -695,7 +828,7 @@ function buildProps(element, metadata) {
     domNode: element,
     role: element.getAttribute('role') || element.tagName.toLowerCase(),
     disabled: element.disabled === true,
-    aiPriority: element.getAttribute('data-ai-priority') || undefined,
+    aiPriority: element.getAttribute('data-twomilia-priority') || element.getAttribute('data-ai-priority') || undefined,
     selector: buildElementSelector(element),
     nearbyText: metadata.nearbyText.join(' | ') || undefined,
     parentSectionLabel: metadata.parentSectionLabel || undefined,
@@ -737,7 +870,7 @@ function buildScrollableElement(element, index, doc) {
       clientHeight: element.clientHeight,
       scrollWidth: element.scrollWidth,
       clientWidth: element.clientWidth,
-      aiPriority: element.getAttribute('data-ai-priority') || undefined,
+      aiPriority: element.getAttribute('data-twomilia-priority') || element.getAttribute('data-ai-priority') || undefined,
       selector: buildElementSelector(element),
       scrollable: true,
       scrollData
@@ -766,6 +899,7 @@ export class PageControllerWeb {
       ...DEFAULT_CONFIG,
       ...config
     };
+    setConfiguredIgnoreSelector(this.config.ignoreSelectors);
   }
   static findNearestScrollableContainer(element) {
     let current = element?.parentElement || null;
@@ -834,11 +968,17 @@ export class PageControllerWeb {
         index: this.interactives.length,
         type: interactiveType,
         label: getElementLabel(element, element.ownerDocument),
-        aiPriority: element.getAttribute('data-ai-priority') || undefined,
+        aiPriority: element.getAttribute('data-twomilia-priority') || element.getAttribute('data-ai-priority') || undefined,
         zoneId: getZoneId(element),
         fiberNode: element,
         props: buildProps(element, metadata),
-        requiresConfirmation: element.getAttribute('data-ai-confirm') === 'true',
+        requiresConfirmation:
+          element.getAttribute('data-twomilia-confirm') === 'true' ||
+          element.getAttribute('data-ai-confirm') === 'true' ||
+          (Array.isArray(this.config.confirmSelectors) &&
+            this.config.confirmSelectors.some((sel) => {
+              try { return !!element.closest(sel); } catch { return false; }
+            })),
         analyticsZoneId: getZoneId(element) || null
       };
       if (!seenInteractiveElements.has(element)) {

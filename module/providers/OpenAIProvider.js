@@ -41,7 +41,7 @@ export class OpenAIProvider {
         Authorization: `Bearer ${apiKey}`
       };
     } else {
-      throw new Error('[mobileai] You must provide either "apiKey" or "proxyUrl" to use OpenAI provider.');
+      throw new Error('[twomilia] You must provide either "apiKey" or "proxyUrl" to use OpenAI provider.');
     }
     this.model = model;
   }

@@ -1,16 +1,16 @@
-# @mobileai/web
+# @twomilia/web
 
-React web SDK for MobileAI Cloud by Twomilia.
+React web SDK for Twomilia Cloud.
 
-`@mobileai/web` embeds a DOM-aware AI support agent in React applications. It can inspect the current page, explain what the user is seeing, guide them through workflows, fill forms, select controls, scroll containers, call app-owned actions, query live data sources, render rich UI blocks, and escalate to a human operator through MobileAI Cloud by Twomilia.
+`@twomilia/web` embeds a DOM-aware AI support agent in React applications. It can inspect the current page, explain what the user is seeing, guide them through workflows, fill forms, select controls, scroll containers, call app-owned actions, query live data sources, render rich UI blocks, and escalate to a human operator through Twomilia Cloud.
 
 Use it when a normal chatbot is not enough because the user needs help inside the actual product UI.
 
-The canonical product domain is `https://mobileai.cloud`. Use `MobileAI Cloud by Twomilia` for public copy, `MobileAI Cloud` for short product references, and `Twomilia` for the company name.
+The canonical product domain is `https://twomilia.com`. Use `Twomilia Cloud` for product references and `Twomilia` for the company name.
 
-## Why MobileAI Cloud for Web
+## Why Twomilia Cloud for Web
 
-Most support widgets sit beside your app. MobileAI Cloud works inside it.
+Most support widgets sit beside your app. Twomilia Cloud works inside it.
 
 - Understands visible DOM structure, labels, forms, tables, buttons, links, iframes, and shadow roots
 - Executes UI actions such as tap, type, select, scroll, slider adjustment, date input, navigation, and guided highlights
@@ -23,7 +23,7 @@ Most support widgets sit beside your app. MobileAI Cloud works inside it.
 ## Install
 
 ```bash
-npm install @mobileai/web
+npm install @twomilia/web
 ```
 
 Peer dependencies:
@@ -37,12 +37,12 @@ npm install react react-dom
 Wrap your app once near the React root.
 
 ```tsx
-import { AIAgent } from "@mobileai/web";
+import { AIAgent } from "@twomilia/web";
 
 export function Root() {
   return (
     <AIAgent
-      analyticsKey="mobileai_pub_your_key"
+      analyticsKey="twomilia_pub_your_key"
       instructions="You are a helpful in-product support agent."
     >
       <App />
@@ -64,13 +64,13 @@ The agent renders a web chat surface by default and builds screen context from t
 `AIAgent` is a client component. In Next.js App Router, create a small client shell.
 
 ```tsx
-// app/mobileai-provider.tsx
+// app/twomilia-provider.tsx
 "use client";
 
-import { AIAgent } from "@mobileai/web";
+import { AIAgent } from "@twomilia/web";
 import { usePathname, useRouter } from "next/navigation";
 
-export function MobileAIProvider({ children }: { children: React.ReactNode }) {
+export function TwomiliaProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
@@ -101,13 +101,13 @@ Then wrap your layout:
 
 ```tsx
 // app/layout.tsx
-import { MobileAIProvider } from "./mobileai-provider";
+import { TwomiliaProvider } from "./twomilia-provider";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <MobileAIProvider>{children}</MobileAIProvider>
+        <TwomiliaProvider>{children}</TwomiliaProvider>
       </body>
     </html>
   );
@@ -116,12 +116,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
 ## Configuration Modes
 
-### MobileAI Cloud by Twomilia
+### Twomilia Cloud
 
-Use `analyticsKey` for the hosted MobileAI Cloud proxy, analytics, configured actions, knowledge retrieval, support tickets, escalation, and voice.
+Use `analyticsKey` for the hosted Twomilia Cloud proxy, analytics, configured actions, knowledge retrieval, support tickets, escalation, and voice.
 
 ```tsx
-<AIAgent analyticsKey="mobileai_pub_your_key">
+<AIAgent analyticsKey="twomilia_pub_your_key">
   <App />
 </AIAgent>
 ```
@@ -132,7 +132,7 @@ Use `proxyUrl` if your backend owns provider keys and model calls.
 
 ```tsx
 <AIAgent
-  proxyUrl="/api/mobileai/chat"
+  proxyUrl="/api/twomilia/chat"
   proxyHeaders={{ "x-tenant-id": tenantId }}
 >
   <App />
@@ -153,7 +153,7 @@ Use `proxyUrl` if your backend owns provider keys and model calls.
 
 ```tsx
 <AIAgent
-  analyticsKey="mobileai_pub_your_key"
+  analyticsKey="twomilia_pub_your_key"
   model="gemini-2.5-flash"
   instructions="Use concise, friendly product-support language."
   maxSteps={12}
@@ -177,7 +177,7 @@ Common props:
 
 | Prop | Purpose |
 | --- | --- |
-| `analyticsKey` | Enables MobileAI Cloud by Twomilia features and hosted proxy |
+| `analyticsKey` | Enables Twomilia Cloud features and hosted proxy |
 | `proxyUrl` | Self-hosted text proxy URL |
 | `voiceProxyUrl` | Self-hosted voice proxy URL |
 | `instructions` | Product-specific agent instructions |
@@ -197,7 +197,7 @@ Common props:
 Use `useAction` for things your app should do directly: export data, open modals, apply filters, update preferences, start checkout, create tickets, cancel subscriptions, or trigger any product workflow.
 
 ```tsx
-import { useAction } from "@mobileai/web";
+import { useAction } from "@twomilia/web";
 
 function BillingActions() {
   useAction(
@@ -240,7 +240,7 @@ Handlers stay fresh across renders, so they can safely read current React state.
 Use `useData` when the agent should query structured app data instead of inferring from visible UI.
 
 ```tsx
-import { useData } from "@mobileai/web";
+import { useData } from "@twomilia/web";
 
 function ProductDataSources() {
   useData(
@@ -284,7 +284,7 @@ Good data sources include:
 `useAI` lets you trigger the same runtime from your own UI.
 
 ```tsx
-import { useAI } from "@mobileai/web";
+import { useAI } from "@twomilia/web";
 
 function HelpButton() {
   const { send, isLoading, status, cancel } = useAI();
@@ -296,7 +296,7 @@ function HelpButton() {
         disabled={isLoading}
         onClick={() => send("Help me update my billing address")}
       >
-        {isLoading ? status || "Working..." : "Ask MobileAI"}
+        {isLoading ? status || "Working..." : "Ask Twomilia"}
       </button>
 
       {isLoading ? (
@@ -312,7 +312,7 @@ function HelpButton() {
 You can also hide the default chat and ship a fully custom surface.
 
 ```tsx
-<AIAgent analyticsKey="mobileai_pub_your_key" showChat={false}>
+<AIAgent analyticsKey="twomilia_pub_your_key" showChat={false}>
   <App />
   <CustomAssistantLauncher />
 </AIAgent>
@@ -323,7 +323,7 @@ You can also hide the default chat and ship a fully custom surface.
 `AIZoneWeb` marks a region that can be targeted by the agent. Zones are useful for dense forms, dashboards, checkout summaries, billing panels, and settings pages.
 
 ```tsx
-import { AIZoneWeb } from "@mobileai/web";
+import { AIZoneWeb } from "@twomilia/web";
 
 function CheckoutSummary() {
   return (
@@ -360,14 +360,14 @@ import {
   ComparisonCardWeb,
   FormCardWeb,
   RichContentRendererWeb,
-} from "@mobileai/web";
+} from "@twomilia/web";
 ```
 
 Wire block actions back into your app with `blockActionHandlers`.
 
 ```tsx
 <AIAgent
-  analyticsKey="mobileai_pub_your_key"
+  analyticsKey="twomilia_pub_your_key"
   blockActionHandlers={{
     add_to_cart: async ({ productId }) => {
       await addToCart(productId);
@@ -389,10 +389,10 @@ Give the agent your router API so it can navigate safely.
 ### React Router
 
 ```tsx
-import { AIAgent, type WebRouterAdapter } from "@mobileai/web";
+import { AIAgent, type WebRouterAdapter } from "@twomilia/web";
 import { useLocation, useNavigate } from "react-router-dom";
 
-function MobileAIShell({ children }: { children: React.ReactNode }) {
+function TwomiliaShell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -430,11 +430,11 @@ const routerAdapter = {
 
 ## Support Mode
 
-Support mode changes the assistant into an in-product customer support agent. With `analyticsKey`, it can create MobileAI Cloud tickets, restore open tickets, stream operator replies, report issues, and collect CSAT.
+Support mode changes the assistant into an in-product customer support agent. With `analyticsKey`, it can create Twomilia Cloud tickets, restore open tickets, stream operator replies, report issues, and collect CSAT.
 
 ```tsx
 <AIAgent
-  analyticsKey="mobileai_pub_your_key"
+  analyticsKey="twomilia_pub_your_key"
   userContext={{
     userId: "user_123",
     name: "Sam Lee",
@@ -444,7 +444,7 @@ Support mode changes the assistant into an in-product customer support agent. Wi
   supportMode={{
     enabled: true,
     greeting: {
-      agentName: "MobileAI Support",
+      agentName: "Twomilia Support",
       message: "Hi Sam, how can I help today?",
     },
     quickReplies: [
@@ -462,7 +462,7 @@ Support mode changes the assistant into an in-product customer support agent. Wi
     },
     persona: {
       preset: "warm-concise",
-      agentName: "MobileAI",
+      agentName: "Twomilia",
       tone: "empathetic",
     },
   }}
@@ -495,10 +495,10 @@ For Intercom, Zendesk, or your own support backend, use a custom escalation hand
 
 ## Voice
 
-Enable voice when your MobileAI project or proxy supports realtime voice.
+Enable voice when your Twomilia project or proxy supports realtime voice.
 
 ```tsx
-<AIAgent analyticsKey="mobileai_pub_your_key" enableVoice>
+<AIAgent analyticsKey="twomilia_pub_your_key" enableVoice>
   <App />
 </AIAgent>
 ```
@@ -507,8 +507,8 @@ For self-hosted voice traffic:
 
 ```tsx
 <AIAgent
-  proxyUrl="/api/mobileai/chat"
-  voiceProxyUrl="/api/mobileai/voice"
+  proxyUrl="/api/twomilia/chat"
+  voiceProxyUrl="/api/twomilia/voice"
   voiceProxyHeaders={{ "x-session-id": sessionId }}
   enableVoice
 >
@@ -587,7 +587,7 @@ Pass `routerAdapter` and `pathname`. Also provide `getAvailableScreens` if your 
 
 ### The package imports fail in SSR
 
-Render `AIAgent` from a client-only boundary. In Next.js App Router, add `"use client"` to the provider component that imports `@mobileai/web`.
+Render `AIAgent` from a client-only boundary. In Next.js App Router, add `"use client"` to the provider component that imports `@twomilia/web`.
 
 ### Actions are not available
 
@@ -595,7 +595,7 @@ Render `AIAgent` from a client-only boundary. In Next.js App Router, add `"use c
 
 ### Human escalation does not create tickets
 
-Check that `analyticsKey` is present, `supportMode.enabled` is true, and the project is configured in MobileAI Cloud by Twomilia.
+Check that `analyticsKey` is present, `supportMode.enabled` is true, and the project is configured in Twomilia Cloud.
 
 ### Voice does not connect
 
@@ -626,7 +626,7 @@ import {
   createEscalateTool,
   createReportIssueTool,
   EscalationSocket,
-} from "@mobileai/web";
+} from "@twomilia/web";
 ```
 
 ## Development

@@ -1,5 +1,5 @@
 /**
- * Telemetry types for the MobileAI analytics module.
+ * Telemetry types for the Twomilia analytics module.
  *
  * Events are split into two categories:
  * 1. Auto-captured: SDK captures these without consumer code
@@ -34,7 +34,7 @@ export interface TelemetryBatch {
     events: TelemetryEvent[];
 }
 export interface TelemetryConfig {
-    /** Publishable analytics key (mobileai_pub_xxx) */
+    /** Publishable analytics key (twomilia_pub_xxx) */
     analyticsKey?: string;
     /** Proxy URL for enterprise customers (replaces direct cloud API) */
     analyticsProxyUrl?: string;

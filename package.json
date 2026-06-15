@@ -1,7 +1,7 @@
 {
-  "name": "@mobileai/web",
+  "name": "@twomilia/web",
   "version": "0.9.58",
-  "description": "React web SDK for MobileAI Cloud by Twomilia with DOM-first actions, rich chat content, and support escalation.",
+  "description": "React web SDK for Twomilia Cloud with DOM-first actions, rich chat content, and support escalation.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mohamed2m2018/mobileai-web.git"
@@ -32,7 +32,8 @@
   "scripts": {
     "test": "node --test tests/**/*.test.mjs",
     "test:live-routes": "node scripts/live-route-smoke.mjs",
-    "build:cdn": "node scripts/build-cdn.mjs"
+    "build:web": "node scripts/build-web-jsx.mjs",
+    "build:cdn": "node scripts/build-web-jsx.mjs && node scripts/build-cdn.mjs"
   },
   "peerDependenciesMeta": {
     "react": {

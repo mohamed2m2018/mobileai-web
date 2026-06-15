@@ -182,7 +182,10 @@ export class WebPlatformAdapter {
     };
   }
   getScreenSnapshot() {
-    const controller = new PageControllerWeb(this.options.getRoot());
+    const controller = new PageControllerWeb(this.options.getRoot(), {
+      ignoreSelectors: this.options.ignoreSelectors,
+      confirmSelectors: this.options.confirmSelectors,
+    });
     const snapshot = controller.buildScreenSnapshot(this.getCurrentScreenName(), this.getAvailableScreens());
     this.lastController = controller;
     this.lastSnapshot = snapshot;
@@ -197,7 +200,7 @@ export class WebPlatformAdapter {
       case 'tap':
         return this.tap(intent.index);
       case 'long_press':
-        return '❌ long_press is not supported on web yet.';
+        return this.longPress(intent.index);
       case 'type':
         return this.typeText(intent.index, intent.text);
       case 'scroll':
@@ -320,7 +323,69 @@ export class WebPlatformAdapter {
       target.dispatchEvent(new PointerEventCtor('pointerup', pointerOpts));
     }
     target.dispatchEvent(new view.MouseEvent('mouseup', mouseOpts));
-    target.click?.();
+    // Fire the activation click. elementFromPoint may have retargeted to an inner
+    // icon (e.g. an <svg>), and SVGElement has no .click() — fall back to the
+    // resolved node, then to a synthetic bubbling click so icon buttons in any
+    // framework still activate.
+    if (typeof target.click === 'function') {
+      target.click();
+    } else if (typeof node.click === 'function') {
+      node.click();
+    } else {
+      target.dispatchEvent(new view.MouseEvent('click', mouseOpts));
+    }
+  }
+  // Long-press == press-and-hold that raises a `contextmenu` (the web/touch
+  // equivalent of RN onLongPress). Deliberately omits `click()` so handlers can
+  // distinguish a hold from a tap.
+  async dispatchLongPressSequence(node, holdMs = 600) {
+    const view = this.getView(node);
+    if (!view) return;
+    const rect = node.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hitTarget = node.ownerDocument?.elementFromPoint?.(x, y);
+    const target = isHTMLElementLike(hitTarget) && node.contains(hitTarget) ? hitTarget : node;
+    const pointerOpts = {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      pointerType: 'mouse'
+    };
+    const mouseOpts = {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 0
+    };
+    const PointerEventCtor = view.PointerEvent;
+    if (PointerEventCtor) {
+      target.dispatchEvent(new PointerEventCtor('pointerover', pointerOpts));
+      target.dispatchEvent(new PointerEventCtor('pointerenter', {
+        ...pointerOpts,
+        bubbles: false
+      }));
+      target.dispatchEvent(new PointerEventCtor('pointerdown', pointerOpts));
+    }
+    target.dispatchEvent(new view.MouseEvent('mouseover', mouseOpts));
+    target.dispatchEvent(new view.MouseEvent('mousedown', mouseOpts));
+    node.focus?.({
+      preventScroll: true
+    });
+    await new Promise(resolve => setTimeout(resolve, holdMs));
+    target.dispatchEvent(new view.MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 2
+    }));
+    if (PointerEventCtor) {
+      target.dispatchEvent(new PointerEventCtor('pointerup', pointerOpts));
+    }
+    target.dispatchEvent(new view.MouseEvent('mouseup', mouseOpts));
   }
   setNativeValue(node, value) {
     const prototype = Object.getPrototypeOf(node);
@@ -351,6 +416,31 @@ export class WebPlatformAdapter {
       bubbles: true
     }));
   }
+  // Rings the target element before an action so every agent step (tap/type/
+  // scroll/…) is visible to the user, mirroring RN `showActionHighlight`.
+  // Reuses the existing `onGuide` overlay path; no-op when there is no overlay
+  // or the node has no layout (e.g. jsdom smoke tests → width/height 0).
+  async showActionHighlight(node, action, durationMs = 600) {
+    if (!node || typeof node.getBoundingClientRect !== 'function' || !this.options.onGuide) {
+      return;
+    }
+    const rect = node.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+    this.options.onGuide({
+      targetRect: rect,
+      message: '',
+      action,
+      autoRemoveAfterMs: durationMs + 400
+    });
+    // Give the ring a frame to paint before the action mutates/navigates the DOM.
+    const view = this.getView(node);
+    await new Promise(resolve => {
+      const raf = view?.requestAnimationFrame ? callback => view.requestAnimationFrame(callback) : callback => setTimeout(callback, 16);
+      raf(() => setTimeout(resolve, 340));
+    });
+  }
   async tap(index) {
     const element = this.getSnapshotElement(index);
     const node = this.getDomNode(index);
@@ -358,8 +448,20 @@ export class WebPlatformAdapter {
       return `❌ Element with index ${index} not found.`;
     }
     this.scrollNodeIntoView(node);
+    await this.showActionHighlight(node, 'tap');
     this.dispatchPointerSequence(node);
     return `✅ Tapped [${index}] "${element.label}"`;
+  }
+  async longPress(index) {
+    const element = this.getSnapshotElement(index);
+    const node = this.getDomNode(index);
+    if (!element || !node) {
+      return `❌ Element with index ${index} not found.`;
+    }
+    this.scrollNodeIntoView(node);
+    await this.showActionHighlight(node, 'tap');
+    await this.dispatchLongPressSequence(node);
+    return `✅ Long-pressed [${index}] "${element.label}"`;
   }
   dispatchInputEvents(node) {
     const doc = node.ownerDocument;
@@ -380,6 +482,7 @@ export class WebPlatformAdapter {
     }
     if (isInputElement(node) || isTextAreaElement(node)) {
       this.scrollNodeIntoView(node);
+      await this.showActionHighlight(node, 'type');
       node.focus();
       this.setNativeValue(node, text);
       this.dispatchTextInputEvents(node, text);
@@ -387,6 +490,7 @@ export class WebPlatformAdapter {
     }
     if (node.isContentEditable) {
       this.scrollNodeIntoView(node);
+      await this.showActionHighlight(node, 'type');
       node.focus();
       node.textContent = text;
       this.dispatchTextInputEvents(node, text);
@@ -408,6 +512,7 @@ export class WebPlatformAdapter {
       if (!element) {
         return `❌ Element with index ${containerIndex} not found.`;
       }
+      await this.showActionHighlight(element, 'scroll');
       target = findScrollableTarget(element, win) || PageControllerWeb.findNearestScrollableContainer(element);
     } else if (isHTMLElementLike(doc.activeElement)) {
       target = findScrollableTarget(doc.activeElement, win) || win;
@@ -471,6 +576,7 @@ export class WebPlatformAdapter {
       return `❌ Element [${index}] is not a slider.`;
     }
     this.scrollNodeIntoView(node);
+    await this.showActionHighlight(node, 'fill');
     this.setNativeValue(node, String(value));
     this.dispatchInputEvents(node);
     return `✅ Adjusted slider [${index}] to ${value}`;
@@ -482,6 +588,7 @@ export class WebPlatformAdapter {
       return `❌ Element [${index}] is not a picker.`;
     }
     this.scrollNodeIntoView(node);
+    await this.showActionHighlight(node, 'fill');
     node.value = value;
     this.dispatchInputEvents(node);
     return `✅ Selected "${value}" in [${index}] "${element.label}"`;
@@ -493,6 +600,7 @@ export class WebPlatformAdapter {
       return `❌ Element [${index}] is not a date input.`;
     }
     this.scrollNodeIntoView(node);
+    await this.showActionHighlight(node, 'fill');
     this.setNativeValue(node, date);
     this.dispatchTextInputEvents(node, date);
     return `✅ Set date on [${index}] "${element.label}" to ${date}`;

@@ -8,10 +8,15 @@ const webAgentSource = fs.readFileSync(
 );
 
 test('web chat composers use textarea so Shift+Enter can insert new lines', () => {
-  const textareaCount = (webAgentSource.match(/_jsx\("textarea"/g) || []).length;
+  // The web UI is authored as .jsx and compiled to ESM by esbuild, so jsx-runtime
+  // calls render as `jsx("textarea", …)` (no `_` alias) and may be split across
+  // lines for long calls — match either spelling/layout. String literals likewise
+  // print with double quotes. These assertions check behavior intent, not the
+  // exact compiled spelling.
+  const textareaCount = (webAgentSource.match(/jsx\(\s*["']textarea["']/g) || []).length;
 
   assert.equal(textareaCount >= 2, true);
-  assert.match(webAgentSource, /if \(event\.key !== 'Enter' \|\| event\.shiftKey\) return;/);
-  assert.match(webAgentSource, /resize:\s*'none'/);
-  assert.match(webAgentSource, /overflowY:\s*'auto'/);
+  assert.match(webAgentSource, /if \(event\.key !== ["']Enter["'] \|\| event\.shiftKey\) return;/);
+  assert.match(webAgentSource, /resize:\s*["']none["']/);
+  assert.match(webAgentSource, /overflowY:\s*["']auto["']/);
 });

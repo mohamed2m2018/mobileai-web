@@ -942,9 +942,9 @@ export function AIAgent({
     };
   }, [analyticsKey, analyticsProxyHeaders, analyticsProxyUrl]);
 
-  // ─── Auto-create MobileAI escalation tool ─────────────────────
+  // ─── Auto-create Twomilia escalation tool ─────────────────────
   // When analyticsKey is present and consumer hasn't provided their own
-  // escalate_to_human tool, auto-wire the MobileAI platform provider.
+  // escalate_to_human tool, auto-wire the Twomilia platform provider.
   // Human replies from the dashboard inbox are injected into chat messages.
   const autoEscalateTool = useMemo(() => {
     if (!analyticsKey) return null;
@@ -1424,10 +1424,10 @@ export function AIAgent({
   const remoteActionInstructions = useMemo(() => {
     if (remoteConfiguredActions.length === 0) return "";
     const lines = remoteConfiguredActions.map(action => {
-      const modeLabel = action.executionType === "webhook" ? "executes directly in MobileAI" : "executes in app code after MobileAI authorization";
+      const modeLabel = action.executionType === "webhook" ? "executes directly in Twomilia" : "executes in app code after Twomilia authorization";
       return `- Tool \`${action.name}\` (${modeLabel}): ${action.triggerHint}`;
     });
-    return ["### MobileAI Configured Actions", "Only use the configured actions below. Do not invent or call unconfigured app actions.", ...lines].join("\n");
+    return ["### Twomilia Configured Actions", "Only use the configured actions below. Do not invent or call unconfigured app actions.", ...lines].join("\n");
   }, [remoteConfiguredActions]);
   const registeredDataInstructions = useMemo(() => {
     const sources = dataRegistry.getAll();
@@ -1441,7 +1441,7 @@ export function AIAgent({
       }).join('; ') : '';
       return schema.length > 0 ? `- Data source \`${source.name}\`: ${source.description}. Fields: ${schema}` : `- Data source \`${source.name}\`: ${source.description}`;
     });
-    return ["### MobileAI Registered Data Sources", "The app exposes live data sources you can query with `query_data(source, query)`.", "Use them for recommendations, catalog lookup, live pricing, inventory, order status, or any structured data that is better fetched directly than inferred from the current screen.", ...lines].join("\n");
+    return ["### Twomilia Registered Data Sources", "The app exposes live data sources you can query with `query_data(source, query)`.", "Use them for recommendations, catalog lookup, live pricing, inventory, order status, or any structured data that is better fetched directly than inferred from the current screen.", ...lines].join("\n");
   }, [registeredDataRevision]);
   const resolvedInstructions = useMemo(() => {
     const combinedSystem = [instructions?.system?.trim(), remoteActionInstructions.trim(), registeredDataInstructions.trim()].filter(Boolean).join("\n\n");
@@ -1482,7 +1482,7 @@ export function AIAgent({
       return params;
     };
     return Object.fromEntries(remoteConfiguredActions.map(action => {
-      const description = action.executionType === "webhook" ? `${action.description} This action is fully configured in MobileAI and runs via webhook.` : `${action.description} This action requires a matching useAction('${action.name}', ...) implementation in the app.`;
+      const description = action.executionType === "webhook" ? `${action.description} This action is fully configured in Twomilia and runs via webhook.` : `${action.description} This action requires a matching useAction('${action.name}', ...) implementation in the app.`;
       const tool = {
         name: action.name,
         description,
@@ -1509,7 +1509,7 @@ export function AIAgent({
           }
           const registeredAction = actionRegistry.get(action.name);
           if (!registeredAction) {
-            return `❌ Action "${action.name}" is configured in MobileAI as app_code, but no matching useAction('${action.name}', ...) is mounted in the app.`;
+            return `❌ Action "${action.name}" is configured in Twomilia as app_code, but no matching useAction('${action.name}', ...) is mounted in the app.`;
           }
           try {
             const result = await registeredAction.handler(args);
@@ -1918,7 +1918,7 @@ export function AIAgent({
   useEffect(() => {
     // @ts-ignore
     if (typeof __DEV__ !== 'undefined' && !__DEV__ && apiKey && !resolvedProxyUrl) {
-      logger.warn('[MobileAI] ⚠️ SECURITY WARNING: You are using `apiKey` directly in a production build. ' + 'This exposes your LLM provider key in the app binary. ' + 'Use `apiProxyUrl` to route requests through your backend instead. ' + 'See docs for details.');
+      logger.warn('[Twomilia] ⚠️ SECURITY WARNING: You are using `apiKey` directly in a production build. ' + 'This exposes your LLM provider key in the app binary. ' + 'Use `apiProxyUrl` to route requests through your backend instead. ' + 'See docs for details.');
     }
   }, [apiKey, resolvedProxyUrl]);
 

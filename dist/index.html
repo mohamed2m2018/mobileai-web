@@ -1,0 +1,14 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Twomilia web — cross-origin test</title>
+<style>body{font-family:system-ui,sans-serif;margin:0;padding:48px;background:#f5f5f7;color:#111}.card{max-width:560px;padding:24px;border:1px solid #ddd;border-radius:12px;background:#fff}button{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid #ccc;background:#fff;cursor:pointer}</style>
+</head><body>
+<div class="card"><h1>Host page (plain HTML, not React)</h1>
+<p>Cross-origin (:3005 → :3001). Agent should see + click this button:</p>
+<button id="demo" onclick="this.textContent='clicked!';this.style.background='#c7f9cc'">A host button</button></div>
+<script>window.process={env:{NEXT_PUBLIC_MOBILEAI_BASE_URL:'http://localhost:3001'}};</script>
+<script src="./twomilia.js?v=3"
+  data-proxy-url="http://localhost:3001/api/v1/hosted-proxy/text"
+  data-analytics-key="mobileai_pub_163b551023621aeec77e5b27bbcf60ff13c982eb"
+  data-auth-token="mobileai_pub_163b551023621aeec77e5b27bbcf60ff13c982eb"></script>
+</body></html>

@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * EscalationSocket — manages a WebSocket connection to the MobileAI platform
+ * EscalationSocket — manages a WebSocket connection to the Twomilia platform
  * for receiving real-time replies from human support agents.
  *
  * Lifecycle:

@@ -91,11 +91,17 @@ export class KnowledgeBaseService {
   /** Check if an entry should be included on the current screen. */
   isScreenMatch(entry, screenName) {
     if (!entry.screens || entry.screens.length === 0) return true;
+    // Screen name can be missing on some platforms/screens — don't filter the
+    // entry out (and never throw) when we don't know the current screen.
+    if (typeof screenName !== 'string' || screenName.length === 0) return true;
     return entry.screens.some(s => s.toLowerCase() === screenName.toLowerCase());
   }
 
   /** Tokenize text into lowercase words for matching. */
   tokenize(text) {
+    // The query arrives from LLM tool args, so it may be missing or non-string.
+    // Degrade to "no words" (\u2192 no match \u2192 graceful "no results") instead of throwing.
+    if (typeof text !== 'string') return [];
     return text.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF\s]/g, ' ') // Keep alphanumeric + Arabic chars
     .split(/\s+/).filter(w => w.length > 1); // Skip single-char words
   }

@@ -9,7 +9,7 @@ export type { OutboundCallEvent, OutboundCallTerminal };
 export type OutboundCallConfig = {
   /** Default: true when analyticsKey is present. */
   enabled?: boolean;
-  /** Optional MobileAI-compatible backend root. Defaults to https://mobileai.cloud. */
+  /** Optional Twomilia-compatible backend root. Defaults to https://twomilia.com. */
   proxyUrl?: string;
   /** Optional extra headers sent to the outbound-call endpoint. */
   headers?: Record<string, string>;

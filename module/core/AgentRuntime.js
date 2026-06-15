@@ -37,6 +37,70 @@ function looksLikeInternalPlanText(text) {
   if (!normalized) return false;
   return /^to\b.+\bi will\b/i.test(normalized) || /^i will\b/i.test(normalized) || /^next[:,]?\s/i.test(normalized);
 }
+// ─── Conversational loop detection ─────────────────────────────
+// Reduce a reply to comparable tokens: lowercase, strip markdown/punctuation.
+function normalizeReplyForCompare(s) {
+  return String(s || '').toLowerCase().replace(/[`*_>#~]+/g, ' ').replace(/[^\w ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+// Length of the longest shared contiguous word run, capped at `target`. A run of
+// `target` identical consecutive words is a strong signal of a reused canned phrase.
+function sharedWordRun(wordsA, wordsB, target = 7) {
+  if (wordsA.length < target || wordsB.length < target) return 0;
+  const grams = new Set();
+  for (let i = 0; i + target <= wordsB.length; i++) {
+    grams.add(wordsB.slice(i, i + target).join(' '));
+  }
+  for (let i = 0; i + target <= wordsA.length; i++) {
+    if (grams.has(wordsA.slice(i, i + target).join(' '))) return target;
+  }
+  return 0;
+}
+// True when two assistant replies are effectively the same message — verbatim,
+// containment, ≥0.5 token Jaccard (heavy-overlap reword), or a shared 7-word run
+// (reused canned phrase). Catches reworded "I understand why you might think that,
+// but I don't see hello_world… would you like to try a template or upload" repeats
+// where wording shifts but the substance and the canned question stay identical.
+function isNearDuplicateReply(a, b) {
+  const na = normalizeReplyForCompare(a);
+  const nb = normalizeReplyForCompare(b);
+  if (na.length < 12 || nb.length < 12) return false;
+  if (na === nb) return true;
+  const shorter = na.length <= nb.length ? na : nb;
+  const longer = na.length <= nb.length ? nb : na;
+  if (longer.includes(shorter) && shorter.length >= 24) return true;
+  const wa = na.split(' ');
+  const wb = nb.split(' ');
+  const ta = new Set(wa);
+  const tb = new Set(wb);
+  let inter = 0;
+  for (const t of ta) {
+    if (tb.has(t)) inter++;
+  }
+  const union = ta.size + tb.size - inter;
+  if (union > 0 && inter / union >= 0.5) return true;
+  return sharedWordRun(wa, wb) >= 7;
+}
+// Scan the recent assistant turns in the cross-task chat history. If the agent
+// has already given a near-identical reply, it is stuck re-explaining a settled
+// point and ignoring new user intents — return a breaker instruction to inject
+// into this turn's prompt. Returns null when no repetition is detected.
+function detectConversationalRepetition(chatHistory) {
+  if (!Array.isArray(chatHistory) || chatHistory.length < 3) return null;
+  const replies = chatHistory.filter(m => m && m.role === 'assistant' && typeof m.content === 'string').map(m => m.content);
+  if (replies.length < 2) return null;
+  const recent = replies.slice(-3);
+  let repeated = false;
+  for (let i = 0; i < recent.length - 1 && !repeated; i++) {
+    for (let j = i + 1; j < recent.length; j++) {
+      if (isNearDuplicateReply(recent[i], recent[j])) {
+        repeated = true;
+        break;
+      }
+    }
+  }
+  if (!repeated) return null;
+  return '⚠️ LOOP DETECTED: You have already given the user a nearly identical answer on a previous turn. Do NOT send that same answer again. Treat the user\'s latest message as a NEW request and respond to it directly — take the action they asked for, provide new information, or ask ONE specific clarifying question. If their request genuinely cannot be done in this app, say so in ONE short sentence, offer the closest available alternative, and move on. Do not re-explain the earlier point.';
+}
 // ─── Agent Runtime ─────────────────────────────────────────────
 
 export class AgentRuntime {
@@ -185,13 +249,25 @@ export class AgentRuntime {
       for (const [name, tool] of Object.entries(config.customTools)) {
         if (tool === null) {
           this.tools.delete(name);
+          this.invalidateToolCache();
           logger.info('AgentRuntime', `Removed tool: ${name}`);
         } else {
           this.tools.set(name, tool);
+          this.invalidateToolCache();
           logger.info('AgentRuntime', `Overrode tool: ${name}`);
         }
       }
     }
+  }
+
+  /**
+   * Drop the memoized provider-tool list so the next buildToolsForProvider()
+   * rebuild picks up live changes — e.g. actions registered/unregistered via
+   * useAction() after the runtime was constructed. Mirrors RN AgentRuntime.
+   */
+  invalidateToolCache() {
+    this._cachedProviderTools = null;
+    this._cachedProviderToolMap = null;
   }
   getVerifier() {
     if (this.config.verifier?.enabled === false) {
@@ -1328,6 +1404,14 @@ ${snapshot.elementsText}
       this.lastAskUserQuestion = null; // Consume the question
     }
     this.currentUserGoal = contextualMessage;
+    // Conversational loop breaker: if recent replies to the user are near-duplicates,
+    // the agent is stuck re-explaining a settled point and ignoring new intents.
+    // Prepend an explicit instruction to break the pattern on this turn.
+    const repetitionBreaker = detectConversationalRepetition(chatHistory);
+    if (repetitionBreaker) {
+      contextualMessage = `${repetitionBreaker}\n\n${contextualMessage}`;
+      logger.info('AgentRuntime', '🔁 Conversational repetition detected — injected loop breaker.');
+    }
     logger.info('AgentRuntime', `Starting execution: "${contextualMessage}"`);
 
     // Lifecycle: onBeforeTask

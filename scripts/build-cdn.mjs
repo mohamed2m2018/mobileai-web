@@ -1,5 +1,5 @@
-// Builds the framework-agnostic CDN bundle: dist/mobileai.js
-// Single self-contained IIFE exposing window.MobileAI.init — no host framework needed.
+// Builds the framework-agnostic CDN bundle: dist/twomilia.js
+// Single self-contained IIFE exposing window.Twomilia.init — no host framework needed.
 //
 // Renderer is Preact: react/react-dom/jsx-runtime are aliased to preact/compat,
 // and react-dom/client to a tiny createRoot adapter over preact's render.
@@ -16,7 +16,7 @@ const result = await esbuild.build({
   format: 'iife',
   platform: 'browser',
   target: ['es2019'],
-  outfile: 'dist/mobileai.js',
+  outfile: 'dist/twomilia.js',
   minify: true,
   sourcemap: true,
   legalComments: 'none',
@@ -35,5 +35,5 @@ const result = await esbuild.build({
   },
 });
 
-const out = result.metafile.outputs['dist/mobileai.js'];
-console.log(`built dist/mobileai.js — ${(out.bytes / 1024).toFixed(1)} KB minified`);
+const out = result.metafile.outputs['dist/twomilia.js'];
+console.log(`built dist/twomilia.js — ${(out.bytes / 1024).toFixed(1)} KB minified`);

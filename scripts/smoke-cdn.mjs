@@ -1,10 +1,10 @@
-// Smoke test: load dist/mobileai.js in jsdom, mount via window.MobileAI.init,
+// Smoke test: load dist/twomilia.js in jsdom, mount via window.MobileAI.init,
 // assert a Shadow DOM widget attaches and tears down cleanly.
 
 import { JSDOM } from 'jsdom';
 import fs from 'node:fs';
 
-const code = fs.readFileSync('dist/mobileai.js', 'utf8');
+const code = fs.readFileSync('dist/twomilia.js', 'utf8');
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   runScripts: 'dangerously',
   pretendToBeVisual: true,
@@ -31,9 +31,9 @@ console.log('✓ window.MobileAI.init exposed');
 let handle;
 try {
   handle = window.MobileAI.init({
-    proxyUrl: 'https://mobileai.cloud/api/v1/hosted-proxy/text',
-    proxyHeaders: { Authorization: 'Bearer mobileai_pub_test' },
-    analyticsKey: 'mobileai_pub_test',
+    proxyUrl: 'https://twomilia.com/api/v1/hosted-proxy/text',
+    proxyHeaders: { Authorization: 'Bearer twomilia_pub_test' },
+    analyticsKey: 'twomilia_pub_test',
   });
 } catch (e) {
   fail('init() threw: ' + (e && e.stack || e));

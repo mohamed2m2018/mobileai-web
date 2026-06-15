@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-test('@mobileai/web root exports stay browser-safe', async () => {
+test('@twomilia/web root exports stay browser-safe', async () => {
   const mod = await import('../index.mjs');
 
   assert.equal(typeof mod.AIAgent, 'function');

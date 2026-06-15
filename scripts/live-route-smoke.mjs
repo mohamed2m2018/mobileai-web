@@ -105,7 +105,7 @@ async function runOne(url) {
   const started = Date.now();
   const response = await fetch(url, {
     headers: {
-      "user-agent": "Mozilla/5.0 MobileAI route discovery smoke test",
+      "user-agent": "Mozilla/5.0 Twomilia route discovery smoke test",
       accept: "text/html,application/xhtml+xml"
     },
     signal: AbortSignal.timeout(15000)

@@ -7,7 +7,7 @@ import { AIAgent } from "./components/AIAgent.js";
 /**
  * Framework-agnostic imperative mount.
  *
- * Renders the MobileAI agent into a Shadow DOM root so host-page CSS can't
+ * Renders the Twomilia agent into a Shadow DOM root so host-page CSS can't
  * bleed in (and the widget's styles can't leak out). Works with any stack —
  * React, Vue, Angular, Svelte, vanilla — and from a plain <script> tag.
  *
@@ -17,7 +17,7 @@ import { AIAgent } from "./components/AIAgent.js";
  */
 export function init(config = {}) {
   if (typeof document === 'undefined') {
-    throw new Error('[MobileAI] init() must run in a browser environment.');
+    throw new Error('[Twomilia] init() must run in a browser environment.');
   }
 
   const { target, ...agentProps } = config;
@@ -38,7 +38,9 @@ export function init(config = {}) {
   shadow.appendChild(mount);
 
   const root = createRoot(mount);
-  root.render(createElement(AIAgent, agentProps));
+  // Standalone (script-tag) mode has no wrapped children, so point the agent's
+  // screen reader at the host page's light DOM. Overridable via config.scanRoot.
+  root.render(createElement(AIAgent, { scanRoot: document.body, ...agentProps }));
 
   let destroyed = false;
   return {

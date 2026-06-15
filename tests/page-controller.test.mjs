@@ -46,7 +46,7 @@ function installDomGlobals(window) {
 }
 
 function createDom(body, url = "https://example.com/dashboard") {
-  const dom = new JSDOM(`<!doctype html><html><head><title>MobileAI Dashboard</title></head><body>${body}</body></html>`, {
+  const dom = new JSDOM(`<!doctype html><html><head><title>Twomilia Dashboard</title></head><body>${body}</body></html>`, {
     url,
     pretendToBeVisual: true
   });
@@ -178,11 +178,11 @@ test("PageControllerWeb prioritizes the current viewport on long anchor pages", 
   } = createDom(`
     <main>
       <aside>
-        <a href="#why">Why MobileAI</a>
+        <a href="#why">Why Twomilia</a>
         <a href="#code">Code Examples</a>
       </aside>
       <section id="why">
-        <h2>Why MobileAI</h2>
+        <h2>Why Twomilia</h2>
         <p>Earlier documentation content that is no longer in the viewport.</p>
       </section>
       <section id="code">
@@ -644,7 +644,7 @@ test("PageControllerWeb attaches nearby text and filters covered interactive ele
   }
 });
 
-test("PageControllerWeb does not let ignored MobileAI overlays hide underlying page controls", () => {
+test("PageControllerWeb does not let ignored Twomilia overlays hide underlying page controls", () => {
   const {
     dom,
     cleanup

@@ -101,7 +101,7 @@ interface AIAgentProps {
      * Domain knowledge the AI can query via the query_knowledge tool.
      * Pass a static KnowledgeEntry[] or a { retrieve(query, screen) } function.
      * If omitted and analyticsKey is configured, the SDK will query the project
-     * knowledge configured in the MobileAI dashboard automatically.
+     * knowledge configured in the Twomilia dashboard automatically.
      */
     knowledgeBase?: KnowledgeBaseConfig;
     /** Max token budget for knowledge retrieval (default: 2000) */
@@ -154,7 +154,7 @@ interface AIAgentProps {
     /** Whether to surface native alert buttons as interactive elements to the AI. */
     interceptNativeAlerts?: boolean;
     /**
-     * Publishable analytics key (mobileai_pub_xxx).
+     * Publishable analytics key (twomilia_pub_xxx).
      */
     analyticsKey?: string;
     /**
@@ -219,7 +219,7 @@ interface AIAgentProps {
     discoveryTooltipMessage?: string;
     /**
      * Health score configuration. Enable to automatically track screen
-     * flow, feature adoption, and success milestones for the MobileAI Dashboard.
+     * flow, feature adoption, and success milestones for the Twomilia Dashboard.
      */
     customerSuccess?: CustomerSuccessConfig;
     /**

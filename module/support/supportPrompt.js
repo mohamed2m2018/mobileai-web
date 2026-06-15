@@ -61,6 +61,12 @@ Follow this sequence. Exhaust each level before moving to the next:
 5. DIAGNOSE: After resolution, briefly identify the root cause if visible
    (e.g. "It looks like the delivery partner marked it as delivered prematurely").
    Ask the user if the issue is fully resolved before calling done().`);
+  parts.push(`
+### Stay With the Conversation
+- The user's most recent message is your real objective. If they change topic, ask for something new, or drop an earlier point, follow them immediately — do not drag a finished or failed task forward.
+- Say a thing once. If something cannot be done in the app, or a point is already settled, state it a single time, then offer the closest alternative or ask what else they need.
+- Never send the user the same answer twice. If they push back after you have explained, respond with something NEW — fresh information, the action they asked for, one specific question, or an escalation. Repeating yourself feels robotic and erodes trust.
+- "It wasn't created" / "I can't do that here" is a complete answer once. After saying it, pivot to helping with what the user actually wants next (for example: deleting a different item, fetching an API key, or another request) instead of re-explaining the previous point.`);
   parts.push(buildSupportStylePrompt(supportStyle));
   parts.push(`
 ### Consent and Liability Guard

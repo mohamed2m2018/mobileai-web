@@ -13,7 +13,9 @@ const agentChatBarSource = fs.readFileSync(
 
 test('DOM web closed launcher tracks local AI unread and clears it when opened', () => {
   assert.match(webAgentSource, /const \[localUnread, setLocalUnread\] = useState\(0\)/);
-  assert.match(webAgentSource, /messages\.slice\(seenCount\)\.filter\(message => message\.role !== 'user'\)/);
+  // esbuild parenthesizes single arrow params and uses double quotes, so accept
+  // both `message =>` / `(message) =>` and either quote style.
+  assert.match(webAgentSource, /messages\.slice\(seenCount\)\.filter\(\(?message\)? => message\.role !== ["']user["']\)/);
   assert.match(webAgentSource, /const displayUnread = totalUnread \+ localUnread/);
   assert.match(webAgentSource, /if \(isOpen && localUnread > 0\)/);
   assert.match(webAgentSource, /setLocalUnread\(0\);\n\s+setIsOpen\(true\)/);

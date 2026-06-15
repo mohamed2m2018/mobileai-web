@@ -32,9 +32,17 @@ import { logger } from "../utils/logger.js";
 
 // ─── Constants ─────────────────────────────────────────────────
 
-const DEFAULT_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
+const DEFAULT_MODEL = 'gemini-3.1-flash-live-preview';
 const DEFAULT_INPUT_SAMPLE_RATE = 16000;
-
+const USER_TURN_END_WATCHDOG_MS = 1500;
+function isRecoverableLiveCloseCode(code) {
+  return code === 1001;
+}
+function isGemini31LiveModel(model) {
+  return /gemini-3\.1-.*live/i.test(model);
+}
+// The @google/genai SDK builds the Live WebSocket URL from an http(s) baseUrl;
+// callers may pass a ws(s):// proxy URL, so normalize the scheme.
 function normalizeSdkBaseUrl(url) {
   if (typeof url !== 'string') return url;
   if (url.startsWith('ws://')) return `http://${url.slice('ws://'.length)}`;
@@ -50,10 +58,17 @@ export class VoiceService {
   lastCallbacks = null;
   _status = 'disconnected';
   intentionalDisconnect = false;
+  transcriptBuffers = {
+    user: '',
+    model: ''
+  };
+  userTurnEndWatchdog = null;
   constructor(config) {
     this.config = config;
   }
 
+  // The @google/genai Live SDK can reject with plain objects / Close/ErrorEvents
+  // that have no `.message`, so normalize to a readable string for the UI.
   describeError(error) {
     if (typeof error === 'string') return error;
     if (error && typeof error.message === 'string') return error.message;
@@ -85,7 +100,6 @@ export class VoiceService {
     const model = this.config.model || DEFAULT_MODEL;
     logger.info('VoiceService', `Connecting via SDK (model: ${model})`);
     try {
-      const { GoogleGenAI, Modality } = await loadGenAI();
       const genAiConfig = {};
       if (this.config.proxyUrl) {
         // The @google/genai SDK sends apiKey as ?key=<value> in the WebSocket URL.
@@ -108,15 +122,34 @@ export class VoiceService {
       } else if (this.config.apiKey) {
         genAiConfig.apiKey = this.config.apiKey;
       } else {
-        throw new Error('[mobileai] Must provide apiKey or proxyUrl');
+        throw new Error('[twomilia] Must provide apiKey or proxyUrl');
       }
+      const {
+        GoogleGenAI,
+        Modality,
+        ThinkingLevel
+      } = await loadGenAI();
       const ai = new GoogleGenAI(genAiConfig);
       const toolDeclarations = this.buildToolDeclarations();
 
       // Build SDK config matching the official docs pattern
       const sdkConfig = {
-        responseModalities: [Modality.AUDIO]
+        responseModalities: [Modality.AUDIO],
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+            endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
+            silenceDurationMs: 700,
+            prefixPaddingMs: 100
+          },
+          turnCoverage: 'TURN_INCLUDES_ONLY_ACTIVITY'
+        }
       };
+      if (isGemini31LiveModel(model)) {
+        sdkConfig.thinkingConfig = {
+          thinkingLevel: ThinkingLevel?.MINIMAL ?? 'MINIMAL'
+        };
+      }
 
       // Enable transcription for debugging and UX
       sdkConfig.inputAudioTranscription = {};
@@ -164,10 +197,13 @@ export class VoiceService {
             const closeDetail = event ? JSON.stringify(event, Object.getOwnPropertyNames(event)).substring(0, 500) : 'null';
             if (this.intentionalDisconnect) {
               logger.info('VoiceService', `SDK session closed (intentional)`);
+            } else if (isRecoverableLiveCloseCode(event?.code)) {
+              logger.warn('VoiceService', `SDK session closed recoverably — code: ${event?.code}, reason: ${event?.reason}, detail: ${closeDetail}`);
             } else {
               logger.error('VoiceService', `SDK session closed UNEXPECTEDLY — code: ${event?.code}, reason: ${event?.reason}, detail: ${closeDetail}`);
               this.callbacks.onError?.(`Connection lost (code: ${event?.code || 'unknown'})`);
             }
+            this.clearUserTurnEndWatchdog();
             this.session = null;
             this.setStatus('disconnected');
           }
@@ -183,6 +219,7 @@ export class VoiceService {
     }
   }
   disconnect() {
+    this.clearUserTurnEndWatchdog();
     if (this.session) {
       logger.info('VoiceService', 'Disconnecting (intentional)...');
       this.intentionalDisconnect = true;
@@ -228,52 +265,80 @@ export class VoiceService {
         logger.info('VoiceService', `✅ sendAudio #${this.sendCount} OK — session.isOpen=${!!this.session}`);
       }
     } catch (error) {
-      logger.error('VoiceService', `❌ sendAudio EXCEPTION: ${this.describeError(error)}\n${error?.stack?.substring(0, 300)}`);
+      logger.error('VoiceService', `❌ sendAudio EXCEPTION: ${error.message}\n${error.stack?.substring(0, 300)}`);
       this.session = null;
       this.setStatus('disconnected');
     }
   }
 
+  /**
+   * Explicitly mark the current realtime audio stream as ended.
+   * With automatic activity detection enabled, this nudges Gemini Live to
+   * close the current user turn; the next audio chunk reopens the stream.
+   */
+  sendAudioStreamEnd() {
+    if (!this.isConnected || !this.session) return;
+    try {
+      this.session.sendRealtimeInput({
+        audioStreamEnd: true
+      });
+      logger.info('VoiceService', '📤 Audio stream end sent');
+    } catch (error) {
+      logger.error('VoiceService', `sendAudioStreamEnd failed: ${error.message}`);
+    }
+  }
+
   // ─── Send Text ─────────────────────────────────────────────
 
-  /** Send text message via SDK's sendClientContent */
+  /** Send text message to the active Live model. */
   sendText(text) {
     if (!this.isConnected || !this.session) return;
     logger.info('VoiceService', `🗣️ USER (text): "${text}"`);
     try {
-      this.session.sendClientContent({
-        turns: [{
-          role: 'user',
-          parts: [{
-            text
-          }]
-        }],
-        turnComplete: true
-      });
+      if (isGemini31LiveModel(this.config.model || DEFAULT_MODEL)) {
+        this.session.sendRealtimeInput({
+          text
+        });
+      } else {
+        this.session.sendClientContent({
+          turns: [{
+            role: 'user',
+            parts: [{
+              text
+            }]
+          }],
+          turnComplete: true
+        });
+      }
     } catch (error) {
-      logger.error('VoiceService', `sendText failed: ${this.describeError(error)}`);
+      logger.error('VoiceService', `sendText failed: ${error.message}`);
     }
   }
 
   /**
    * Send DOM tree as passive context during live conversation.
-   * Uses turnComplete: false — the model receives context without responding.
    */
   sendScreenContext(domText) {
     if (!this.isConnected || !this.session) return;
     try {
-      this.session.sendClientContent({
-        turns: [{
-          role: 'user',
-          parts: [{
-            text: domText
-          }]
-        }],
-        turnComplete: true
-      });
+      if (isGemini31LiveModel(this.config.model || DEFAULT_MODEL)) {
+        this.session.sendRealtimeInput({
+          text: domText
+        });
+      } else {
+        this.session.sendClientContent({
+          turns: [{
+            role: 'user',
+            parts: [{
+              text: domText
+            }]
+          }],
+          turnComplete: false
+        });
+      }
       logger.info('VoiceService', `📤 Screen context sent (${domText.length} chars)`);
     } catch (error) {
-      logger.error('VoiceService', `sendScreenContext failed: ${this.describeError(error)}`);
+      logger.error('VoiceService', `sendScreenContext failed: ${error.message}`);
     }
   }
 
@@ -292,7 +357,7 @@ export class VoiceService {
         }]
       });
     } catch (error) {
-      logger.error('VoiceService', `sendFunctionResponse failed: ${this.describeError(error)}`);
+      logger.error('VoiceService', `sendFunctionResponse failed: ${error.message}`);
     }
   }
 
@@ -355,23 +420,21 @@ export class VoiceService {
         logger.info('VoiceService', `📨 RAW: ${rawDump}`);
       }
 
-      // Tool calls — top-level (per official docs)
-      if (message.toolCall?.functionCalls) {
-        this.handleToolCalls(message.toolCall.functionCalls);
-        return;
-      }
-
-      // Server content (audio, text, transcripts, turn events)
+      // Server content (audio, text, transcripts, turn events). Gemini 3.1 can
+      // combine multiple content parts in one event, so never return early.
       if (message.serverContent) {
         this.handleServerContent(message.serverContent);
+      }
+
+      // Tool calls — top-level (per official docs)
+      if (message.toolCall?.functionCalls) {
+        this.clearUserTurnEndWatchdog();
+        this.handleToolCalls(message.toolCall.functionCalls);
       }
 
       // Setup complete acknowledgment
       if (message.setupComplete !== undefined) {
         logger.info('VoiceService', '✅ Setup complete — ready for audio');
-        if (this._status !== 'connected') {
-          this.setStatus('connected');
-        }
         this.callbacks.onSetupComplete?.();
       }
 
@@ -381,7 +444,7 @@ export class VoiceService {
         this.callbacks.onError?.(message.error.message || 'Server error');
       }
     } catch (error) {
-      logger.error('VoiceService', `Error handling SDK message: ${this.describeError(error)}`);
+      logger.error('VoiceService', `Error handling SDK message: ${error.message}`);
     }
   }
 
@@ -406,15 +469,18 @@ export class VoiceService {
 
     // Turn complete
     if (content.turnComplete) {
+      this.clearUserTurnEndWatchdog();
       logger.info('VoiceService', `🏁 Turn complete (audioChunks sent: ${this.audioResponseCount})`);
       this.audioResponseCount = 0;
+      this.flushTranscriptBuffers();
       this.callbacks.onTurnComplete?.();
     }
 
-    // Model output parts may contain internal text/planning fragments in addition
-    // to audio. RN does not surface these raw text parts to the user, so on web
-    // we keep them in logs only and render the spoken output transcription instead.
+    // Model output parts (audio + optional thinking text)
     if (content.modelTurn?.parts) {
+      if (content.modelTurn.parts.length > 0) {
+        this.clearUserTurnEndWatchdog();
+      }
       for (const part of content.modelTurn.parts) {
         if (part.inlineData?.data) {
           this.audioResponseCount++;
@@ -424,7 +490,7 @@ export class VoiceService {
           this.callbacks.onAudioResponse?.(part.inlineData.data);
         }
         if (part.text) {
-          logger.info('VoiceService', `🤖 MODEL: "${part.text}"`);
+          logger.debug('VoiceService', `🤖 MODEL TEXT PART (not displayed as transcript): "${part.text}"`);
         }
       }
     }
@@ -432,17 +498,19 @@ export class VoiceService {
     // Input transcription (user's speech-to-text)
     if (content.inputTranscription?.text) {
       logger.info('VoiceService', `🗣️ USER (voice): "${content.inputTranscription.text}"`);
-      this.callbacks.onTranscript?.(content.inputTranscription.text, true, 'user');
+      this.bufferTranscript(content.inputTranscription.text, 'user');
     }
 
     // Output transcription (model's speech-to-text)
     if (content.outputTranscription?.text) {
+      this.clearUserTurnEndWatchdog();
       logger.info('VoiceService', `🤖 MODEL (voice): "${content.outputTranscription.text}"`);
-      this.callbacks.onTranscript?.(content.outputTranscription.text, true, 'model');
+      this.bufferTranscript(content.outputTranscription.text, 'model');
     }
 
     // Tool calls inside serverContent (some SDK versions deliver here)
     if (content.toolCall?.functionCalls) {
+      this.clearUserTurnEndWatchdog();
       this.handleToolCalls(content.toolCall.functionCalls);
     }
   }
@@ -452,6 +520,75 @@ export class VoiceService {
   setStatus(newStatus) {
     this._status = newStatus;
     this.callbacks.onStatusChange?.(newStatus);
+  }
+  bufferTranscript(text, role) {
+    const incoming = this.cleanTranscriptChunk(text);
+    if (!incoming) return;
+    const current = this.transcriptBuffers[role];
+    const combined = this.mergeTranscriptChunk(current, incoming);
+    const {
+      complete,
+      remaining
+    } = this.extractCompleteSentences(combined);
+    for (const sentence of complete) {
+      this.callbacks.onTranscript?.(sentence, true, role);
+    }
+    this.transcriptBuffers[role] = remaining;
+    if (role === 'user' && complete.length > 0) {
+      this.scheduleUserTurnEndWatchdog();
+    }
+  }
+  scheduleUserTurnEndWatchdog() {
+    this.clearUserTurnEndWatchdog();
+    this.userTurnEndWatchdog = setTimeout(() => {
+      this.userTurnEndWatchdog = null;
+      if (!this.isConnected || !this.session) return;
+      logger.warn('VoiceService', `No model/tool event after user transcript for ${USER_TURN_END_WATCHDOG_MS}ms — ending audio stream`);
+      this.sendAudioStreamEnd();
+    }, USER_TURN_END_WATCHDOG_MS);
+    this.userTurnEndWatchdog?.unref?.();
+  }
+  clearUserTurnEndWatchdog() {
+    if (!this.userTurnEndWatchdog) return;
+    clearTimeout(this.userTurnEndWatchdog);
+    this.userTurnEndWatchdog = null;
+  }
+  cleanTranscriptChunk(text) {
+    return text.replace(/<ctrl\d+>/gi, '').replace(/(?:<|\[|\()(?:noise|silence|inaudible|music|laughs?|applause|crosstalk|background noise)(?:>|\]|\))/gi, '').replace(/\s+/g, ' ').trim();
+  }
+  mergeTranscriptChunk(current, incoming) {
+    if (!current) return incoming;
+    if (incoming === current || current.endsWith(incoming)) return current;
+    if (incoming.startsWith(current)) return incoming;
+    if (/^[,.;:!?]+$/.test(incoming)) return `${current}${incoming}`;
+    if (/^[,.;:!?]/.test(incoming)) return `${current}${incoming}`;
+    return `${current} ${incoming}`;
+  }
+  extractCompleteSentences(text) {
+    const complete = [];
+    let start = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (!/[.!?]/.test(text[i] || '')) continue;
+      let end = i + 1;
+      while (end < text.length && /["')\]]/.test(text[end] || '')) {
+        end++;
+      }
+      const sentence = text.slice(start, end).trim();
+      if (sentence) complete.push(sentence);
+      start = end;
+    }
+    return {
+      complete,
+      remaining: text.slice(start).trim()
+    };
+  }
+  flushTranscriptBuffers() {
+    ['user', 'model'].forEach(role => {
+      const pending = this.transcriptBuffers[role].trim();
+      if (!pending) return;
+      this.callbacks.onTranscript?.(pending, true, role);
+      this.transcriptBuffers[role] = '';
+    });
   }
 }
 //# sourceMappingURL=VoiceService.js.map

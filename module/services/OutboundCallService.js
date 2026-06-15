@@ -35,7 +35,7 @@ export async function startOutboundAiCall(params) {
   if (!analyticsKey) {
     return {
       ok: false,
-      error: 'MobileAI analyticsKey is required for outbound AI calls.'
+      error: 'Twomilia analyticsKey is required for outbound AI calls.'
     };
   }
   const allowedTargetTypes = config?.allowedTargetTypes;
