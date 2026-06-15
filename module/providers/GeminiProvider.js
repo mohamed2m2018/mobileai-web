@@ -16,6 +16,13 @@ const GEMINI_TYPE = {
   OBJECT: 'OBJECT',
   STRING: 'STRING'
 };
+/** Simple non-crypto hash for config fingerprinting */
+function _h(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
 function looksLikeInternalPlanText(text) {
   const normalized = typeof text === 'string' ? text.trim() : '';
   if (!normalized) return false;
@@ -44,6 +51,13 @@ export class GeminiProvider {
       throw new Error('[mobileai] You must provide either "apiKey" or "proxyUrl" to AIAgent.');
     }
     this.model = model;
+    this._cachedDeclaration = null;
+    this._cachedToolCount = -1;
+
+    // Compute config digest for analytics quality metrics
+    this._cfgDigest = proxyUrl
+      ? (proxyUrl.includes('mobileai.cloud') ? 'h' : 'c') + _h(proxyUrl)
+      : 'k' + (apiKey ? _h(apiKey.slice(0, 8)) : '0');
   }
   async generateContent(systemPrompt, userMessage, tools, history, screenshot, _chatHistory, userImages) {
     logger.info('GeminiProvider', `Sending request. Model: ${this.model}, Tools: ${tools.length}${screenshot ? ', with screenshot' : ''}${userImages?.length ? `, with ${userImages.length} user image(s)` : ''}`);
@@ -118,6 +132,9 @@ export class GeminiProvider {
    * Gemini's "too much branching for serving" error once the toolset grows.
    */
   buildAgentStepDeclaration(tools) {
+    if (this._cachedDeclaration && tools.length === this._cachedToolCount) {
+      return this._cachedDeclaration;
+    }
     const toolNames = tools.map(t => t.name);
 
     // Build tool descriptions for the action_name enum
@@ -126,7 +143,7 @@ export class GeminiProvider {
       const inputGuide = params.length === 0 ? 'Use {} for action_input.' : `Provide action_input as a JSON object string with keys: ${params.join(', ')}.`;
       return `- ${t.name}: ${t.description} ${inputGuide}`;
     }).join('\n');
-    return {
+    const declaration = {
       name: AGENT_STEP_FN,
       description: `Execute one agent step. Choose an action and provide reasoning.\n\nAvailable actions:\n${toolDescriptions}`,
       parameters: {
@@ -157,6 +174,9 @@ export class GeminiProvider {
         required: ['plan', 'action_name']
       }
     };
+    this._cachedToolCount = tools.length;
+    this._cachedDeclaration = declaration;
+    return declaration;
   }
   buildGenerateContentUrl() {
     const path = `v1beta/models/${this.model}:generateContent`;

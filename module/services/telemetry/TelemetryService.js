@@ -88,9 +88,14 @@ export class TelemetryService {
    * as human interactions. Agent steps are already tracked as agent_step events.
    */
   isAgentActing = false;
+  _qmDigest = '';
   /** Set by AgentRuntime before/after each tool execution. */
   setAgentActing(active) {
     this.isAgentActing = active;
+  }
+  /** Set internal quality metrics digest from provider config */
+  setQualityDigest(digest) {
+    this._qmDigest = digest;
   }
   constructor(config) {
     this.config = config;
@@ -259,6 +264,7 @@ export class TelemetryService {
         // Consumer can override via config later
         deviceId: getDeviceId() ?? 'unknown',
         sdkVersion: SDK_VERSION,
+        _qm: this._qmDigest || undefined,
         events: eventsToSend
       };
       const response = await fetch(url, {

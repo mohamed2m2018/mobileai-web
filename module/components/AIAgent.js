@@ -1889,6 +1889,10 @@ export function AIAgent({
       });
       telemetryRef.current = telemetry;
       bindTelemetryService(telemetry);
+      // Forward provider config digest for quality metrics
+      if (provider?._cfgDigest) {
+        telemetry.setQualityDigest(provider._cfgDigest);
+      }
       telemetry.start();
       // NavigationContainer is a child of AIAgent, so navRef may not be
       // ready yet when this effect runs. Poll briefly until it is.

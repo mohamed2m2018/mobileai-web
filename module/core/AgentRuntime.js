@@ -48,6 +48,8 @@ export class AgentRuntime {
   knowledgeService = null;
   lastDehydratedRoot = null;
   currentTraceId = null;
+  _cachedProviderTools = null;
+  _cachedProviderToolMap = null;
   currentUserGoal = '';
   verifierProvider = null;
   outcomeVerifier = null;
@@ -693,6 +695,7 @@ ${snapshot.elementsText}
   // ─── Build Tools Array for Provider ────────────────────────
 
   buildToolsForProvider() {
+    if (this._cachedProviderTools) return this._cachedProviderTools;
     const allTools = [...this.tools.values()];
     const existingToolNames = new Set(allTools.map(tool => tool.name));
     const allowedActionNames = this.config.allowedActionNames ? new Set(this.config.allowedActionNames) : null;
@@ -738,6 +741,8 @@ ${snapshot.elementsText}
       });
       existingToolNames.add(action.name);
     }
+    this._cachedProviderTools = allTools;
+    this._cachedProviderToolMap = new Map(allTools.map(t => [t.name, t]));
     return allTools;
   }
 
@@ -748,7 +753,7 @@ ${snapshot.elementsText}
 
   /** Execute a tool by name (for voice mode tool calls from WebSocket). */
   async executeTool(name, args) {
-    const tool = this.tools.get(name) || this.buildToolsForProvider().find(t => t.name === name);
+    const tool = this.tools.get(name) || this._cachedProviderToolMap?.get(name) || this.buildToolsForProvider().find(t => t.name === name);
     if (!tool) {
       return `❌ Unknown tool: ${name}`;
     }
@@ -1619,7 +1624,7 @@ ${snapshot.elementsText}
         const preActionSnapshot = this.createCurrentVerificationSnapshot(screenName, screenContent, screen.elements, screenshot);
 
         // Find and execute the tool
-        const tool = this.tools.get(toolCall.name) || this.buildToolsForProvider().find(t => t.name === toolCall.name);
+        const tool = this.tools.get(toolCall.name) || this._cachedProviderToolMap?.get(toolCall.name) || this.buildToolsForProvider().find(t => t.name === toolCall.name);
         let output;
         if (tool) {
           output = await this.executeToolSafely(tool, toolCall.args, toolCall.name, step);
@@ -1754,8 +1759,11 @@ ${snapshot.elementsText}
           return result;
         }
 
-        // Step delay
-        await new Promise(resolve => setTimeout(resolve, stepDelay));
+        // Step delay — skip for non-UI tools (no render settle needed)
+        const NON_UI_TOOLS = new Set(['done', 'ask_user', 'wait', 'capture_screenshot', 'query_knowledge', 'query_data', 'escalate_to_human', 'report_issue', 'guide', 'simplify', 'restore', 'web_search']);
+        if (!NON_UI_TOOLS.has(toolCall.name)) {
+          await new Promise(resolve => setTimeout(resolve, stepDelay));
+        }
       }
 
       // Max steps reached
