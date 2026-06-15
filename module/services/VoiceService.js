@@ -15,7 +15,17 @@
  * - Sends screen context (DOM text) for live mode
  */
 
-import { GoogleGenAI, Modality } from '@google/genai/web';
+// @google/genai is lazy-loaded only when voice actually connects, so it stays
+// out of the main bundle (~266 KB). The CDN build sets globalThis.MOBILEAI_GENAI_URL
+// to a CDN ESM URL; npm consumers resolve the bare specifier from their own dep.
+let _genaiPromise;
+function loadGenAI() {
+  if (!_genaiPromise) {
+    const url = (typeof globalThis !== 'undefined' && globalThis.MOBILEAI_GENAI_URL) || null;
+    _genaiPromise = url ? import(/* @vite-ignore */ url) : import('@google/genai/web');
+  }
+  return _genaiPromise;
+}
 import { logger } from "../utils/logger.js";
 
 // ─── Types ─────────────────────────────────────────────────────
@@ -75,6 +85,7 @@ export class VoiceService {
     const model = this.config.model || DEFAULT_MODEL;
     logger.info('VoiceService', `Connecting via SDK (model: ${model})`);
     try {
+      const { GoogleGenAI, Modality } = await loadGenAI();
       const genAiConfig = {};
       if (this.config.proxyUrl) {
         // The @google/genai SDK sends apiKey as ?key=<value> in the WebSocket URL.

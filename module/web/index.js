@@ -1,6 +1,7 @@
 "use strict";
 
 export { AIAgent } from "./components/AIAgent.js";
+export { init } from "./init.js";
 export { AIZoneWeb, AIZoneWebStateContext } from "./components/AIZoneWeb.js";
 export { RichContentRendererWeb } from "./components/RichContentRendererWeb.js";
 export { WebPlatformAdapter } from "./core/WebPlatformAdapter.js";

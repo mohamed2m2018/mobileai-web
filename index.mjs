@@ -1,6 +1,7 @@
 import * as web from "./module/web/index.js";
 export const {
   AIAgent,
+  init,
   AIZoneWeb,
   AIZoneWebStateContext,
   RichContentRendererWeb,

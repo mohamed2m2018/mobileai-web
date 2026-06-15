@@ -1106,30 +1106,18 @@ ${snapshot.elementsText}
       return `Action paused because the user interrupted with this message: "${response}". Please answer the user by fully explaining your logic.`;
     }
 
-    // Fallback: React Native Alert
-    const {
-      Alert
-    } = require('react-native');
-    logger.info('AgentRuntime', `🛡️ Requesting explicit confirmation via native Alert for "${label}"`);
+    // Fallback: native browser confirm
+    logger.info('AgentRuntime', `🛡️ Requesting explicit confirmation via window.confirm for "${label}"`);
     this.emitTrace('confirmation_prompted', {
       tool: toolName,
       elementLabel: label,
       elementType: element.type,
       question,
-      channel: 'native_alert'
+      channel: 'web_confirm'
     }, stepIndex);
-    const approved = await new Promise(resolve => {
-      Alert.alert('Confirm Action', question, [{
-        text: 'Cancel',
-        style: 'cancel',
-        onPress: () => resolve(false)
-      }, {
-        text: 'Continue',
-        onPress: () => resolve(true)
-      }], {
-        cancelable: false
-      });
-    });
+    const approved = (typeof window !== 'undefined' && typeof window.confirm === 'function')
+      ? window.confirm(question)
+      : true;
     if (!approved) {
       logger.info('AgentRuntime', `🛑 User rejected "${toolName}" on "${label}"`);
       this.emitTrace('confirmation_rejected', {
@@ -1139,7 +1127,7 @@ ${snapshot.elementsText}
       }, stepIndex);
       return ACTION_NOT_APPROVED_MESSAGE;
     }
-    logger.info('AgentRuntime', `✅ User approved "${toolName}" on "${label}" via native Alert`);
+    logger.info('AgentRuntime', `✅ User approved "${toolName}" on "${label}" via window.confirm`);
     this.emitTrace('confirmation_approved', {
       tool: toolName,
       elementLabel: label,

@@ -10,7 +10,6 @@
  * - Opt-in only (requires analyticsKey or analyticsProxyUrl)
  */
 
-import { AppState, Platform } from 'react-native';
 import { logger } from "../../utils/logger.js";
 import { ENDPOINTS } from "../../config/endpoints.js";
 import { scrubPII } from "./PiiScrubber.js";
@@ -132,17 +131,25 @@ export class TelemetryService {
     const interval = this.config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
     this.flushTimer = setInterval(() => this.flush(), interval);
 
-    // Flush on app background
-    this.appStateSubscription = AppState.addEventListener('change', state => {
-      if (state === 'background' || state === 'inactive') {
+    // Flush when the tab is hidden (web equivalent of app backgrounding)
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         this.flush();
       }
-    });
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+    this.appStateSubscription = {
+      remove: () => {
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
 
     // Track session start
     this.track('session_start', {
-      device: Platform.OS,
-      os: String(Platform.Version),
+      device: 'web',
+      os: typeof navigator !== 'undefined' ? navigator.userAgent : 'web',
       sdk_version: SDK_VERSION
     });
     logger.info(LOG_TAG, `Started (session: ${this.sessionId})`);
@@ -260,7 +267,7 @@ export class TelemetryService {
       };
       const batch = {
         analyticsKey: this.config.analyticsKey ?? '',
-        appId: Platform.OS,
+        appId: 'web',
         // Consumer can override via config later
         deviceId: getDeviceId() ?? 'unknown',
         sdkVersion: SDK_VERSION,
