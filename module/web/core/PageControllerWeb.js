@@ -823,6 +823,31 @@ function getNearbyTextForElement(element, doc, win) {
   }
   return uniqueStrings(values.map(text => truncateText(text, 120)), 4);
 }
+// Surface a form field's validation error so the agent can SEE why a submit
+// failed (e.g. "Enter valid business email address"). Uses semantic signals
+// only — aria-invalid + the message referenced by aria-errormessage /
+// aria-describedby, plus native constraint validation — not error-string or
+// CSS-class pattern matching, so it works across accessible form libraries.
+function getFieldError(node, doc) {
+  if (!isHTMLElement(node)) return '';
+  const ariaInvalid = node.getAttribute('aria-invalid') === 'true';
+  let msg = '';
+  // aria-errormessage always points at the error; aria-describedby only counts
+  // as the error when the field is flagged invalid (otherwise it's help text).
+  const ref = node.getAttribute('aria-errormessage') || (ariaInvalid ? node.getAttribute('aria-describedby') : '');
+  if (ref) {
+    msg = ref.split(/\s+/)
+      .map(id => { const el = doc.getElementById(id); return el ? normalizeText(el.textContent || '') : ''; })
+      .filter(Boolean)
+      .join(' ');
+  }
+  // Native constraint validation (e.g. malformed email / required empty).
+  if (!msg && node.willValidate === true && typeof node.checkValidity === 'function' && !node.checkValidity()) {
+    msg = normalizeText(node.validationMessage || '');
+  }
+  if ((ariaInvalid || msg) && !msg) msg = 'invalid value';
+  return msg;
+}
 function buildProps(element, metadata) {
   const props = {
     domNode: element,
@@ -1135,9 +1160,21 @@ export class PageControllerWeb {
       if (current && current !== 'false') hints.push('current');
       if (isInputElement(node)) {
         if (node.type && node.type !== 'text') hints.push(`inputType="${node.type}"`);
-        if (node.checked) hints.push('checked');
+        if (node.type === 'checkbox' || node.type === 'radio') {
+          if (node.checked) hints.push('checked');
+        } else if (typeof node.value === 'string' && node.value.trim()) {
+          // Show the current value so the agent knows the field is already
+          // filled (and with what) — previously only select values were shown.
+          hints.push(`value="${truncateText(node.value, 60)}"`);
+        }
+      } else if (isTextAreaElement(node) && typeof node.value === 'string' && node.value.trim()) {
+        hints.push(`value="${truncateText(node.value, 60)}"`);
       } else if (isSelectElement(node) && node.value) {
         hints.push(`value="${truncateText(node.value, 40)}"`);
+      }
+      if (isInputElement(node) || isTextAreaElement(node) || isSelectElement(node)) {
+        const fieldError = getFieldError(node, node.ownerDocument);
+        if (fieldError) hints.push(`INVALID error="${truncateText(fieldError, 100)}"`);
       }
       if (isHTMLElement(node) && (node.disabled === true || node.getAttribute('aria-disabled') === 'true')) {
         hints.push('disabled');
