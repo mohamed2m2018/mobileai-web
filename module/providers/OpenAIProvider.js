@@ -74,10 +74,10 @@ export class OpenAIProvider {
     }
     this.model = model;
   }
-  async generateContent(systemPrompt, userMessage, tools, _history, screenshot, signal) {
-    logger.info('OpenAIProvider', `Sending request. Model: ${this.model}, Tools: ${tools.length}${screenshot ? ', with screenshot' : ''}`);
+  async generateContent(systemPrompt, userMessage, tools, _history, screenshot, signal, userImages) {
+    logger.info('OpenAIProvider', `Sending request. Model: ${this.model}, Tools: ${tools.length}${screenshot ? ', with screenshot' : ''}${userImages?.length ? `, with ${userImages.length} user image(s)` : ''}`);
     const agentStepTool = this.buildAgentStepTool(tools);
-    const messages = this.buildMessages(systemPrompt, userMessage, screenshot);
+    const messages = this.buildMessages(systemPrompt, userMessage, screenshot, userImages);
     const startTime = Date.now();
     try {
       const data = await retryWithBackoff(async () => {
@@ -188,27 +188,34 @@ export class OpenAIProvider {
 
   // ─── Build Messages ────────────────────────────────────────
 
-  buildMessages(systemPrompt, userMessage, screenshot) {
+  buildMessages(systemPrompt, userMessage, screenshot, userImages) {
     const messages = [{
       role: 'system',
       content: systemPrompt
     }];
 
-    // User message — text or multimodal with screenshot
-    if (screenshot) {
-      messages.push({
-        role: 'user',
-        content: [{
+    // User message — text, plus any user-attached images and/or screenshot.
+    if ((userImages && userImages.length) || screenshot) {
+      const content = [{ type: 'text', text: userMessage }];
+      if (userImages?.length) {
+        for (const img of userImages) {
+          content.push({
+            type: 'image_url',
+            image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'auto' }
+          });
+        }
+        content.push({
           type: 'text',
-          text: userMessage
-        }, {
+          text: '\n[The user attached the above image(s) to their message. Describe what you see if relevant to their request.]'
+        });
+      }
+      if (screenshot) {
+        content.push({
           type: 'image_url',
-          image_url: {
-            url: `data:image/jpeg;base64,${screenshot}`,
-            detail: 'low'
-          }
-        }]
-      });
+          image_url: { url: `data:image/jpeg;base64,${screenshot}`, detail: 'low' }
+        });
+      }
+      messages.push({ role: 'user', content });
     } else {
       messages.push({
         role: 'user',
