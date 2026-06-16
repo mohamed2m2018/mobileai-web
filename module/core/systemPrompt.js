@@ -63,7 +63,8 @@ const SCREEN_FINDING_PROCEDURE = `- If the current screen doesn't have what you 
 /**
  * Lazy loading / scrolling rule — identical in text and voice agents.
  */
-const LAZY_LOADING_RULE = `- LAZY LOADING & SCROLLING: Many lists use lazy loading. If you need to find all items, search for a specific item, or find list extremes (e.g. "latest", "cheapest"): FIRST check if the app provides sort or filter controls and use them. If NO sort/filter controls are available, you MUST use the scroll tool to render the rest of the list before making a conclusion.`;
+const LAZY_LOADING_RULE = `- LAZY LOADING & SCROLLING: Many lists use lazy loading. If you need to find all items, search for a specific item, or find list extremes (e.g. "latest", "cheapest"): FIRST check if the app provides sort or filter controls and use them. If NO sort/filter controls are available, you MUST use the scroll tool to render the rest of the list before making a conclusion.
+- READING & SUMMARIZING LONG CONTENT: When the user asks you to read, summarize, or pull details from an article or page that runs past the viewport, do NOT answer after a single screenful, and do NOT stop and wait for the user to tell you to keep scrolling. Scroll down page by page, accumulating the key points in your memory field as you go, and keep scrolling until a scroll result reports you have reached the bottom. ONLY THEN call done() with the complete summary in one reply.`;
 
 /**
  * Security & privacy rules — no guessing, no auto-filling sensitive fields.
