@@ -23,6 +23,37 @@ function _h(s) {
   return (h >>> 0).toString(36);
 }
 
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 1000;
+const RATE_LIMIT_BACKOFF_MS = 3000;
+
+// Retry transient upstream failures (429/503) with exponential backoff.
+// Mirrors RN's retryWithBackoff. Does NOT retry our own proxy rate limits
+// (they won't clear in seconds) or aborts.
+async function retryWithBackoff(fn, tag, maxRetries = MAX_RETRIES) {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (error?.name === 'AbortError') throw error;
+      const status = error?.status ?? error?.httpCode ?? 0;
+      const msg = String(error?.message || '');
+      const isProxyLimit = msg.includes('device_rate_limited') || msg.includes('token_rate_limited') || msg.includes('session_token_budget');
+      if (isProxyLimit) throw error;
+      const isRateLimit = status === 429;
+      const isRetryable = isRateLimit || status === 503;
+      if (!isRetryable || attempt === maxRetries) throw error;
+      const base = isRateLimit ? RATE_LIMIT_BACKOFF_MS : BASE_BACKOFF_MS;
+      const delay = base * Math.pow(2, attempt);
+      logger.warn(tag, `${status} — retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastError;
+}
+
 function looksLikeInternalPlanText(text) {
   const normalized = typeof text === 'string' ? text.trim() : '';
   if (!normalized) return false;
@@ -69,37 +100,41 @@ export class GeminiProvider {
     const contents = this.buildContents(userMessage, history, screenshot, userImages);
     const startTime = Date.now();
     try {
-      const response = await fetch(this.buildGenerateContentUrl(), {
-        method: 'POST',
-        signal,
-        headers: this.headers,
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{
-              text: systemPrompt
-            }]
-          },
-          contents,
-          tools: [{
-            functionDeclarations: [agentStepDeclaration]
-          }],
-          toolConfig: {
-            functionCallingConfig: {
-              mode: 'ANY',
-              allowedFunctionNames: [AGENT_STEP_FN]
+      const data = await retryWithBackoff(async () => {
+        const response = await fetch(this.buildGenerateContentUrl(), {
+          method: 'POST',
+          signal,
+          headers: this.headers,
+          body: JSON.stringify({
+            systemInstruction: {
+              parts: [{
+                text: systemPrompt
+              }]
+            },
+            contents,
+            tools: [{
+              functionDeclarations: [agentStepDeclaration]
+            }],
+            toolConfig: {
+              functionCallingConfig: {
+                mode: 'ANY',
+                allowedFunctionNames: [AGENT_STEP_FN]
+              }
+            },
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 2048
             }
-          },
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 2048
-          }
-        })
-      });
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`Gemini API error ${response.status}: ${errorBody}`);
-      }
-      const data = await response.json();
+          })
+        });
+        if (!response.ok) {
+          const errorBody = await response.text();
+          const err = new Error(`Gemini API error ${response.status}: ${errorBody}`);
+          err.status = response.status;
+          throw err;
+        }
+        return response.json();
+      }, 'GeminiProvider');
       const elapsed = Date.now() - startTime;
       logger.info('GeminiProvider', `Response received in ${elapsed}ms`);
 

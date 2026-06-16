@@ -18,6 +18,35 @@ import { logger } from "../utils/logger.js";
 const AGENT_STEP_FN = 'agent_step';
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 const REASONING_FIELDS = ['previous_goal_eval', 'memory', 'plan'];
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 1000;
+const RATE_LIMIT_BACKOFF_MS = 3000;
+
+// Retry transient upstream failures (429/503) with exponential backoff.
+// Mirrors RN's retryWithBackoff. Skips our own proxy rate limits and aborts.
+async function retryWithBackoff(fn, tag, maxRetries = MAX_RETRIES) {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (error?.name === 'AbortError') throw error;
+      const status = error?.status ?? error?.httpCode ?? 0;
+      const msg = String(error?.message || '');
+      const isProxyLimit = msg.includes('device_rate_limited') || msg.includes('token_rate_limited') || msg.includes('session_token_budget');
+      if (isProxyLimit) throw error;
+      const isRateLimit = status === 429;
+      const isRetryable = isRateLimit || status === 503;
+      if (!isRetryable || attempt === maxRetries) throw error;
+      const base = isRateLimit ? RATE_LIMIT_BACKOFF_MS : BASE_BACKOFF_MS;
+      const delay = base * Math.pow(2, attempt);
+      logger.warn(tag, `${status} — retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastError;
+}
 function looksLikeInternalPlanText(text) {
   const normalized = typeof text === 'string' ? text.trim() : '';
   if (!normalized) return false;
@@ -51,24 +80,28 @@ export class OpenAIProvider {
     const messages = this.buildMessages(systemPrompt, userMessage, screenshot);
     const startTime = Date.now();
     try {
-      const response = await fetch(this.baseUrl, {
-        method: 'POST',
-        signal,
-        headers: this.headers,
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          tools: [agentStepTool],
-          tool_choice: 'required',
-          temperature: 0.2,
-          max_tokens: 2048
-        })
-      });
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`OpenAI API error ${response.status}: ${errorBody}`);
-      }
-      const data = await response.json();
+      const data = await retryWithBackoff(async () => {
+        const response = await fetch(this.baseUrl, {
+          method: 'POST',
+          signal,
+          headers: this.headers,
+          body: JSON.stringify({
+            model: this.model,
+            messages,
+            tools: [agentStepTool],
+            tool_choice: 'required',
+            temperature: 0.2,
+            max_tokens: 2048
+          })
+        });
+        if (!response.ok) {
+          const errorBody = await response.text();
+          const err = new Error(`OpenAI API error ${response.status}: ${errorBody}`);
+          err.status = response.status;
+          throw err;
+        }
+        return response.json();
+      }, 'OpenAIProvider');
       const elapsed = Date.now() - startTime;
       logger.info('OpenAIProvider', `Response received in ${elapsed}ms`);
       const tokenUsage = this.extractTokenUsage(data);
