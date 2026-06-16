@@ -595,16 +595,34 @@ export class WebPlatformAdapter {
       bubbles: true
     }));
   }
-  // Rings the target element before an action so every agent step (tap/type/
-  // scroll/…) is visible to the user, mirroring RN `showActionHighlight`.
-  // Reuses the existing `onGuide` overlay path; no-op when there is no overlay
-  // or the node has no layout (e.g. jsdom smoke tests → width/height 0).
+  getViewportRect(node) {
+    if (!node || typeof node.getBoundingClientRect !== 'function') return null;
+    const rect = node.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    let offsetX = 0;
+    let offsetY = 0;
+    let doc = node.ownerDocument;
+    while (doc) {
+      const win = doc.defaultView;
+      if (!win || win === win.parent) break;
+      try {
+        const frame = win.frameElement;
+        if (!frame) break;
+        const frameRect = frame.getBoundingClientRect();
+        offsetX += frameRect.left;
+        offsetY += frameRect.top;
+        doc = frame.ownerDocument;
+      } catch { break; }
+    }
+    if (offsetX === 0 && offsetY === 0) return rect;
+    return { left: rect.left + offsetX, top: rect.top + offsetY, width: rect.width, height: rect.height, right: rect.right + offsetX, bottom: rect.bottom + offsetY };
+  }
   async showActionHighlight(node, action, durationMs = 600) {
     if (!node || typeof node.getBoundingClientRect !== 'function' || !this.options.onGuide) {
       return;
     }
-    const rect = node.getBoundingClientRect();
-    if (!rect || rect.width <= 0 || rect.height <= 0) {
+    const rect = this.getViewportRect(node);
+    if (!rect) {
       return;
     }
     this.options.onGuide({
@@ -831,12 +849,12 @@ export class WebPlatformAdapter {
     if (!node) {
       return `❌ Element with index ${resolvedIndex} not found.`;
     }
-    // message is optional when an action tag is provided — derive a default
-    // label so the tooltip still reads sensibly (matches RN guide_user).
+    this.scrollNodeIntoView(node);
     const label = (typeof message === 'string' && message.trim())
       ? message.trim()
       : defaultGuideLabel(action);
-    const rect = node.getBoundingClientRect();
+    const rect = this.getViewportRect(node);
+    if (!rect) return `❌ Element [${resolvedIndex}] has no visible layout.`;
     this.options.onGuide?.({
       targetRect: rect,
       message: label,

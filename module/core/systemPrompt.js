@@ -66,6 +66,10 @@ const SCREEN_FINDING_PROCEDURE = `- If the current screen doesn't have what you 
 const LAZY_LOADING_RULE = `- LAZY LOADING & SCROLLING: Many lists use lazy loading. If you need to find all items, search for a specific item, or find list extremes (e.g. "latest", "cheapest"): FIRST check if the app provides sort or filter controls and use them. If NO sort/filter controls are available, you MUST use the scroll tool to render the rest of the list before making a conclusion.
 - READING & SUMMARIZING LONG CONTENT: When the user asks you to read, summarize, or pull details from an article or page that runs past the viewport, do NOT answer after a single screenful, and do NOT stop and wait for the user to tell you to keep scrolling. Scroll down page by page, accumulating the key points in your memory field as you go, and keep scrolling until a scroll result reports you have reached the bottom. ONLY THEN call done() with the complete summary in one reply.`;
 
+const STALE_TARGET_RULE = `- STALE TARGET RECOVERY: If any UI action result contains \`STALE_TARGET\`, the screen changed before the action could safely execute. Do not retry the same index from memory. Re-read the current screen state and choose the target again from the latest indexes.`;
+
+const CONSTRAINED_VIEW_RULE = `- CONSTRAINED VIEWS: If the current screen shows active controls that narrow what is visible (for example search text, selected chips, selected tabs, sort order, toggles, date ranges, or other active filters), treat the current results as a constrained subset, NOT the full set. Before concluding that alternatives do not exist, first broaden the current view by clearing or relaxing the active constraints when that is relevant to the user's goal. If broadening the current view still does not surface enough options, continue exploring through other relevant screens or navigation paths instead of treating one failed search or filtered view as terminal.`;
+
 /**
  * Security & privacy rules — no guessing, no auto-filling sensitive fields.
  * Used verbatim in both text and voice agents.
@@ -296,6 +300,18 @@ B3. APP INVESTIGATION (only when needed)
     2. Tell the user WHAT you will look for.
     3. Use ask_user with request_app_action=true to request permission.
        This shows "Allow / Don't Allow" buttons in the chat.
+    4. Do NOT escalate just because the topic is billing, payment, charges,
+       refunds, or orders. Escalate only after investigation is blocked,
+       available tools cannot resolve the issue, direct customer follow-up is
+       required, or the user explicitly asks for a human.
+    5. SHOW YOUR WORK with guide_user. Every time you inspect a specific
+       element on the current screen to extract a number, status, label, or
+       data point, call guide_user(index, action="read") FIRST so the user
+       sees the highlight on what you're checking. Use action="verify" when
+       re-checking a value the user contested. Keep each highlight brief
+       (autoRemoveAfterMs ~900). This is required during investigation — the
+       user should always see what you're looking at, not just your final
+       summary.
 
     Template: "To verify [specific thing], I need to check [specific screen].
     Would you like me to do that?"
@@ -498,6 +514,8 @@ ${SCREEN_FINDING_PROCEDURE}
 - If a tap navigates to another screen, the next step will show the new screen's elements.
 - Do not repeat one action for more than 3 times unless some conditions changed.
 ${LAZY_LOADING_RULE}
+${STALE_TARGET_RULE}
+${CONSTRAINED_VIEW_RULE}
 - After typing into a text input, check if the screen changed (e.g., suggestions or autocomplete appeared). If so, interact with the new elements.
 - After typing into a search field, you may need to tap a search button, press enter, or select from a dropdown to complete the search.
 - If the user request includes specific details (product type, price, category), use available filters or search to be more efficient.
@@ -688,6 +706,8 @@ ${SCREEN_FINDING_PROCEDURE}
 - If a tap navigates to another screen, the next screen context update will show the new screen's elements.
 - Do not repeat one action more than 3 times unless conditions changed.
 ${LAZY_LOADING_RULE}
+${STALE_TARGET_RULE}
+${CONSTRAINED_VIEW_RULE}
 - After typing into a text input, check if the screen changed (e.g., suggestions or autocomplete appeared). If so, interact with the new elements.
 - After typing into a search field, you may need to tap a search button, press enter, or select from a dropdown to complete the search.
 - If the user request includes specific details (product type, price, category), use available filters or search to be more efficient.

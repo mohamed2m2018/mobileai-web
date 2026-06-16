@@ -1254,36 +1254,57 @@ export class AgentRuntime {
   }
 
   /** Maps a tool call to a user-friendly status label for the loading overlay. */
+  getToolTargetLabel(args) {
+    const index = args?.index;
+    if (typeof index !== 'number') return null;
+    const screen = this.lastDehydratedRoot;
+    const label = screen?.elements?.find(el => el.index === index)?.label;
+    if (!label || /^\[[^\]]+\]$/.test(label)) return null;
+    const normalized = label
+      .replace(/,\s*tab,\s*\d+\s*of\s*\d+/i, '')
+      .replace(/,\s*button$/i, '')
+      .replace(/,\s*selected$/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return null;
+    return normalized.length > 34 ? `${normalized.slice(0, 31)}...` : normalized;
+  }
+
   getToolStatusLabel(toolName, args) {
+    const t = this.getToolTargetLabel(args);
     switch (toolName) {
       case 'tap':
-        return 'Tapping a button...';
+        return t ? `Tapping "${t}"` : 'Tapping...';
       case 'type':
-        return 'Typing into a field...';
+        return t ? `Typing in "${t}"` : 'Typing...';
       case 'navigate':
-        return `Navigating to ${args.screen || 'another screen'}...`;
+        return `Opening ${args.screen || 'screen'}...`;
       case 'done':
-        return 'Wrapping up...';
+        return 'Writing response...';
       case 'ask_user':
-        return 'Asking you a question...';
+        return '';
+      case 'query_data':
+        return `Looking up ${args.source || 'data'}...`;
       case 'query_knowledge':
         return 'Searching knowledge base...';
       case 'scroll':
         return `Scrolling ${args.direction || 'down'}...`;
       case 'wait':
-        return 'Waiting for the screen to load...';
+        return 'Waiting for screen to load...';
       case 'long_press':
-        return 'Long-pressing an element...';
+        return t ? `Holding "${t}"` : 'Long pressing...';
       case 'adjust_slider':
-        return `Adjusting slider to ${Math.round((args.value ?? 0) * 100)}%...`;
+        return t ? `Setting ${t}...` : 'Adjusting slider...';
       case 'select_picker':
-        return `Selecting "${args.value || ''}" from a dropdown...`;
+        return t ? `Choosing ${t}...` : `Choosing "${args.value || ''}"...`;
       case 'set_date':
-        return `Setting date to ${args.date || ''}...`;
+        return 'Setting date...';
       case 'dismiss_keyboard':
-        return 'Dismissing keyboard...';
+        return 'Closing keyboard...';
+      case 'guide_user':
+        return t ? `Showing "${t}"` : '';
       default:
-        return `Running ${toolName}...`;
+        return `${toolName}...`;
     }
   }
 
