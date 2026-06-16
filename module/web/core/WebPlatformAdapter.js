@@ -95,6 +95,20 @@ function isInsideAgentUI(node) {
   }
   return false;
 }
+// Default tooltip label for guide_user when no message is provided but an
+// action tag is set (matches RN's default-label behavior).
+function defaultGuideLabel(action) {
+  switch (action) {
+    case 'tap': return 'Tap here';
+    case 'read': return 'Reading this';
+    case 'type': return 'Type here';
+    case 'verify': return 'Checking this';
+    case 'scroll': return 'Scroll here';
+    case 'fill': return 'Fill this in';
+    case 'wait': return 'Please wait';
+    default: return '';
+  }
+}
 function getScrollTargetName(target) {
   if (isHTMLElementLike(target)) {
     const id = target.id ? `#${target.id}` : '';
@@ -242,7 +256,7 @@ export class WebPlatformAdapter {
       case 'dismiss_keyboard':
         return this.dismissKeyboard();
       case 'guide_user':
-        return this.guideUser(intent.index, intent.message, intent.autoRemoveAfterMs);
+        return this.guideUser(intent.index, intent.message, intent.autoRemoveAfterMs, intent.action);
       case 'simplify_zone':
         return this.simplifyZone(intent.zoneId);
       case 'render_block':
@@ -657,24 +671,34 @@ export class WebPlatformAdapter {
     return `✅ Set date on [${index}] "${element.label}" to ${date}`;
   }
   async dismissKeyboard() {
-    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    // Resolve activeElement from the agent's controlled root document (handles
+    // iframe / shadow-root mounts), not the ambient global document.
+    const root = this.options.getRoot?.();
+    const doc = isDocumentNode(root) ? root : root?.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    const active = doc?.activeElement;
     if (isHTMLElementLike(active)) {
       active.blur();
     }
     return '✅ Dismissed active input focus.';
   }
-  async guideUser(index, message, autoRemoveAfterMs) {
+  async guideUser(index, message, autoRemoveAfterMs, action) {
     const node = this.getDomNode(index);
     if (!node) {
       return `❌ Element with index ${index} not found.`;
     }
+    // message is optional when an action tag is provided — derive a default
+    // label so the tooltip still reads sensibly (matches RN guide_user).
+    const label = (typeof message === 'string' && message.trim())
+      ? message.trim()
+      : defaultGuideLabel(action);
     const rect = node.getBoundingClientRect();
     this.options.onGuide?.({
       targetRect: rect,
-      message,
+      message: label,
+      action,
       autoRemoveAfterMs
     });
-    return `✅ Highlighted [${index}] with guidance "${message}"`;
+    return `✅ Highlighted [${index}] with guidance "${label}"`;
   }
   async simplifyZone(zoneId) {
     const zone = globalZoneRegistry.get(zoneId);

@@ -805,8 +805,15 @@ export class AgentRuntime {
       return;
     }
     const maxFollowupSteps = verifier.getMaxFollowupSteps();
-    const ageNote = this.pendingCriticalVerification.followupSteps >= maxFollowupSteps ? ` This critical action is still unverified after ${this.pendingCriticalVerification.followupSteps} follow-up checks.` : '';
-    this.observations.push(`Outcome verifier: The previous action "${this.pendingCriticalVerification.action.label}" is still unverified. ${result.evidence}${ageNote} Before calling done(success=true), keep checking for success or error evidence on the current screen.`);
+    if (this.pendingCriticalVerification.followupSteps >= maxFollowupSteps) {
+      // Give up re-checking after maxFollowupSteps and UNBLOCK done(). Without
+      // this, a critical action that never verifies wedges the loop (done is
+      // blocked while pendingCriticalVerification != null). Matches RN.
+      this.observations.push(`Outcome verifier: The previous action "${this.pendingCriticalVerification.action.label}" remained unverified after ${this.pendingCriticalVerification.followupSteps} follow-up checks. ${result.evidence} Stop re-checking this action. Use the current visible UI evidence to either call done(success=true) if the goal is visibly complete, or done(success=false) with a clear explanation if it is not.`);
+      this.pendingCriticalVerification = null;
+      return;
+    }
+    this.observations.push(`Outcome verifier: The previous action "${this.pendingCriticalVerification.action.label}" is still unverified. ${result.evidence} Before calling done(success=true), keep checking for success or error evidence on the current screen.`);
   }
   maybeStartCriticalVerification(toolName, args, preAction) {
     const verifier = this.getVerifier();
