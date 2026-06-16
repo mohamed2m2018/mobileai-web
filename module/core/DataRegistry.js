@@ -32,4 +32,3 @@ export class DataRegistry {
   }
 }
 export const dataRegistry = new DataRegistry();
-//# sourceMappingURL=DataRegistry.js.map

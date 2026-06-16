@@ -1,0 +1,52 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Request a demo (multi-step)</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;padding:40px;color:#111}
+.card{max-width:520px;margin:0 auto;border:1px solid #e3e3e3;border-radius:14px;padding:28px}
+h1{font-size:26px;margin:0 0 6px}.sub{color:#555;margin:0 0 18px}
+.steps{display:flex;gap:8px;margin:0 0 22px}.steps span{flex:1;height:5px;border-radius:3px;background:#ddd}.steps span.on{background:#ff5100}
+label{display:block;margin:16px 0 6px;font-weight:600}
+input{width:100%;padding:11px;font:inherit;border:1px solid #bbb;border-radius:8px;box-sizing:border-box}
+.err{color:#d00;font-size:13px;margin-top:6px;display:none}
+button{margin-top:22px;padding:13px 22px;font:inherit;border:none;border-radius:8px;background:#ff5100;color:#fff;font-weight:700;cursor:pointer}
+.hide{display:none}
+</style></head><body>
+<div class="card">
+<h1>Request a personalised demo</h1>
+<p class="sub">We need a bit more information to prepare your personalised demo.</p>
+<div class="steps"><span id="s0" class="on"></span><span id="s1"></span><span id="s2"></span></div>
+
+<div id="step0">
+  <label>First Name *</label><input id="firstName" aria-label="First Name"/>
+  <label>Last Name *</label><input id="lastName" aria-label="Last Name"/>
+  <button type="button" onclick="next(0)">Next</button>
+</div>
+<div id="step1" class="hide">
+  <label>Phone Number *</label><input id="phone" aria-label="Phone Number"/>
+  <button type="button" onclick="next(1)">Next</button>
+</div>
+<div id="step2" class="hide">
+  <label>Work Email *</label><input id="email" aria-label="Work Email"/>
+  <div class="err" id="emailErr">Enter valid business email address</div>
+  <button type="button" onclick="submitForm()">Submit</button>
+</div>
+<div id="done" class="hide"><h2>Thanks! Your demo request is submitted.</h2></div>
+</div>
+<script>
+function show(n){[0,1,2].forEach(i=>{document.getElementById('step'+i).className=i===n?'':'hide';document.getElementById('s'+i).className=i<=n?'on':'';});}
+function next(n){
+  if(n===0){if(!document.getElementById('firstName').value.trim()||!document.getElementById('lastName').value.trim())return;}
+  if(n===1){if(!document.getElementById('phone').value.trim())return;}
+  show(n+1);
+}
+function submitForm(){
+  var e=document.getElementById('email').value.trim().toLowerCase();
+  var free=/@(gmail|yahoo|hotmail|outlook|icloud)\./.test(e);
+  if(!e||free||!e.includes('@')){document.getElementById('emailErr').style.display='block';return;}
+  document.getElementById('emailErr').style.display='none';
+  document.querySelector('.card').innerHTML='<h2>Thanks! Your demo request is submitted.</h2>';
+}
+</script>
+<script>window.process={env:{NEXT_PUBLIC_MOBILEAI_BASE_URL:'http://localhost:3001'}};</script>
+<script src="./twomilia.js?v=demo1" data-proxy-url="http://localhost:3001/api/v1/hosted-proxy/text" data-analytics-key="mobileai_pub_163b551023621aeec77e5b27bbcf60ff13c982eb" data-auth-token="mobileai_pub_163b551023621aeec77e5b27bbcf60ff13c982eb"></script>
+</body></html>

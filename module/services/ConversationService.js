@@ -22,11 +22,7 @@ import { logger } from "../utils/logger.js";
 function toPayload(msgs) {
   return msgs.filter(m => m.role === 'user' || m.role === 'assistant').filter(m => m.previewText.trim().length > 0).map(m => ({
     role: m.role,
-    // The backend stores content as a plain string. Web messages carry
-    // rich-content nodes (arrays/objects), so flatten to text before sending —
-    // otherwise prisma.aiConversation.create() rejects the non-string value
-    // (500). RN already sends string content, so this is a no-op there.
-    content: typeof m.content === 'string' ? m.content : richContentToPlainText(m.content),
+    content: richContentToPlainText(m.content, m.previewText),
     previewText: m.previewText,
     timestamp: m.timestamp
   }));
@@ -83,9 +79,9 @@ export async function appendMessages({
   analyticsKey,
   messages
 }) {
-  if (!analyticsKey || !conversationId) return;
+  if (!analyticsKey || !conversationId) return false;
   const payload = toPayload(messages);
-  if (!payload.length) return;
+  if (!payload.length) return false;
   try {
     const res = await fetch(ENDPOINTS.conversations, {
       method: 'POST',
@@ -100,9 +96,12 @@ export async function appendMessages({
     });
     if (!res.ok) {
       logger.warn('ConversationService', `appendMessages failed: ${res.status}`);
+      return true;
     }
+    return true;
   } catch (err) {
     logger.warn('ConversationService', `appendMessages error: ${err}`);
+    return true;
   }
 }
 
@@ -131,10 +130,40 @@ export async function fetchConversations({
       return [];
     }
     const data = await res.json();
-    return data.conversations ?? [];
+    return (data.conversations ?? []).slice(0, limit);
   } catch (err) {
     logger.warn('ConversationService', `fetchConversations error: ${err}`);
     return [];
+  }
+}
+
+/**
+ * Signal that a conversation has ended.
+ * Triggers server-side insight generation (what went wrong, what could improve).
+ * Fire-and-forget — never throws.
+ */
+export async function endConversation({
+  conversationId,
+  analyticsKey
+}) {
+  if (!analyticsKey || !conversationId) return false;
+  try {
+    const res = await fetch(`${ENDPOINTS.conversations}/${conversationId}/end`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        analyticsKey
+      })
+    });
+    if (!res.ok) {
+      logger.warn('ConversationService', `endConversation failed: ${res.status}`);
+    }
+    return res.ok;
+  } catch (err) {
+    logger.warn('ConversationService', `endConversation error: ${err}`);
+    return false;
   }
 }
 
@@ -170,4 +199,3 @@ export async function fetchConversation({
     return null;
   }
 }
-//# sourceMappingURL=ConversationService.js.map

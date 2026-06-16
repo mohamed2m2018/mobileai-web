@@ -83,4 +83,3 @@ export function toBlockDefinition(component, defaults) {
     styleSlots: defaults?.styleSlots
   };
 }
-//# sourceMappingURL=BlockRegistry.js.map

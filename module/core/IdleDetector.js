@@ -67,4 +67,3 @@ export class IdleDetector {
     }
   }
 }
-//# sourceMappingURL=IdleDetector.js.map

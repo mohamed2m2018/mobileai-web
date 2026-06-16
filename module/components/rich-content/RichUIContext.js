@@ -48,4 +48,3 @@ export function useRichUITheme(surface) {
 export function useBlockRegistry() {
   return useContext(BlockRegistryContext);
 }
-//# sourceMappingURL=RichUIContext.js.map

@@ -54,4 +54,3 @@ export const ENDPOINTS = {
   /** AI conversation history — save and retrieve per-user AI chat sessions */
   get conversations() { return `${activeBase()}/api/v1/conversations`; }
 };
-//# sourceMappingURL=endpoints.js.map

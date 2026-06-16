@@ -200,4 +200,3 @@ export const logger = {
     if (enabled) emit('debug', `${TAG} [${context}] 🐛 ${formatArgs(args)}`);
   }
 };
-//# sourceMappingURL=logger.js.map

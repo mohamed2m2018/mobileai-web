@@ -48,4 +48,3 @@ export function dehydrateScreen(screenOrSnapshot, availableScreens, elementsText
     elements: resolvedElements
   };
 }
-//# sourceMappingURL=ScreenDehydrator.js.map

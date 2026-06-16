@@ -19,11 +19,13 @@ if (typeof window !== 'undefined') {
   //   data-auth-token="twomilia_pub_..."></script>
   const tag = typeof document !== 'undefined' ? document.currentScript : null;
   const ds = tag && tag.dataset;
-  if (ds && ds.proxyUrl) {
+  if (ds && (ds.proxyUrl || ds.serverUrl)) {
     init({
       proxyUrl: ds.proxyUrl,
       analyticsKey: ds.analyticsKey,
       proxyHeaders: ds.authToken ? { Authorization: 'Bearer ' + ds.authToken } : undefined,
+      useServerRuntime: !!ds.serverUrl,
+      serverUrl: ds.serverUrl,
     });
   }
 }

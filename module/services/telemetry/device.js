@@ -86,4 +86,3 @@ export async function initDeviceId() {
   }
   return newId;
 }
-//# sourceMappingURL=device.js.map

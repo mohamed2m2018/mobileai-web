@@ -46,4 +46,3 @@ export function humanizeScreenName(route) {
   name = name.split(/\s+/).filter(Boolean).map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
   return name;
 }
-//# sourceMappingURL=humanizeScreenName.js.map

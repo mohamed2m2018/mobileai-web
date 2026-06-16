@@ -124,4 +124,3 @@ export function resolveRichUITheme(...overrides) {
     };
   }, DEFAULT_RICH_UI_THEME);
 }
-//# sourceMappingURL=RichUITheme.js.map

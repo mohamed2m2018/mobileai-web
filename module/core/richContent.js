@@ -177,4 +177,3 @@ export function normalizeExecutionResult(result) {
     message: previewText || result.message
   };
 }
-//# sourceMappingURL=richContent.js.map

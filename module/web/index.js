@@ -16,4 +16,3 @@ export { createReportIssueTool } from "../support/reportIssueTool.js";
 export { EscalationSocket } from "../support/EscalationSocket.js";
 export { createOutboundCallTool, DEFAULT_OUTBOUND_CALL_TARGET_TYPES } from "../support/outboundCallTool.js";
 export { OutboundCallWatcher, getOutboundCallStatus } from "../support/OutboundCallWatcher.js";
-//# sourceMappingURL=index.js.map

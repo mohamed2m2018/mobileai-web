@@ -814,7 +814,28 @@ export class WebPlatformAdapter {
     }
     this.scrollNodeIntoView(node);
     await this.showActionHighlight(node, 'fill');
-    node.value = value;
+    const valueLower = String(value).toLowerCase();
+    let matched = false;
+    for (const opt of node.options) {
+      if (opt.value === value || opt.text.trim().toLowerCase() === valueLower) {
+        this.setNativeValue(node, opt.value);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      for (const opt of node.options) {
+        if (opt.value.toLowerCase().includes(valueLower) || opt.text.trim().toLowerCase().includes(valueLower)) {
+          this.setNativeValue(node, opt.value);
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) {
+      const available = Array.from(node.options).map(o => o.text.trim()).filter(Boolean);
+      return `❌ Value "${value}" not found in picker [${resolvedIndex}] "${label}". Available: ${available.join(', ')}`;
+    }
     this.dispatchInputEvents(node);
     return `✅ Selected "${value}" in [${resolvedIndex}] "${label}"`;
   }
@@ -982,4 +1003,3 @@ export class WebPlatformAdapter {
     return null;
   }
 }
-//# sourceMappingURL=WebPlatformAdapter.js.map

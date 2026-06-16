@@ -14,4 +14,3 @@ export function scrubPII(value) {
   // Phone numbers are tricky, we rely on the 7+ digit regex
   .replace(PHONE_RE, '[phone]');
 }
-//# sourceMappingURL=PiiScrubber.js.map

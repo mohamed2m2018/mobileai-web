@@ -26,4 +26,3 @@ export function getDeviceMetadata() {
     osVersion: String(platform.version)
   };
 }
-//# sourceMappingURL=deviceMetadata.js.map

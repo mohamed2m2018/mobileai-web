@@ -99,4 +99,3 @@ export class ActionRegistry {
 // This allows background channels (like App Intents bridging) to access actions 
 // even if the React tree hasn't accessed the AIAgent context yet.
 export const actionRegistry = new ActionRegistry();
-//# sourceMappingURL=ActionRegistry.js.map

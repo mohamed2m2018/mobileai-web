@@ -869,6 +869,12 @@ function buildProps(element, metadata) {
     props.placeholder = 'placeholder' in element ? element.placeholder : undefined;
     props.name = element.name || undefined;
   }
+  if (isSelectElement(element)) {
+    const opts = Array.from(element.options)
+      .map(o => o.value || o.textContent?.trim())
+      .filter(Boolean);
+    if (opts.length) props.options = opts;
+  }
   if (isInputElement(element)) {
     props.checked = element.checked;
     props.inputType = element.type;
@@ -1169,8 +1175,10 @@ export class PageControllerWeb {
         }
       } else if (isTextAreaElement(node) && typeof node.value === 'string' && node.value.trim()) {
         hints.push(`value="${truncateText(node.value, 60)}"`);
-      } else if (isSelectElement(node) && node.value) {
-        hints.push(`value="${truncateText(node.value, 40)}"`);
+      } else if (isSelectElement(node)) {
+        if (node.value) hints.push(`value="${truncateText(node.value, 40)}"`);
+        const opts = Array.from(node.options).map(o => o.text?.trim() || o.value).filter(Boolean);
+        if (opts.length) hints.push(`options=[${opts.map(o => `"${truncateText(o, 30)}"`).join(', ')}]`);
       }
       if (isInputElement(node) || isTextAreaElement(node) || isSelectElement(node)) {
         const fieldError = getFieldError(node, node.ownerDocument);

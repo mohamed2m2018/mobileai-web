@@ -46,4 +46,3 @@ export const globalZoneRegistry = new ZoneRegistry();
 
 // Export context so AIZone components can register themselves
 export const ZoneRegistryContext = /*#__PURE__*/createContext(globalZoneRegistry);
-//# sourceMappingURL=ZoneRegistry.js.map

@@ -54,19 +54,13 @@ Follow this sequence. Exhaust each level before moving to the next:
    - If the issue is resolved through conversation → confirm with the user and call done().
    - If you need to verify or act on something in the app → explain the SPECIFIC reason
      ("To check the delivery status of that order, I need to look at your order history"),
-     and use ask_user with request_app_action=true to request permission.
+     and use ask_user with collect_input=false to request permission.
      This shows "Allow / Don't Allow" buttons so the user can approve with a single tap.
    - If a \`report_issue\` tool is available and the complaint is verified → create a reported issue.
 
 5. DIAGNOSE: After resolution, briefly identify the root cause if visible
    (e.g. "It looks like the delivery partner marked it as delivered prematurely").
    Ask the user if the issue is fully resolved before calling done().`);
-  parts.push(`
-### Stay With the Conversation
-- The user's most recent message is your real objective. If they change topic, ask for something new, or drop an earlier point, follow them immediately — do not drag a finished or failed task forward.
-- Say a thing once. If something cannot be done in the app, or a point is already settled, state it a single time, then offer the closest alternative or ask what else they need.
-- Never send the user the same answer twice. If they push back after you have explained, respond with something NEW — fresh information, the action they asked for, one specific question, or an escalation. Repeating yourself feels robotic and erodes trust.
-- "It wasn't created" / "I can't do that here" is a complete answer once. After saying it, pivot to helping with what the user actually wants next (for example: deleting a different item, fetching an API key, or another request) instead of re-explaining the previous point.`);
   parts.push(buildSupportStylePrompt(supportStyle));
   parts.push(`
 ### Consent and Liability Guard
@@ -80,7 +74,15 @@ Follow this sequence. Exhaust each level before moving to the next:
 - If app evidence clearly supports the complaint, create a reported issue with the \`report_issue\` tool before you finish.
 - Use \`report_issue\` for verified product/account/order/billing problems that ops may need to review, even if no live human reply is needed yet.
 - Anger alone is NOT enough to report or escalate.
-- Use \`escalate_to_human\` only when the user explicitly asks for a human, the case is sensitive/high-risk, or you need direct customer follow-up.`);
+- Do not use \`escalate_to_human\` just because the user mentions billing, payment, charges, refunds, or order problems.
+- First inspect available app data, navigate relevant screens, query knowledge, and attempt a clear explanation or available action.
+- Use \`escalate_to_human\` only when the user explicitly asks for a human, you cannot investigate or resolve with available tools, or direct customer follow-up is required.`);
+  parts.push(`
+### Outbound AI Call Policy
+- If \`start_ai_call\` is available, use it only when a phone call to a trusted merchant, vendor, driver, carrier, technician, booking partner, billing team, fraud team, or other configured contact is the next real action needed.
+- Investigate first and include the precise reason, goal, and context.
+- Never send a phone number. Use only the semantic targetType and targetId from app data.
+- Do not claim the call happened unless the tool returns AI_CALL_STARTED.`);
 
   // Progress Communication
   parts.push(`
@@ -116,6 +118,11 @@ When executing a multi-step resolution, you must communicate your progress to ke
     parts.push(`### Auto-Escalation Topics\n` + `When the user's query matches any of these topics, use the escalate_to_human tool immediately:\n` + config.autoEscalateTopics.map(t => `- ${t}`).join('\n') + '\n');
   }
 
+  // Language / locale setting
+  if (config.locale) {
+    parts.push(`### Language\n` + `Respond in ${config.locale} language. Maintain conversation in this language unless the user switches.\n`);
+  }
+
   // Business hours context
   if (config.businessHours) {
     parts.push(`### Business Hours\n` + `The support team operates in timezone: ${config.businessHours.timezone}.\n` + `If outside business hours, inform the user and offer to help with what you can.\n`);
@@ -133,4 +140,3 @@ When executing a multi-step resolution, you must communicate your progress to ke
   }
   return parts.join('\n');
 }
-//# sourceMappingURL=supportPrompt.js.map

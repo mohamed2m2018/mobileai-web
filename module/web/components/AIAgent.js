@@ -1,10 +1,7 @@
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionBridgeProvider } from "../../core/ActionBridge.js";
-import { AgentRuntime } from "../../core/AgentRuntime.js";
-import { actionRegistry } from "../../core/ActionRegistry.js";
 import { IdleDetector } from "../../core/IdleDetector.js";
-import { buildVoiceSystemPrompt } from "../../core/systemPrompt.js";
 import { setTwomiliaBase } from "../../config/endpoints.js";
 import {
   createAIMessage,
@@ -12,7 +9,6 @@ import {
   normalizeExecutionResult,
   richContentToPlainText
 } from "../../core/richContent.js";
-import { createProvider } from "../../providers/ProviderFactory.js";
 import {
   startConversation,
   appendMessages,
@@ -31,6 +27,7 @@ import { ENDPOINTS } from "../../config/endpoints.js";
 import { float32ToInt16Base64, base64ToFloat32 } from "../../utils/audioUtils.js";
 import { logger } from "../../utils/logger.js";
 import { WebPlatformAdapter } from "../core/WebPlatformAdapter.js";
+import { ServerAgentClient } from "../core/ServerAgentClient.js";
 import { webBlockDefinitions } from "../blocks.js";
 import { RichContentRendererWeb } from "./RichContentRendererWeb.js";
 import { QuickActionsPanelWeb } from "./QuickActionsPanelWeb.js";
@@ -1684,23 +1681,21 @@ function AIAgent({
       return next;
     });
   }, [conversationId, localConversationKey, messages, persistenceKey]);
+  const lastMessageText = messages.length > 0 ? messages[messages.length - 1].text : "";
   useEffect(() => {
     const target = mode === "text" ? messagesScrollRef.current : mode === "human" ? supportScrollRef.current : voiceScrollRef.current;
     if (!isOpen || !target) return;
-    const frame = typeof window !== "undefined" ? window.requestAnimationFrame(() => {
+    const timer = setTimeout(() => {
       target.scrollTop = target.scrollHeight;
-    }) : null;
-    return () => {
-      if (frame !== null && typeof window !== "undefined") {
-        window.cancelAnimationFrame(frame);
-      }
-    };
+    }, 30);
+    return () => clearTimeout(timer);
   }, [
     isLoading,
     isOpen,
     isAgentTyping,
     mode,
     messages.length,
+    lastMessageText,
     pendingPrompt,
     supportMessages.length,
     voiceTranscript.length
@@ -2118,45 +2113,27 @@ function AIAgent({
     () => withAuthorization(proxyHeaders, analyticsKey),
     [proxyHeaders, analyticsKey]
   );
-  const runtimeConfig = useMemo(
-    () => ({
-      provider,
-      apiKey,
-      proxyUrl,
-      proxyHeaders: resolvedProxyHeaders,
-      voiceProxyUrl,
-      voiceProxyHeaders,
-      model,
-      verifier,
-      supportStyle: resolvedSupportStyle,
-      maxSteps,
-      stepDelay,
-      customTools: mode === "voice" ? {
-        ...mergedCustomTools,
-        ask_user: null
-      } : mergedCustomTools,
-      instructions: resolvedInstructions,
-      onBeforeStep,
-      onAfterStep,
-      onBeforeTask,
-      onAfterTask,
-      onTokenUsage,
-      knowledgeBase,
-      knowledgeMaxTokens,
-      enableUIControl,
-      allowedActionNames,
-      screenMap,
-      maxTokenBudget,
-      maxCostUSD,
-      interactionMode,
-      mcpServerUrl,
-      platformAdapter,
+  const serverConfig = useMemo(() => ({
+    interactionMode,
+    maxSteps,
+    enableScreenshots: !!captureScreenshot,
+    enableKnowledge: !!knowledgeBase,
+    enableWebSearch,
+    customTools: mergedCustomTools,
+    screenMap,
+    supportStyle: resolvedSupportStyle,
+    language: getBrowserLanguage?.() || void 0
+  }), [interactionMode, maxSteps, captureScreenshot, knowledgeBase, enableWebSearch, mergedCustomTools, screenMap, resolvedSupportStyle]);
+  const serverClient = useMemo(
+    () => new ServerAgentClient(proxyUrl, analyticsKey, platformAdapter, {
       onStatusUpdate: setStatusText,
-      onAskUser: mode === "voice" ? void 0 : (request) => new Promise((resolve) => {
-        const normalized = typeof request === "string" ? {
-          question: request,
-          kind: "freeform"
-        } : request;
+      onActingOnPage: (acting) => {
+        setActingOnPage(acting);
+        if (acting) setMinimized(true);
+      },
+      onTokenUsage,
+      onAskUser: (request) => new Promise((resolve) => {
+        const normalized = typeof request === "string" ? { question: request, kind: "freeform" } : request;
         const question = normalized.question;
         const kind = normalized.kind || "freeform";
         const promptMessage = createAIMessage({
@@ -2168,69 +2145,18 @@ function AIAgent({
           promptKind: kind === "approval" ? "approval" : void 0
         });
         setMessages((prev) => [...prev, promptMessage]);
-        setPendingPrompt({
-          question,
-          kind,
-          resolve
-        });
+        setPendingPrompt({ question, kind, resolve });
         setMode("text");
         setLocalUnread(0);
         setIsOpen(true);
       })
     }),
-    [
-      allowedActionNames,
-      apiKey,
-      enableUIControl,
-      interactionMode,
-      knowledgeBase,
-      knowledgeMaxTokens,
-      maxCostUSD,
-      maxSteps,
-      maxTokenBudget,
-      mcpServerUrl,
-      mergedCustomTools,
-      mode,
-      model,
-      onAfterStep,
-      onAfterTask,
-      onBeforeStep,
-      onBeforeTask,
-      onTokenUsage,
-      platformAdapter,
-      provider,
-      resolvedProxyHeaders,
-      proxyUrl,
-      resolvedInstructions,
-      resolvedSupportStyle,
-      screenMap,
-      stepDelay,
-      verifier,
-      voiceProxyHeaders,
-      voiceProxyUrl
-    ]
+    [analyticsKey, onTokenUsage, platformAdapter, proxyUrl]
   );
-  const runtime = useMemo(
-    () => new AgentRuntime(
-      // Thread enableWebSearch through to the provider factory (matches RN
-      // ProviderFactory.createProvider signature) so web_search can be enabled
-      // end-to-end. Defaults to false.
-      createProvider(provider, apiKey, model, proxyUrl, resolvedProxyHeaders, enableWebSearch),
-      runtimeConfig,
-      null,
-      null
-    ),
-    [apiKey, model, provider, resolvedProxyHeaders, proxyUrl, runtimeConfig, enableWebSearch]
-  );
-  const runtimeRef = useRef(runtime);
+  const serverClientRef = useRef(serverClient);
   useEffect(() => {
-    runtimeRef.current = runtime;
-  }, [runtime]);
-  useEffect(() => {
-    return actionRegistry.onChange(() => {
-      runtimeRef.current?.invalidateToolCache?.();
-    });
-  }, []);
+    serverClientRef.current = serverClient;
+  }, [serverClient]);
   useEffect(() => {
     if (isLoading) return;
     setActingOnPage(false);
@@ -2344,11 +2270,7 @@ function AIAgent({
       const trimmed = message.trim();
       if (hasImages && isLoading) {
         logger.info("AIAgent", "User sent images while loading \u2014 cancelling current execution");
-        runtime.cancel();
-        const deadline = Date.now() + 5e3;
-        while (runtime.getIsRunning() && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 50));
-        }
+        serverClientRef.current?.abort();
         setIsLoading(false);
         setStatusText("");
       } else if (!trimmed && !hasImages) {
@@ -2403,7 +2325,7 @@ function AIAgent({
       );
       const history = messagesRef.current.concat(userMessage);
       try {
-        const rawResult = await runtime.execute(trimmed || displayText, toUserHistory(history), userImages);
+        const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, serverConfig);
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2425,7 +2347,7 @@ function AIAgent({
         setStatusText("");
       }
     },
-    [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, runtime]
+    [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, serverClient, serverConfig]
   );
   const resumeTask = useCallback(
     async (goal) => {
@@ -2437,7 +2359,7 @@ function AIAgent({
       setStatusText("Resuming\u2026");
       try {
         const resumeGoal = `[Resuming after a page navigation] Original request: "${goal}". The page just reloaded, so part of this task may already be complete. First inspect the CURRENT page and the conversation above to see what is already done, then perform ONLY the remaining steps. If the request is already fully satisfied, briefly confirm that to the user and stop \u2014 do not repeat actions that are already done.`;
-        const rawResult = await runtime.execute(resumeGoal, toUserHistory(messagesRef.current));
+        const rawResult = await serverClientRef.current.execute(resumeGoal, toUserHistory(messagesRef.current), void 0, serverConfig);
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2459,7 +2381,7 @@ function AIAgent({
         setStatusText("");
       }
     },
-    [persistenceKey, runtime]
+    [persistenceKey, serverClient, serverConfig]
   );
   useEffect(() => {
     if (typeof window === "undefined") return void 0;
@@ -2562,7 +2484,7 @@ function AIAgent({
           return;
         }
       }
-      runtime.cancel();
+      serverClientRef.current?.abort();
       setStatusText("Stopping...");
       if (pendingPrompt) {
         const pending = pendingPrompt;
@@ -2574,19 +2496,13 @@ function AIAgent({
         }
       }
       if (typeof window !== "undefined") {
-        const deadline = Date.now() + 4e3;
-        const tick = () => {
-          if (!runtimeRef.current?.getIsRunning?.() || Date.now() > deadline) {
-            setIsLoading(false);
-            setStatusText("");
-            return;
-          }
-          window.setTimeout(tick, 120);
-        };
-        window.setTimeout(tick, 120);
+        window.setTimeout(() => {
+          setIsLoading(false);
+          setStatusText("");
+        }, 500);
       }
     },
-    [runtime, pendingPrompt]
+    [serverClient, pendingPrompt]
   );
   const enterVoiceMode = useCallback(async () => {
     setShowHistory(false);
@@ -2705,13 +2621,8 @@ function AIAgent({
       proxyUrl: resolvedVoiceProxyUrl,
       proxyHeaders: resolvedVoiceProxyHeaders,
       model: resolvedVoiceModel,
-      systemPrompt: buildVoiceSystemPrompt(
-        getBrowserLanguage(),
-        resolvedInstructions?.system,
-        !!knowledgeBase,
-        resolvedSupportStyle
-      ),
-      tools: runtimeRef.current.getTools(),
+      systemPrompt: "",
+      tools: [],
       language: getBrowserLanguage()
     });
     const audioPlayer = createBrowserAudioPlayer({
@@ -2764,9 +2675,10 @@ function AIAgent({
         toolLockRef.current = true;
         setStatusText(`Executing ${toolCall.name.replace(/_/g, " ")}...`);
         try {
-          const output = await runtimeRef.current.executeTool(toolCall.name, toolCall.args || {});
+          const output = `Tool "${toolCall.name}" is not available in server-only mode.`;
           await new Promise((resolve) => setTimeout(resolve, 300));
-          const screenContext = runtimeRef.current.getScreenContext();
+          const snapshot = platformAdapter.getScreenSnapshot?.();
+          const screenContext = snapshot?.elementsText || "";
           lastVoiceContextRef.current = screenContext || "";
           const enrichedResult = `${output}
 
@@ -2861,7 +2773,8 @@ ${screenContext || ""}
         setIsVoiceConnected(true);
         setStatusText("Voice connected");
         userHasSpokenRef.current = false;
-        const screenContext = runtimeRef.current.getScreenContext();
+        const snapshot = platformAdapter.getScreenSnapshot?.();
+        const screenContext = snapshot?.elementsText || "";
         if (screenContext) {
           lastVoiceContextRef.current = screenContext;
           const passiveContext = `[SYSTEM CONTEXT \u2014 THIS IS NOT A USER REQUEST. DO NOT RESPOND. DO NOT NAVIGATE. DO NOT CALL ANY TOOLS. DO NOT SPEAK. Just silently read and memorize this screen layout. You will use it when the user speaks their first voice command.]
@@ -2927,7 +2840,8 @@ ${screenContext}`;
         logger.debug("AIAgent", "\u{1F504} Screen poll skipped \u2014 tool lock active");
         return;
       }
-      const screenContext = runtimeRef.current.getScreenContext();
+      const snapshot = platformAdapter.getScreenSnapshot?.();
+      const screenContext = snapshot?.elementsText || "";
       if (!screenContext || screenContext === lastVoiceContextRef.current) return;
       const previousLength = lastVoiceContextRef.current.length;
       const nextLength = screenContext.length;
@@ -2955,7 +2869,8 @@ ${screenContext}`;
   useEffect(() => {
     if (mode !== "voice" || !isVoiceConnected || !voiceServiceRef.current) return;
     const frame = typeof window !== "undefined" ? window.requestAnimationFrame(() => {
-      const screenContext = runtimeRef.current.getScreenContext();
+      const snapshot = platformAdapter.getScreenSnapshot?.();
+      const screenContext = snapshot?.elementsText || "";
       if (!screenContext || screenContext === lastVoiceContextRef.current) return;
       lastVoiceContextRef.current = screenContext;
       const passiveUpdate = `[SCREEN UPDATE \u2014 The UI has changed. Here is the current screen layout. This is not a user request \u2014 do not act unless the user asks.]
@@ -3014,7 +2929,6 @@ ${screenContext}`;
   );
   const contextValue = useMemo(
     () => ({
-      runtime,
       send: (message, options) => {
         void send(message, options);
       },
@@ -3025,7 +2939,7 @@ ${screenContext}`;
       clearMessages,
       cancel
     }),
-    [cancel, clearMessages, isLoading, lastResult, messages, runtime, send, statusText]
+    [cancel, clearMessages, isLoading, lastResult, messages, send, statusText]
   );
   const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + (count || 0), 0);
   const displayUnread = totalUnread + localUnread;

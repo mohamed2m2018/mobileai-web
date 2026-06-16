@@ -107,4 +107,3 @@ export const MobileAI = {
 export function bindTelemetryService(instance) {
   service = instance;
 }
-//# sourceMappingURL=MobileAI.js.map

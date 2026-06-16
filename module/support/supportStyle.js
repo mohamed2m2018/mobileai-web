@@ -52,4 +52,3 @@ export function resolveSupportStyle(style) {
 export function buildSupportStylePrompt(style) {
   return resolveSupportStyle(style).prompt;
 }
-//# sourceMappingURL=supportStyle.js.map

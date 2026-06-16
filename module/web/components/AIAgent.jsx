@@ -2,10 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActionBridgeProvider } from '../../core/ActionBridge.js';
-import { AgentRuntime } from '../../core/AgentRuntime.js';
-import { actionRegistry } from '../../core/ActionRegistry.js';
 import { IdleDetector } from '../../core/IdleDetector.js';
-import { buildVoiceSystemPrompt } from '../../core/systemPrompt.js';
 import { setTwomiliaBase } from '../../config/endpoints.js';
 import {
   createAIMessage,
@@ -13,7 +10,6 @@ import {
   normalizeExecutionResult,
   richContentToPlainText,
 } from '../../core/richContent.js';
-import { createProvider } from '../../providers/ProviderFactory.js';
 import {
   startConversation,
   appendMessages,
@@ -32,6 +28,7 @@ import { ENDPOINTS } from '../../config/endpoints.js';
 import { float32ToInt16Base64, base64ToFloat32 } from '../../utils/audioUtils.js';
 import { logger } from '../../utils/logger.js';
 import { WebPlatformAdapter } from '../core/WebPlatformAdapter.js';
+import { ServerAgentClient } from '../core/ServerAgentClient.js';
 import { webBlockDefinitions } from '../blocks.js';
 import { RichContentRendererWeb } from './RichContentRendererWeb.js';
 import { QuickActionsPanelWeb } from './QuickActionsPanelWeb.js';
@@ -1794,6 +1791,7 @@ export function AIAgent({
       return next;
     });
   }, [conversationId, localConversationKey, messages, persistenceKey]);
+  const lastMessageText = messages.length > 0 ? messages[messages.length - 1].text : '';
   useEffect(() => {
     const target =
       mode === 'text'
@@ -1802,23 +1800,17 @@ export function AIAgent({
           ? supportScrollRef.current
           : voiceScrollRef.current;
     if (!isOpen || !target) return;
-    const frame =
-      typeof window !== 'undefined'
-        ? window.requestAnimationFrame(() => {
-            target.scrollTop = target.scrollHeight;
-          })
-        : null;
-    return () => {
-      if (frame !== null && typeof window !== 'undefined') {
-        window.cancelAnimationFrame(frame);
-      }
-    };
+    const timer = setTimeout(() => {
+      target.scrollTop = target.scrollHeight;
+    }, 30);
+    return () => clearTimeout(timer);
   }, [
     isLoading,
     isOpen,
     isAgentTyping,
     mode,
     messages.length,
+    lastMessageText,
     pendingPrompt,
     supportMessages.length,
     voiceTranscript.length,
@@ -2255,135 +2247,55 @@ export function AIAgent({
     () => withAuthorization(proxyHeaders, analyticsKey),
     [proxyHeaders, analyticsKey],
   );
-  const runtimeConfig = useMemo(
-    () => ({
-      provider,
-      apiKey,
-      proxyUrl,
-      proxyHeaders: resolvedProxyHeaders,
-      voiceProxyUrl,
-      voiceProxyHeaders,
-      model,
-      verifier,
-      supportStyle: resolvedSupportStyle,
-      maxSteps,
-      stepDelay,
-      customTools:
-        mode === 'voice'
-          ? {
-              ...mergedCustomTools,
-              ask_user: null,
-            }
-          : mergedCustomTools,
-      instructions: resolvedInstructions,
-      onBeforeStep,
-      onAfterStep,
-      onBeforeTask,
-      onAfterTask,
-      onTokenUsage,
-      knowledgeBase,
-      knowledgeMaxTokens,
-      enableUIControl,
-      allowedActionNames,
-      screenMap,
-      maxTokenBudget,
-      maxCostUSD,
-      interactionMode,
-      mcpServerUrl,
-      platformAdapter,
-      onStatusUpdate: setStatusText,
-      onAskUser:
-        mode === 'voice'
-          ? undefined
-          : (request) =>
-              new Promise((resolve) => {
-                const normalized =
-                  typeof request === 'string'
-                    ? {
-                        question: request,
-                        kind: 'freeform',
-                      }
-                    : request;
-                const question = normalized.question;
-                const kind = normalized.kind || 'freeform';
-                const promptMessage = createAIMessage({
-                  id: `assistant-ask-${Date.now()}`,
-                  role: 'assistant',
-                  content: question,
-                  previewText: question,
-                  timestamp: Date.now(),
-                  promptKind: kind === 'approval' ? 'approval' : undefined,
-                });
-                setMessages((prev) => [...prev, promptMessage]);
-                setPendingPrompt({
-                  question,
-                  kind,
-                  resolve,
-                });
-                setMode('text');
-                setLocalUnread(0);
-                setIsOpen(true);
-              }),
-    }),
-    [
-      allowedActionNames,
-      apiKey,
-      enableUIControl,
-      interactionMode,
-      knowledgeBase,
-      knowledgeMaxTokens,
-      maxCostUSD,
-      maxSteps,
-      maxTokenBudget,
-      mcpServerUrl,
-      mergedCustomTools,
-      mode,
-      model,
-      onAfterStep,
-      onAfterTask,
-      onBeforeStep,
-      onBeforeTask,
-      onTokenUsage,
-      platformAdapter,
-      provider,
-      resolvedProxyHeaders,
-      proxyUrl,
-      resolvedInstructions,
-      resolvedSupportStyle,
-      screenMap,
-      stepDelay,
-      verifier,
-      voiceProxyHeaders,
-      voiceProxyUrl,
-    ],
-  );
-  const runtime = useMemo(
+  const serverConfig = useMemo(() => ({
+    interactionMode,
+    maxSteps,
+    enableScreenshots: !!captureScreenshot,
+    enableKnowledge: !!knowledgeBase,
+    enableWebSearch,
+    customTools: mergedCustomTools,
+    screenMap,
+    supportStyle: resolvedSupportStyle,
+    language: getBrowserLanguage?.() || undefined,
+  }), [interactionMode, maxSteps, captureScreenshot, knowledgeBase, enableWebSearch, mergedCustomTools, screenMap, resolvedSupportStyle]);
+  const serverClient = useMemo(
     () =>
-      new AgentRuntime(
-        // Thread enableWebSearch through to the provider factory (matches RN
-        // ProviderFactory.createProvider signature) so web_search can be enabled
-        // end-to-end. Defaults to false.
-        createProvider(provider, apiKey, model, proxyUrl, resolvedProxyHeaders, enableWebSearch),
-        runtimeConfig,
-        null,
-        null,
-      ),
-    [apiKey, model, provider, resolvedProxyHeaders, proxyUrl, runtimeConfig, enableWebSearch],
+      new ServerAgentClient(proxyUrl, analyticsKey, platformAdapter, {
+        onStatusUpdate: setStatusText,
+        onActingOnPage: (acting) => {
+          setActingOnPage(acting);
+          if (acting) setMinimized(true);
+        },
+        onTokenUsage,
+        onAskUser: (request) =>
+          new Promise((resolve) => {
+            const normalized =
+              typeof request === 'string'
+                ? { question: request, kind: 'freeform' }
+                : request;
+            const question = normalized.question;
+            const kind = normalized.kind || 'freeform';
+            const promptMessage = createAIMessage({
+              id: `assistant-ask-${Date.now()}`,
+              role: 'assistant',
+              content: question,
+              previewText: question,
+              timestamp: Date.now(),
+              promptKind: kind === 'approval' ? 'approval' : undefined,
+            });
+            setMessages((prev) => [...prev, promptMessage]);
+            setPendingPrompt({ question, kind, resolve });
+            setMode('text');
+            setLocalUnread(0);
+            setIsOpen(true);
+          }),
+      }),
+    [analyticsKey, onTokenUsage, platformAdapter, proxyUrl],
   );
-  const runtimeRef = useRef(runtime);
+  const serverClientRef = useRef(serverClient);
   useEffect(() => {
-    runtimeRef.current = runtime;
-  }, [runtime]);
-
-  // Pick up actions registered/unregistered via useAction() AFTER the runtime
-  // was built (e.g. per-screen actions in an SPA): drop the cached tool list so
-  // the next provider request rebuilds it from the live actionRegistry. Mirrors
-  // RN, where the AIAgent recomputes its tool set on actionRegistry changes.
-  useEffect(() => {
-    return actionRegistry.onChange(() => {
-      runtimeRef.current?.invalidateToolCache?.();
-    });
-  }, []);
+    serverClientRef.current = serverClient;
+  }, [serverClient]);
 
   // Restore the panel once a run finishes (clears minimize-on-execute state).
   useEffect(() => {
@@ -2519,11 +2431,7 @@ export function AIAgent({
       // When images are present and agent is loading: cancel current execution, start fresh
       if (hasImages && isLoading) {
         logger.info('AIAgent', 'User sent images while loading — cancelling current execution');
-        runtime.cancel();
-        const deadline = Date.now() + 5000;
-        while (runtime.getIsRunning() && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 50));
-        }
+        serverClientRef.current?.abort();
         setIsLoading(false);
         setStatusText('');
       } else if (!trimmed && !hasImages) {
@@ -2582,7 +2490,7 @@ export function AIAgent({
       );
       const history = messagesRef.current.concat(userMessage);
       try {
-        const rawResult = await runtime.execute(trimmed || displayText, toUserHistory(history), userImages);
+        const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, serverConfig);
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2605,7 +2513,7 @@ export function AIAgent({
         setStatusText('');
       }
     },
-    [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, runtime],
+    [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, serverClient, serverConfig],
   );
   // Re-run the active goal on a freshly-loaded page (after an MPA navigation),
   // continuing the task with the restored conversation as context. No new user
@@ -2628,7 +2536,7 @@ export function AIAgent({
           `First inspect the CURRENT page and the conversation above to see what is already done, ` +
           `then perform ONLY the remaining steps. If the request is already fully satisfied, ` +
           `briefly confirm that to the user and stop — do not repeat actions that are already done.`;
-        const rawResult = await runtime.execute(resumeGoal, toUserHistory(messagesRef.current));
+        const rawResult = await serverClientRef.current.execute(resumeGoal, toUserHistory(messagesRef.current), undefined, serverConfig);
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2650,7 +2558,7 @@ export function AIAgent({
         setStatusText('');
       }
     },
-    [persistenceKey, runtime],
+    [persistenceKey, serverClient, serverConfig],
   );
   // Before a full reload during an active run (the agent navigated on an MPA),
   // stash the goal so the next page can resume it. Capped to avoid nav loops.
@@ -2765,10 +2673,10 @@ export function AIAgent({
           return;
         }
       }
-      runtime.cancel();
+      serverClientRef.current?.abort();
       setStatusText('Stopping...');
-      // If the run is parked on an ask-user prompt, the runtime is awaiting its
-      // resolve — cancel() alone won't unblock it, so resolve it with the cancel
+      // If the run is parked on an ask-user prompt, the server client is awaiting
+      // its resolve — abort() alone won't unblock it, so resolve it with the cancel
       // token so execute() can unwind. (Otherwise Stop sticks forever.)
       if (pendingPrompt) {
         const pending = pendingPrompt;
@@ -2780,22 +2688,15 @@ export function AIAgent({
           // resolve may already be settled — ignore.
         }
       }
-      // Watchdog: if the runtime hasn't actually stopped shortly after cancel,
-      // force the UI out of the loading state so Stop never gets stuck.
+      // Force UI out of loading state shortly after abort.
       if (typeof window !== 'undefined') {
-        const deadline = Date.now() + 4000;
-        const tick = () => {
-          if (!runtimeRef.current?.getIsRunning?.() || Date.now() > deadline) {
-            setIsLoading(false);
-            setStatusText('');
-            return;
-          }
-          window.setTimeout(tick, 120);
-        };
-        window.setTimeout(tick, 120);
+        window.setTimeout(() => {
+          setIsLoading(false);
+          setStatusText('');
+        }, 500);
       }
     },
-    [runtime, pendingPrompt],
+    [serverClient, pendingPrompt],
   );
   const enterVoiceMode = useCallback(async () => {
     setShowHistory(false);
@@ -2914,13 +2815,8 @@ export function AIAgent({
       proxyUrl: resolvedVoiceProxyUrl,
       proxyHeaders: resolvedVoiceProxyHeaders,
       model: resolvedVoiceModel,
-      systemPrompt: buildVoiceSystemPrompt(
-        getBrowserLanguage(),
-        resolvedInstructions?.system,
-        !!knowledgeBase,
-        resolvedSupportStyle,
-      ),
-      tools: runtimeRef.current.getTools(),
+      systemPrompt: '',
+      tools: [],
       language: getBrowserLanguage(),
     });
     const audioPlayer = createBrowserAudioPlayer({
@@ -2973,9 +2869,12 @@ export function AIAgent({
         toolLockRef.current = true;
         setStatusText(`Executing ${toolCall.name.replace(/_/g, ' ')}...`);
         try {
-          const output = await runtimeRef.current.executeTool(toolCall.name, toolCall.args || {});
+          // Voice tools are not available in server-only mode (tools: []).
+          // If a tool call arrives anyway, return a static message.
+          const output = `Tool "${toolCall.name}" is not available in server-only mode.`;
           await new Promise((resolve) => setTimeout(resolve, 300));
-          const screenContext = runtimeRef.current.getScreenContext();
+          const snapshot = platformAdapter.getScreenSnapshot?.();
+          const screenContext = snapshot?.elementsText || '';
           lastVoiceContextRef.current = screenContext || '';
           const enrichedResult = `${output}\n\n<updated_screen>\n${screenContext || ''}\n</updated_screen>`;
           logger.info('AIAgent', `📡 Tool result for ${toolCall.name}: ${enrichedResult}`);
@@ -3070,7 +2969,8 @@ export function AIAgent({
         setIsVoiceConnected(true);
         setStatusText('Voice connected');
         userHasSpokenRef.current = false;
-        const screenContext = runtimeRef.current.getScreenContext();
+        const snapshot = platformAdapter.getScreenSnapshot?.();
+        const screenContext = snapshot?.elementsText || '';
         if (screenContext) {
           lastVoiceContextRef.current = screenContext;
           const passiveContext = `[SYSTEM CONTEXT — THIS IS NOT A USER REQUEST. DO NOT RESPOND. DO NOT NAVIGATE. DO NOT CALL ANY TOOLS. DO NOT SPEAK. Just silently read and memorize this screen layout. You will use it when the user speaks their first voice command.]\n\n${screenContext}`;
@@ -3134,7 +3034,8 @@ export function AIAgent({
         logger.debug('AIAgent', '🔄 Screen poll skipped — tool lock active');
         return;
       }
-      const screenContext = runtimeRef.current.getScreenContext();
+      const snapshot = platformAdapter.getScreenSnapshot?.();
+      const screenContext = snapshot?.elementsText || '';
       if (!screenContext || screenContext === lastVoiceContextRef.current) return;
       const previousLength = lastVoiceContextRef.current.length;
       const nextLength = screenContext.length;
@@ -3162,7 +3063,8 @@ export function AIAgent({
     const frame =
       typeof window !== 'undefined'
         ? window.requestAnimationFrame(() => {
-            const screenContext = runtimeRef.current.getScreenContext();
+            const snapshot = platformAdapter.getScreenSnapshot?.();
+            const screenContext = snapshot?.elementsText || '';
             if (!screenContext || screenContext === lastVoiceContextRef.current) return;
             lastVoiceContextRef.current = screenContext;
             const passiveUpdate = `[SCREEN UPDATE — The UI has changed. Here is the current screen layout. This is not a user request — do not act unless the user asks.]\n\n${screenContext}`;
@@ -3220,7 +3122,6 @@ export function AIAgent({
   );
   const contextValue = useMemo(
     () => ({
-      runtime,
       send: (message, options) => {
         void send(message, options);
       },
@@ -3231,7 +3132,7 @@ export function AIAgent({
       clearMessages,
       cancel,
     }),
-    [cancel, clearMessages, isLoading, lastResult, messages, runtime, send, statusText],
+    [cancel, clearMessages, isLoading, lastResult, messages, send, statusText],
   );
   const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + (count || 0), 0);
   const displayUnread = totalUnread + localUnread;
