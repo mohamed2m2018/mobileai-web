@@ -23,7 +23,7 @@ import { createProvider } from "../providers/ProviderFactory.js";
 import { formatActionToolResult } from "../utils/actionResult.js";
 import { normalizeRichContent, richContentToPlainText } from "./richContent.js";
 import { DefaultActionSafetyClassifier } from "./DefaultActionSafetyClassifier.js";
-const DEFAULT_MAX_STEPS = 25;
+const DEFAULT_MAX_STEPS = 40;
 const DEFAULT_ACTION_SAFETY_TIMEOUT_MS = 300;
 const DEFAULT_MIN_CONFIDENCE_TO_ALLOW = 0.75;
 function generateTraceId() {
@@ -1876,7 +1876,7 @@ ${snapshot.elementsText}
     // Reset workflow approval for each new task
     this.resetAppActionApproval('new task');
     const maxSteps = this.config.maxSteps || DEFAULT_MAX_STEPS;
-    const stepDelay = this.config.stepDelay ?? 300;
+    const stepDelay = this.config.stepDelay ?? 80;
 
     // Token usage accumulator for the entire task
     const sessionUsage = {

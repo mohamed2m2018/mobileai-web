@@ -616,11 +616,21 @@ export class WebPlatformAdapter {
     if (!element || !isInputElement(node) || node.type !== 'range') {
       return `❌ Element [${index}] is not a slider.`;
     }
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized) || normalized < 0 || normalized > 1) {
+      return `❌ Slider value must be between 0.0 and 1.0, got ${value}`;
+    }
+    // The slider tool contract is a normalized 0–1 value; map it to the input's
+    // real min/max range (DOM range defaults: min 0, max 100). Previously the
+    // raw value was written, mis-setting any slider whose range ≠ 0–1.
+    const min = Number(node.min !== '' && node.min != null ? node.min : 0);
+    const max = Number(node.max !== '' && node.max != null ? node.max : 100);
+    const actual = min + normalized * (max - min);
     this.scrollNodeIntoView(node);
     await this.showActionHighlight(node, 'fill');
-    this.setNativeValue(node, String(value));
+    this.setNativeValue(node, String(actual));
     this.dispatchInputEvents(node);
-    return `✅ Adjusted slider [${index}] to ${value}`;
+    return `✅ Adjusted slider [${index}] "${element.label}" to ${Math.round(normalized * 100)}% (value: ${actual})`;
   }
   async selectPicker(index, value) {
     const element = this.getSnapshotElement(index);

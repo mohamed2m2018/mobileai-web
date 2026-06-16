@@ -327,6 +327,14 @@ export class GeminiProvider {
       } catch (error) {
         logger.warn('GeminiProvider', `Invalid action_input JSON for ${actionName}: ${error.message}`);
       }
+    } else if (rawActionInput && typeof rawActionInput === 'object' && !Array.isArray(rawActionInput)) {
+      // Gemini sometimes returns action_input as a structured object, not a string.
+      actionArgs = rawActionInput;
+    } else if (matchedTool) {
+      // Or it flattens the params to top-level keys — pull those off args.
+      for (const paramName of Object.keys(matchedTool.parameters)) {
+        if (args[paramName] !== undefined) actionArgs[paramName] = args[paramName];
+      }
     }
     if (matchedTool) {
       actionArgs = Object.fromEntries(Object.entries(actionArgs).filter(([key]) => key in matchedTool.parameters));
