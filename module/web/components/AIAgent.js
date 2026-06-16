@@ -4803,7 +4803,7 @@ ${screenContext}`;
                           onKeyDown: (event) => {
                             if (event.key !== "Enter" || event.shiftKey) return;
                             event.preventDefault();
-                            if (pendingPrompt?.kind === "freeform") {
+                            if (pendingPrompt) {
                               const pending = pendingPrompt;
                               const answer = input.trim();
                               if (!answer) return;
@@ -4870,10 +4870,10 @@ ${screenContext}`;
                         "button",
                         {
                           type: "button",
-                          disabled: pendingPrompt?.kind === "freeform" ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0,
+                          disabled: pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0,
                           "aria-label": "Send message",
                           onClick: () => {
-                            if (pendingPrompt?.kind === "freeform") {
+                            if (pendingPrompt) {
                               const pending = pendingPrompt;
                               const answer = input.trim();
                               if (!answer) return;
@@ -4900,8 +4900,8 @@ ${screenContext}`;
                             fontSize: 13,
                             fontWeight: 800,
                             lineHeight: 1,
-                            cursor: (pendingPrompt?.kind === "freeform" ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0) ? "default" : "pointer",
-                            opacity: (pendingPrompt?.kind === "freeform" ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0) ? 0.5 : 1,
+                            cursor: (pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0) ? "default" : "pointer",
+                            opacity: (pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0) ? 0.5 : 1,
                             flexShrink: 0,
                             display: "flex",
                             alignItems: "center",

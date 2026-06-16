@@ -4824,7 +4824,12 @@ export function AIAgent({
                         onKeyDown={(event) => {
                           if (event.key !== 'Enter' || event.shiftKey) return;
                           event.preventDefault();
-                          if (pendingPrompt?.kind === 'freeform') {
+                          // Any pending prompt — freeform OR approval — is resolved by
+                          // typing. Never block the user from answering. Mirrors RN: a
+                          // typed reply to an approval prompt is passed back to the agent
+                          // as the answer (not a rejection). The Approve/Not-now buttons
+                          // remain available for users who'd rather tap.
+                          if (pendingPrompt) {
                             const pending = pendingPrompt;
                             const answer = input.trim();
                             if (!answer) return;
@@ -4891,13 +4896,13 @@ export function AIAgent({
                       <button
                         type="button"
                         disabled={
-                          pendingPrompt?.kind === 'freeform'
+                          pendingPrompt
                             ? !input.trim()
                             : (isLoading && pendingImages.length === 0) || (!input.trim() && pendingImages.length === 0)
                         }
                         aria-label="Send message"
                         onClick={() => {
-                          if (pendingPrompt?.kind === 'freeform') {
+                          if (pendingPrompt) {
                             const pending = pendingPrompt;
                             const answer = input.trim();
                             if (!answer) return;
@@ -4925,7 +4930,7 @@ export function AIAgent({
                           fontWeight: 800,
                           lineHeight: 1,
                           cursor: (
-                            pendingPrompt?.kind === 'freeform'
+                            pendingPrompt
                               ? !input.trim()
                               : (isLoading && pendingImages.length === 0) ||
                                 (!input.trim() && pendingImages.length === 0)
@@ -4933,7 +4938,7 @@ export function AIAgent({
                             ? 'default'
                             : 'pointer',
                           opacity: (
-                            pendingPrompt?.kind === 'freeform'
+                            pendingPrompt
                               ? !input.trim()
                               : (isLoading && pendingImages.length === 0) ||
                                 (!input.trim() && pendingImages.length === 0)

@@ -70,9 +70,7 @@ const LAZY_LOADING_RULE = `- LAZY LOADING & SCROLLING: Many lists use lazy loadi
  * Used verbatim in both text and voice agents.
  */
 const SECURITY_RULES = `- NEVER ask the user to type — and never fill — a password, password confirmation, payment card number, CVV/CVC, SSN, or other secret credential through the chat. Anything typed in the chat is sent to the AI, so secrets must never pass through it. When a login, signup, or payment step needs a credential, STOP and briefly EXPLAIN to the user why you can't fill it yourself — for their security a password or card must never pass through the AI — then ask them to type it directly into that field on the page themselves (you cannot see it). Continue once they confirm it's filled. You MAY collect and fill non-secret values (name, email, address, choices, preferences).
-- NEVER fabricate, invent, guess, or use placeholder/example values when filling ANY form field. This applies to all personal data — name, email, phone, address, city, state, ZIP/postal code — and especially to passwords and payment info. Typing made-up values such as "John Doe", "test@example.com", or "123 Main St" into a real form is a CRITICAL failure.
-- A request like "fill in the form / fill my contact info / add my details" is NOT permission to invent the values. If you do not already have the real values (from earlier in THIS conversation or from app data), you MUST use ask_user to collect them from the user FIRST, then fill them in. Only fill a field once you hold a real value for it; leave fields you have no value for empty rather than guessing.
-- Before you type user-provided values into form fields, preview them for a quick check FIRST: in your approval request (ask_user with request_app_action=true), list each field and the EXACT value you will enter — e.g. "I'll enter — Email: sam@acme.com, First name: Sam, City: Cairo. Shall I go ahead?" — and type only after the user approves. This lets the user catch a wrong value before it lands. Do NOT spell out full passwords or full card/CVV numbers in the preview; refer to those generically (e.g. "the password you gave me").
+- Do not guess or auto-fill values. For non-secret fields, ask the user for the value; for secret credentials, defer to the page's own field as above.
 - NEVER guess or make assumptions about any UI element or input value. If you are not completely sure what to do, you MUST ask the user for clarification.`;
 
 /**
@@ -261,9 +259,7 @@ Form example:
 User: "update my shipping address"
 AI: ask_user(grants_workflow_approval=true) → "What street address, city, and zip/postal code should I use?"
 User: "6 Mohamed Awad St, Cairo, 13243"
-AI: ask_user(request_app_action=true) → "Quick check before I type — I'll enter: Street: 6 Mohamed Awad St, City: Cairo, ZIP: 13243. Shall I go ahead?"
-User: [taps "Allow"]
-AI: [types the address fields with exactly those values]
+AI: [types the address fields silently]
 AI: ask_user(request_app_action=true) → "I'll tap Save to apply this shipping address. Confirm?"
 User: [taps "Allow"]
 AI: [tap Save] → done() → "Done! Your shipping address has been updated."
