@@ -52,6 +52,20 @@ function abortableDelay(ms, signal) {
     signal?.addEventListener?.('abort', finish);
   });
 }
+// True when an ask_user question is soliciting a value from the user (needs a
+// freeform text box), as opposed to requesting permission to take an action.
+// Used to keep value-collection out of the Approve/Not-now gate, which would
+// otherwise trap the user in an "Allow → re-ask" loop (Allow grants permission,
+// not a value).
+function looksLikeValueRequest(q) {
+  if (typeof q !== 'string' || !q.trim()) return false;
+  const text = q.toLowerCase();
+  // Permission / confirmation phrasing → an approval ask, not a value ask.
+  if (/\b(may i|shall i|can i|should i|do you want me|go ahead|proceed|confirm|tap |allow me|i'?ll |i will )\b/.test(text)) return false;
+  // Explicit solicitation of input/values.
+  return /\b(provide|enter|tell me|share|type in|paste|what(?:'?s| is| are| was)|which|how many|how much|please give)\b/.test(text)
+    || /\byour (name|email|e-?mail|address|phone|answer|details|breakdown|percentage|ownership|number|code|city|state|zip|postal|value|budget|date)\b/.test(text);
+}
 function generateTraceId() {
   return `trace_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -1074,8 +1088,14 @@ export class AgentRuntime {
         if (typeof cleanQuestion === 'string') {
           cleanQuestion = cleanQuestion.replace(/\[\d+\]/g, '').replace(/  +/g, ' ').trim();
         }
-        const wantsExplicitAppApproval = args.request_app_action === true;
-        const grantsWorkflowApproval = args.grants_workflow_approval === true;
+        // A question that asks the user to PROVIDE a value must be a freeform text
+        // box, never an Approve/Not-now gate — even when the model set
+        // request_app_action. Otherwise the user taps "Allow" (which grants
+        // permission, not a value) and the agent re-asks in a loop. The typed
+        // answer then authorizes the in-flow fill (workflow approval).
+        const solicitsValue = looksLikeValueRequest(cleanQuestion);
+        const wantsExplicitAppApproval = args.request_app_action === true && !solicitsValue;
+        const grantsWorkflowApproval = args.grants_workflow_approval === true || solicitsValue;
         const kind = wantsExplicitAppApproval ? 'approval' : 'freeform';
 
         // Mark that an explicit approval checkpoint is now pending.
