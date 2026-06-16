@@ -190,37 +190,44 @@ export class GeminiProvider {
    * Builds contents for the generateContent call.
    * Single-turn: user message + optional screenshot as inlineData.
    */
-  buildContents(userMessage, _history, screenshot, userImages) {
-    const parts = [{
-      text: userMessage
-    }];
-
-    // Append user-attached images as inlineData
-    if (userImages?.length) {
-      for (const img of userImages) {
-        parts.push({
-          inlineData: {
-            mimeType: img.mimeType,
-            data: img.base64,
-          },
-        });
-      }
-      parts.push({ text: '\n[The user attached the above image(s) to their message. Describe what you see if relevant to their request.]' });
-    }
-
-    // Append screenshot as inlineData for Gemini vision
-    if (screenshot) {
-      parts.push({
-        inlineData: {
-          mimeType: 'image/jpeg',
-          data: screenshot
+  buildContents(userMessage, history, screenshot, userImages) {
+    const appendMedia = parts => {
+      if (userImages?.length) {
+        for (const img of userImages) {
+          parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
         }
+        parts.push({ text: '\n[The user attached the above image(s) to their message. Describe what you see if relevant to their request.]' });
+      }
+      if (screenshot) {
+        parts.push({ inlineData: { mimeType: 'image/jpeg', data: screenshot } });
+      }
+      return parts;
+    };
+
+    // Replay prior agent steps as a REAL multi-turn function-call conversation:
+    // each step becomes a model agent_step functionCall (with its thoughtSignature)
+    // followed by the user functionResponse (the tool result). Gemini 3.x needs the
+    // thoughtSignature echoed here or it loses tool-call continuity and "describes"
+    // actions instead of emitting them; 2.5 ignores the signature (still valid).
+    const steps = Array.isArray(history)
+      ? history.filter(s => s && s.action && s.modelArgs && typeof s.userTurnText === 'string')
+      : [];
+    if (steps.length === 0) {
+      return [{ role: 'user', parts: appendMedia([{ text: userMessage }]) }];
+    }
+    const contents = [{ role: 'user', parts: [{ text: steps[0].userTurnText }] }];
+    for (const rec of steps) {
+      const modelPart = { functionCall: { name: AGENT_STEP_FN, args: rec.modelArgs || {} } };
+      if (rec.thoughtSignature) modelPart.thoughtSignature = rec.thoughtSignature;
+      contents.push({ role: 'model', parts: [modelPart] });
+      contents.push({
+        role: 'user',
+        parts: [{ functionResponse: { name: AGENT_STEP_FN, response: { result: String(rec.action.output ?? '') } } }]
       });
     }
-    return [{
-      role: 'user',
-      parts
-    }];
+    // Current screen + media as the final user turn — this is what the model acts on next.
+    contents.push({ role: 'user', parts: appendMedia([{ text: userMessage }]) });
+    return contents;
   }
 
   // ─── Parse Response ────────────────────────────────────────
@@ -333,7 +340,13 @@ export class GeminiProvider {
         args: actionArgs
       }],
       reasoning,
-      text: textPart?.text
+      text: textPart?.text,
+      // Gemini 3.x requires the thought_signature from each functionCall to be
+      // echoed back verbatim on later turns, or agentic tool use degrades (the
+      // model "describes" actions instead of emitting them). Capture it + the raw
+      // agent_step args so the runtime can replay this turn as proper history.
+      thoughtSignature: fnCallPart.functionCall.thoughtSignature ?? fnCallPart.thoughtSignature,
+      modelArgs: args
     };
   }
 

@@ -2237,7 +2237,9 @@ ${snapshot.elementsText}
           return result;
         }
 
-        // Record step with structured reasoning
+        // Record step with structured reasoning. userTurnText/modelArgs/thoughtSignature
+        // let the provider replay this step as a proper multi-turn function-call turn
+        // (required for Gemini 3.x tool-call continuity).
         const agentStep = {
           stepIndex: step,
           reflection: reasoning,
@@ -2245,7 +2247,10 @@ ${snapshot.elementsText}
             name: toolCall.name,
             input: toolCall.args,
             output
-          }
+          },
+          userTurnText: contextMessage,
+          modelArgs: response.modelArgs,
+          thoughtSignature: response.thoughtSignature
         };
         this.history.push(agentStep);
 
