@@ -2086,6 +2086,7 @@ ${snapshot.elementsText}
       estimatedCostUSD: 0
     };
     let malformedAgentStepRecoveries = 0;
+    let emptyAnswerRecoveries = 0;
 
     // Inject conversational context if we are answering the AI's question
     let contextualMessage = userMessage;
@@ -2489,18 +2490,32 @@ ${snapshot.elementsText}
             const goalOk = await this.runGoalCompletionCheck(toolCall.args, screenName, screenContent, screen.elements, screenshot, step);
             if (!goalOk) continue;
           }
-          const fallbackReplySource = toolCall.args.reply || toolCall.args.text || toolCall.args.message || output || reasoning.plan || '';
-          let reply = normalizeRichContent(fallbackReplySource, toolCall.args.text || toolCall.args.message || output || reasoning.plan || '');
+          // The internal `plan` field is meta (e.g. "Report the missing fields to
+          // the user.") and is NEVER surfaced to the user — it is excluded from
+          // the user-facing fallback chains below. If done() carried no real
+          // user-facing answer (the model only set its plan), re-ask for the
+          // actual answer rather than completing with filler. Capped to avoid a
+          // loop; real plan narration the agent wants to show goes in text/reply.
+          const hasUserFacingAnswer = [toolCall.args.reply, toolCall.args.text, toolCall.args.message]
+            .some(v => typeof v === 'string' && v.trim().length > 0);
+          if (toolCall.args.success !== false && !hasUserFacingAnswer && emptyAnswerRecoveries < 2) {
+            emptyAnswerRecoveries += 1;
+            this.observations.push('System observation: You called done() without an actual user-facing answer. Your internal plan is NOT shown to the user. Write the real answer the user asked for (the specific fields/values/result) in done(text) or done(reply).');
+            this.emitTrace('done_missing_answer_recovery', { recoveries: emptyAnswerRecoveries }, step);
+            continue;
+          }
+          const fallbackReplySource = toolCall.args.reply || toolCall.args.text || toolCall.args.message || output || '';
+          let reply = normalizeRichContent(fallbackReplySource, toolCall.args.text || toolCall.args.message || output || '');
           const structuredReplyCandidate = typeof toolCall.args.reply === 'string' ? toolCall.args.reply : typeof toolCall.args.text === 'string' ? toolCall.args.text : typeof toolCall.args.message === 'string' ? toolCall.args.message : '';
           if (typeof structuredReplyCandidate === 'string' && structuredReplyCandidate.trim()) {
             try {
               const parsedReply = JSON.parse(structuredReplyCandidate);
-              reply = normalizeRichContent(parsedReply, toolCall.args.text || toolCall.args.message || output || reasoning.plan || '');
+              reply = normalizeRichContent(parsedReply, toolCall.args.text || toolCall.args.message || output || '');
             } catch {
-              reply = normalizeRichContent(fallbackReplySource, toolCall.args.text || toolCall.args.message || output || reasoning.plan || '');
+              reply = normalizeRichContent(fallbackReplySource, toolCall.args.text || toolCall.args.message || output || '');
             }
           }
-          const previewText = toolCall.args.previewText || richContentToPlainText(reply, toolCall.args.text || toolCall.args.message || output || reasoning.plan || '');
+          const previewText = toolCall.args.previewText || richContentToPlainText(reply, toolCall.args.text || toolCall.args.message || output || '');
           const result = {
             success: toolCall.args.success !== false,
             message: previewText || (toolCall.args.success === false ? 'Action stopped.' : 'Action completed.'),
