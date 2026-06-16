@@ -15,7 +15,7 @@ export function createProvider(provider = 'gemini', apiKey, model, proxyUrl, pro
       return new OpenAIProvider(apiKey, model || 'gpt-4.1-mini', proxyUrl, proxyHeaders);
     case 'gemini':
     default:
-      return new GeminiProvider(apiKey, model || 'gemini-2.5-flash', proxyUrl, proxyHeaders);
+      return new GeminiProvider(apiKey, model || 'gemini-3.1-flash-lite', proxyUrl, proxyHeaders);
   }
 }
 //# sourceMappingURL=ProviderFactory.js.map

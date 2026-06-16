@@ -32,7 +32,7 @@ function looksLikeInternalPlanText(text) {
 // ─── Provider ──────────────────────────────────────────────────
 
 export class GeminiProvider {
-  constructor(apiKey, model = 'gemini-2.5-flash', proxyUrl, proxyHeaders) {
+  constructor(apiKey, model = 'gemini-3.1-flash-lite', proxyUrl, proxyHeaders) {
     if (proxyUrl) {
       this.baseUrl = proxyUrl.replace(/\/$/, '');
       this.headers = {

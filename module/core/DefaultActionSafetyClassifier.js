@@ -4,7 +4,7 @@ import { createProvider } from "../providers/ProviderFactory.js";
 const LOW_RISK_CAPABILITIES = new Set(['screen.read', 'ui.navigate', 'ui.scroll', 'ui.dismiss', 'support.escalate']);
 const HIGH_IMPACT_CAPABILITIES = new Set(['payment.commit', 'order.commit', 'account.security', 'privacy.sensitive', 'destructive']);
 export const DEFAULT_GUARD_MODELS = {
-  gemini: 'gemini-2.5-flash-lite',
+  gemini: 'gemini-3.1-flash-lite',
   openai: 'gpt-5.4-nano'
 };
 function includesAny(value, terms) {
