@@ -134,6 +134,20 @@ function MarkdownText({ text, style }) {
     );
   }) });
 }
+function blockHasRenderableContent(props) {
+  if (!props || typeof props !== "object") return false;
+  const str = (v) => typeof v === "string" && v.trim().length > 0;
+  const arr = (v) => Array.isArray(v) && v.length > 0;
+  return str(props.body) || str(props.description) || str(props.text) || str(props.subtitle) || str(props.headline) || str(props.price) || str(props.compareAtPrice) || str(props.image) || str(props.imageUrl) || str(props.imageUri) || str(props.name) || arr(props.facts) || arr(props.items) || arr(props.fields) || arr(props.chips) || arr(props.bullets) || arr(props.actions) || !!props.primaryAction || !!props.secondaryAction || !!props.submitAction;
+}
+function blockTextFallback(props) {
+  if (!props || typeof props !== "object") return "";
+  const lines = [];
+  for (const key of ["title", "headline", "subtitle", "body", "description", "text"]) {
+    if (typeof props[key] === "string" && props[key].trim()) lines.push(props[key].trim());
+  }
+  return lines.join("\n");
+}
 function RichContentRendererWeb({ content, surface, isUser = false, textStyle }) {
   const theme = useRichUITheme(surface === "support" ? "support" : surface);
   const registry = useBlockRegistry();
@@ -186,7 +200,27 @@ function RichContentRendererWeb({ content, surface, isUser = false, textStyle })
           );
         }
         const definition = registry.get(node.blockType);
-        if (!definition) return null;
+        if (!definition || !blockHasRenderableContent(node.props)) {
+          const fallback = blockTextFallback(node.props);
+          return fallback ? /* @__PURE__ */ jsx(
+            MarkdownText,
+            {
+              style: {
+                fontSize: 15,
+                lineHeight: 1.55,
+                color: isUser || surface === "chat" || surface === "support" ? theme.colors.inverseText : theme.colors.primaryText,
+                whiteSpace: "normal",
+                overflowWrap: "anywhere",
+                wordBreak: "break-word",
+                minWidth: 0,
+                maxWidth: "100%",
+                ...textStyle
+              },
+              text: fallback
+            },
+            node.id || `block-${index}`
+          ) : null;
+        }
         const BlockComponent = definition.component;
         return /* @__PURE__ */ jsx(
           "div",

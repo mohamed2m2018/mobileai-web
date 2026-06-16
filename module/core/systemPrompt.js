@@ -151,7 +151,9 @@ const UI_BLOCK_RULE = `- RICH UI BLOCKS:
   - \`inject_card(zoneId, templateName, props)\` is a deprecated compatibility alias; prefer \`render_block\`.
   - Use \`restore_zone(zoneId)\` when a screen block is outdated or no longer helpful.`;
 const TOOL_USAGE_CONTRACT = `- Use done() exactly once per response.
-  - For rich chat: \`done("[{ \\"type\\": \\"text\\", \\"content\\": ... }, { \\"type\\": \\"block\\", \\"blockType\\": \\\"ProductCard\\\" }]", \"preview text\", true)\`
+  - For rich chat, every block MUST be fully populated with real content in its props (body/facts/items/fields) — e.g. \`done("[{ \\"type\\": \\"text\\", \\"content\\": \\"Here's what I found:\\" }, { \\"type\\": \\"block\\", \\"blockType\\": \\"FactCard\\", \\"props\\": { \\"title\\": \\"Order #1042\\", \\"body\\": \\"Total $24.50, delivered Jun 3.\\", \\"facts\\": [{ \\"label\\": \\"Status\\", \\"value\\": \\"Delivered\\" }] } }]", \"preview text\", true)\`
+  - NEVER emit a block that has only a title and an empty body/items — an empty card is a failure. If you do not have structured data to fill a block, reply with plain text instead.
+  - For a summary, an explanation, or a list of key points, put the content in a TEXT node using markdown (use "- " for bullets). Do NOT wrap a free-form summary in a block.
   - For plain text: \`done(\"text\", true)\`
   - If a tool call is required, only mark success after the tool side-effect is complete.
   - Keep \`reply\` payloads serializable; do not include functions in block props.`;

@@ -126,6 +126,31 @@ function MarkdownText({ text, style }) {
     </div>
   );
 }
+// True when a block has real content beyond its title, so it's worth rendering
+// as a card. A block with only a title would render as an empty card.
+function blockHasRenderableContent(props) {
+  if (!props || typeof props !== 'object') return false;
+  const str = (v) => typeof v === 'string' && v.trim().length > 0;
+  const arr = (v) => Array.isArray(v) && v.length > 0;
+  return (
+    str(props.body) || str(props.description) || str(props.text) || str(props.subtitle) ||
+    str(props.headline) || str(props.price) || str(props.compareAtPrice) || str(props.image) ||
+    str(props.imageUrl) || str(props.imageUri) || str(props.name) ||
+    arr(props.facts) || arr(props.items) || arr(props.fields) || arr(props.chips) ||
+    arr(props.bullets) || arr(props.actions) ||
+    !!props.primaryAction || !!props.secondaryAction || !!props.submitAction
+  );
+}
+// Gather readable text from a block's text props — used to degrade an empty or
+// unknown block to plain text instead of a blank card.
+function blockTextFallback(props) {
+  if (!props || typeof props !== 'object') return '';
+  const lines = [];
+  for (const key of ['title', 'headline', 'subtitle', 'body', 'description', 'text']) {
+    if (typeof props[key] === 'string' && props[key].trim()) lines.push(props[key].trim());
+  }
+  return lines.join('\n');
+}
 export function RichContentRendererWeb({ content, surface, isUser = false, textStyle }) {
   const theme = useRichUITheme(surface === 'support' ? 'support' : surface);
   const registry = useBlockRegistry();
@@ -179,7 +204,32 @@ export function RichContentRendererWeb({ content, surface, isUser = false, textS
           );
         }
         const definition = registry.get(node.blockType);
-        if (!definition) return null;
+        // An unknown block, or a block with only a title and no real content,
+        // would render as a blank/empty card. Degrade to its text instead so
+        // the user never sees an empty titled card and no content is dropped.
+        if (!definition || !blockHasRenderableContent(node.props)) {
+          const fallback = blockTextFallback(node.props);
+          return fallback ? (
+            <MarkdownText
+              style={{
+                fontSize: 15,
+                lineHeight: 1.55,
+                color:
+                  isUser || surface === 'chat' || surface === 'support'
+                    ? theme.colors.inverseText
+                    : theme.colors.primaryText,
+                whiteSpace: 'normal',
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
+                minWidth: 0,
+                maxWidth: '100%',
+                ...textStyle,
+              }}
+              text={fallback}
+              key={node.id || `block-${index}`}
+            />
+          ) : null;
+        }
         const BlockComponent = definition.component;
         return (
           <div
