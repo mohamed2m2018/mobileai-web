@@ -208,6 +208,71 @@ function getAllowedZoneBlocks(zone) {
   }
   return [];
 }
+// --- STALE_TARGET element resolution (mirrors RN ReactNativePlatformAdapter) ---
+// The web element model carries: index, type, label, zoneId/analyticsZoneId and a
+// props bag (props.role, props.selector, props.name). RN keys off type/label/role/
+// stableId/zoneId; the web equivalents below mirror that intent with the fields the
+// web snapshot actually exposes (selector / input name stand in for RN's stableId).
+function normalizeTargetText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+function isInformativeTargetText(value) {
+  if (!value) return false;
+  if (/^\[[a-z-]+\]$/.test(value)) return false;
+  if (value.length < 2) return false;
+  return !new Set(['button', 'pressable', 'text input', 'text-input', 'input', 'switch', 'radio', 'slider', 'picker', 'date picker', 'item', 'row', 'card', 'link', 'tab']).has(value);
+}
+function labelsCompatible(a, b) {
+  if (!a || !b) return true;
+  if (a === b) return true;
+  return a.includes(b) || b.includes(a);
+}
+function buildTargetSignature(element) {
+  const props = element?.props || {};
+  return {
+    type: normalizeTargetText(element?.type),
+    label: normalizeTargetText(element?.label),
+    // selector / input name are the closest web stand-ins for RN's stable id.
+    stableId: normalizeTargetText(props.selector || props.name),
+    role: normalizeTargetText(props.role),
+    zoneId: normalizeTargetText(element?.zoneId || element?.analyticsZoneId)
+  };
+}
+function signaturesHaveStrongConflict(observed, candidate) {
+  if (observed.type && candidate.type && observed.type !== candidate.type) return true;
+  if (observed.role && candidate.role && observed.role !== candidate.role) return true;
+  if (observed.zoneId && candidate.zoneId && observed.zoneId !== candidate.zoneId) return true;
+  const observedLabel = observed.label;
+  const candidateLabel = candidate.label;
+  if (isInformativeTargetText(observedLabel) && isInformativeTargetText(candidateLabel) && !labelsCompatible(observedLabel, candidateLabel)) {
+    return true;
+  }
+  return false;
+}
+// True when the same-index element still looks like the one the model observed.
+function sameIndexStillMatches(observed, candidate) {
+  return !signaturesHaveStrongConflict(buildTargetSignature(observed), buildTargetSignature(candidate));
+}
+// Higher = better match. Exact label scores high, role match adds, partial label
+// match adds less, mismatched label is strongly penalized. stableId match wins
+// outright; a stableId conflict rules a candidate out entirely.
+function scoreTargetMatch(observed, candidate) {
+  const a = buildTargetSignature(observed);
+  const b = buildTargetSignature(candidate);
+  if (a.type && b.type && a.type !== b.type) return Number.NEGATIVE_INFINITY;
+  if (a.stableId && b.stableId) {
+    return a.stableId === b.stableId ? 120 : Number.NEGATIVE_INFINITY;
+  }
+  let score = 0;
+  if (isInformativeTargetText(a.label) && isInformativeTargetText(b.label)) {
+    if (a.label === b.label) score += 70;
+    else if (labelsCompatible(a.label, b.label)) score += 45;
+    else score -= 80;
+  }
+  if (a.role && b.role) score += a.role === b.role ? 15 : -25;
+  if (a.zoneId && b.zoneId) score += a.zoneId === b.zoneId ? 25 : -30;
+  return score;
+}
 export class WebPlatformAdapter {
   lastSnapshot = null;
   lastController = null;
@@ -309,6 +374,78 @@ export class WebPlatformAdapter {
   getDomNode(index) {
     const node = this.getController()?.getElement(index);
     return node && typeof node === 'object' && 'tagName' in node ? node : null;
+  }
+  // Re-snapshots at action time and resolves the element the model intended,
+  // detecting staleness (screen changed, or the same-index element no longer
+  // matches what was observed) and relocating by signature. Mirrors RN's
+  // resolveInteractiveElement. Returns { ok:true, index, label, node } against a
+  // FRESH controller, or { ok:false, message }.
+  resolveInteractiveElement(index, actionName) {
+    // 1. Capture what the model observed BEFORE re-snapshotting.
+    const observedSnapshot = this.lastSnapshot;
+    const observedElement = observedSnapshot?.elements.find(entry => entry.index === index);
+    // 2. Re-snapshot fresh — current elements + a fresh controller (fresh nodes).
+    const currentSnapshot = this.getScreenSnapshot();
+    const elements = currentSnapshot.elements;
+    const sameIndexElement = elements.find(entry => entry.index === index);
+    // 3. Screen changed out from under the model → stale.
+    if (observedSnapshot?.screenName && currentSnapshot.screenName && observedSnapshot.screenName !== currentSnapshot.screenName) {
+      return {
+        ok: false,
+        message: `❌ STALE_TARGET: The screen changed from "${observedSnapshot.screenName}" to "${currentSnapshot.screenName}" before ${actionName}. Re-read the current screen and choose the target again.`
+      };
+    }
+    // 4. No observed element (model never read it / older snapshot) → fall back to
+    //    same-index if present, else not-found with available indexes.
+    if (!observedElement) {
+      if (sameIndexElement) {
+        return {
+          ok: true,
+          index: sameIndexElement.index,
+          label: sameIndexElement.label,
+          node: this.getController()?.getElement(sameIndexElement.index) || null
+        };
+      }
+      return {
+        ok: false,
+        message: `❌ Element with index ${index} not found. Available indexes: ${elements.map(entry => entry.index).join(', ')}`
+      };
+    }
+    // 5. Same-index element still matches the observed one → use the fresh node.
+    if (sameIndexElement && sameIndexStillMatches(observedElement, sameIndexElement)) {
+      return {
+        ok: true,
+        index: sameIndexElement.index,
+        label: sameIndexElement.label,
+        node: this.getController()?.getElement(sameIndexElement.index) || null
+      };
+    }
+    // 6. Otherwise score all current elements against the observed one and pick
+    //    the single clear winner above threshold; relocate. Ambiguity → stale.
+    const scored = elements.map(entry => ({
+      element: entry,
+      score: scoreTargetMatch(observedElement, entry)
+    })).filter(entry => entry.score >= 60).sort((a, b) => b.score - a.score);
+    const topScore = scored.length > 0 ? scored[0].score : Number.NEGATIVE_INFINITY;
+    const best = scored.filter(entry => entry.score === topScore);
+    if (best.length === 1) {
+      const relocated = best[0].element;
+      if (relocated.index !== index) {
+        logger.info('WebPlatformAdapter', `STALE_TARGET recovered for ${actionName}: [${index}] "${observedElement.label}" relocated to [${relocated.index}] "${relocated.label}"`);
+      }
+      return {
+        ok: true,
+        index: relocated.index,
+        label: relocated.label,
+        node: this.getController()?.getElement(relocated.index) || null
+      };
+    }
+    const currentLabel = sameIndexElement ? `"${sameIndexElement.label}"` : 'no current element';
+    const reason = scored.length > 1 ? `multiple matching targets (${scored.map(entry => `[${entry.element.index}] "${entry.element.label}"`).join(', ')})` : `observed [${index}] "${observedElement.label}" now points to ${currentLabel}`;
+    return {
+      ok: false,
+      message: `❌ STALE_TARGET: The UI changed before ${actionName}. ${reason}. Re-read the current screen and choose the target again.`
+    };
   }
   getView(node) {
     return node?.ownerDocument?.defaultView || (typeof window !== 'undefined' ? window : null);
@@ -484,26 +621,28 @@ export class WebPlatformAdapter {
     });
   }
   async tap(index) {
-    const element = this.getSnapshotElement(index);
-    const node = this.getDomNode(index);
-    if (!element || !node) {
-      return `❌ Element with index ${index} not found.`;
+    const resolved = this.resolveInteractiveElement(index, 'tap');
+    if (!resolved.ok) return resolved.message;
+    const { index: resolvedIndex, label, node } = resolved;
+    if (!node) {
+      return `❌ Element with index ${resolvedIndex} not found.`;
     }
     this.scrollNodeIntoView(node);
     await this.showActionHighlight(node, 'tap');
     this.dispatchPointerSequence(node);
-    return `✅ Tapped [${index}] "${element.label}"`;
+    return `✅ Tapped [${resolvedIndex}] "${label}"`;
   }
   async longPress(index) {
-    const element = this.getSnapshotElement(index);
-    const node = this.getDomNode(index);
-    if (!element || !node) {
-      return `❌ Element with index ${index} not found.`;
+    const resolved = this.resolveInteractiveElement(index, 'long_press');
+    if (!resolved.ok) return resolved.message;
+    const { index: resolvedIndex, label, node } = resolved;
+    if (!node) {
+      return `❌ Element with index ${resolvedIndex} not found.`;
     }
     this.scrollNodeIntoView(node);
     await this.showActionHighlight(node, 'tap');
     await this.dispatchLongPressSequence(node);
-    return `✅ Long-pressed [${index}] "${element.label}"`;
+    return `✅ Long-pressed [${resolvedIndex}] "${label}"`;
   }
   dispatchInputEvents(node) {
     const doc = node.ownerDocument;
@@ -517,13 +656,14 @@ export class WebPlatformAdapter {
     }));
   }
   async typeText(index, text) {
-    const element = this.getSnapshotElement(index);
-    const node = this.getDomNode(index);
-    if (!element || !node) {
-      return `❌ Element with index ${index} not found.`;
+    const resolved = this.resolveInteractiveElement(index, 'type');
+    if (!resolved.ok) return resolved.message;
+    const { index: resolvedIndex, label, node } = resolved;
+    if (!node) {
+      return `❌ Element with index ${resolvedIndex} not found.`;
     }
     if (isSecretField(node)) {
-      return `🔒 Refused to type into [${index}] "${element.label}" — it is a password or other secret field. For the user's security a credential must NEVER pass through the AI or be filled by it. Do not attempt to fill it and do not ask for it in chat. Instead, ask the user to type it directly into this field on the page themselves (you cannot see it), and continue once they confirm it is filled.`;
+      return `🔒 Refused to type into [${resolvedIndex}] "${label}" — it is a password or other secret field. For the user's security a credential must NEVER pass through the AI or be filled by it. Do not attempt to fill it and do not ask for it in chat. Instead, ask the user to type it directly into this field on the page themselves (you cannot see it), and continue once they confirm it is filled.`;
     }
     if (isInputElement(node) || isTextAreaElement(node)) {
       this.scrollNodeIntoView(node);
@@ -531,7 +671,7 @@ export class WebPlatformAdapter {
       node.focus();
       this.setNativeValue(node, text);
       this.dispatchTextInputEvents(node, text);
-      return `✅ Typed "${text}" into [${index}] "${element.label}"`;
+      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"`;
     }
     if (node.isContentEditable) {
       this.scrollNodeIntoView(node);
@@ -539,9 +679,9 @@ export class WebPlatformAdapter {
       node.focus();
       node.textContent = text;
       this.dispatchTextInputEvents(node, text);
-      return `✅ Typed "${text}" into [${index}] "${element.label}"`;
+      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"`;
     }
-    return `❌ Element [${index}] "${element.label}" is not a typeable text input.`;
+    return `❌ Element [${resolvedIndex}] "${label}" is not a typeable text input.`;
   }
   async scroll(direction, amount, containerIndex) {
     const root = this.options.getRoot();
@@ -625,10 +765,11 @@ export class WebPlatformAdapter {
     return `✅ Scrolled ${targetName} by ${Math.round(moved)}px.`;
   }
   async adjustSlider(index, value) {
-    const element = this.getSnapshotElement(index);
-    const node = this.getDomNode(index);
-    if (!element || !isInputElement(node) || node.type !== 'range') {
-      return `❌ Element [${index}] is not a slider.`;
+    const resolved = this.resolveInteractiveElement(index, 'adjust_slider');
+    if (!resolved.ok) return resolved.message;
+    const { index: resolvedIndex, label, node } = resolved;
+    if (!isInputElement(node) || node.type !== 'range') {
+      return `❌ Element [${resolvedIndex}] is not a slider.`;
     }
     const normalized = Number(value);
     if (!Number.isFinite(normalized) || normalized < 0 || normalized > 1) {
@@ -644,31 +785,33 @@ export class WebPlatformAdapter {
     await this.showActionHighlight(node, 'fill');
     this.setNativeValue(node, String(actual));
     this.dispatchInputEvents(node);
-    return `✅ Adjusted slider [${index}] "${element.label}" to ${Math.round(normalized * 100)}% (value: ${actual})`;
+    return `✅ Adjusted slider [${resolvedIndex}] "${label}" to ${Math.round(normalized * 100)}% (value: ${actual})`;
   }
   async selectPicker(index, value) {
-    const element = this.getSnapshotElement(index);
-    const node = this.getDomNode(index);
-    if (!element || !isSelectElement(node)) {
-      return `❌ Element [${index}] is not a picker.`;
+    const resolved = this.resolveInteractiveElement(index, 'select_picker');
+    if (!resolved.ok) return resolved.message;
+    const { index: resolvedIndex, label, node } = resolved;
+    if (!isSelectElement(node)) {
+      return `❌ Element [${resolvedIndex}] is not a picker.`;
     }
     this.scrollNodeIntoView(node);
     await this.showActionHighlight(node, 'fill');
     node.value = value;
     this.dispatchInputEvents(node);
-    return `✅ Selected "${value}" in [${index}] "${element.label}"`;
+    return `✅ Selected "${value}" in [${resolvedIndex}] "${label}"`;
   }
   async setDate(index, date) {
-    const element = this.getSnapshotElement(index);
-    const node = this.getDomNode(index);
-    if (!element || !isInputElement(node)) {
-      return `❌ Element [${index}] is not a date input.`;
+    const resolved = this.resolveInteractiveElement(index, 'set_date');
+    if (!resolved.ok) return resolved.message;
+    const { index: resolvedIndex, label, node } = resolved;
+    if (!isInputElement(node)) {
+      return `❌ Element [${resolvedIndex}] is not a date input.`;
     }
     this.scrollNodeIntoView(node);
     await this.showActionHighlight(node, 'fill');
     this.setNativeValue(node, date);
     this.dispatchTextInputEvents(node, date);
-    return `✅ Set date on [${index}] "${element.label}" to ${date}`;
+    return `✅ Set date on [${resolvedIndex}] "${label}" to ${date}`;
   }
   async dismissKeyboard() {
     // Resolve activeElement from the agent's controlled root document (handles
@@ -682,9 +825,11 @@ export class WebPlatformAdapter {
     return '✅ Dismissed active input focus.';
   }
   async guideUser(index, message, autoRemoveAfterMs, action) {
-    const node = this.getDomNode(index);
+    const resolved = this.resolveInteractiveElement(index, 'guide_user');
+    if (!resolved.ok) return resolved.message;
+    const { index: resolvedIndex, node } = resolved;
     if (!node) {
-      return `❌ Element with index ${index} not found.`;
+      return `❌ Element with index ${resolvedIndex} not found.`;
     }
     // message is optional when an action tag is provided — derive a default
     // label so the tooltip still reads sensibly (matches RN guide_user).
@@ -698,7 +843,7 @@ export class WebPlatformAdapter {
       action,
       autoRemoveAfterMs
     });
-    return `✅ Highlighted [${index}] with guidance "${label}"`;
+    return `✅ Highlighted [${resolvedIndex}] with guidance "${label}"`;
   }
   async simplifyZone(zoneId) {
     const zone = globalZoneRegistry.get(zoneId);

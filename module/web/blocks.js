@@ -89,6 +89,7 @@ function ProductCardWeb({
   imageUrl,
   image,
   price,
+  compareAtPrice,
   badges = [],
   actions = []
 }) {
@@ -96,7 +97,8 @@ function ProductCardWeb({
   const [imgFailed, setImgFailed] = useState(false);
   const resolvedTitle = title || name || "Recommended item";
   const resolvedImage = imgFailed ? null : imageUrl || image;
-  return /* @__PURE__ */ jsxs("div", { style: cardStyle(theme), children: [
+  const accent = theme.colors.primaryAccent;
+  return /* @__PURE__ */ jsxs("div", { style: { ...cardStyle(theme), padding: 0, overflow: "hidden", gap: 0 }, children: [
     resolvedImage ? /* @__PURE__ */ jsxs(
       "div",
       {
@@ -112,31 +114,101 @@ function ProductCardWeb({
               onError: () => setImgFailed(true),
               style: {
                 width: "100%",
-                aspectRatio: "1.7 / 1",
+                aspectRatio: "1.6 / 1",
                 objectFit: "cover",
-                display: "block",
-                borderRadius: theme.shape.mediaRadius,
-                border: `1px solid ${theme.colors.mediaBorder}`
+                display: "block"
               }
             }
           ),
-          price ? /* @__PURE__ */ jsx(
+          /* @__PURE__ */ jsx(
             "div",
             {
               style: {
                 position: "absolute",
-                right: theme.spacing.sm,
-                bottom: theme.spacing.sm,
-                background: "rgba(20, 18, 16, 0.86)",
+                inset: 0,
+                background: "linear-gradient(180deg, rgba(12,10,8,0.06) 30%, rgba(12,10,8,0.62) 100%)"
+              }
+            }
+          ),
+          price ? /* @__PURE__ */ jsxs(
+            "div",
+            {
+              style: {
+                position: "absolute",
+                right: 14,
+                bottom: 14,
+                display: "flex",
+                alignItems: "baseline",
+                gap: 8,
+                background: "rgba(23, 20, 17, 0.86)",
                 color: theme.colors.inverseText,
                 borderRadius: theme.shape.pillRadius,
-                padding: "10px 14px",
+                padding: "9px 13px",
                 fontSize: theme.typography.priceSize,
                 fontWeight: 800
               },
-              children: price
+              children: [
+                /* @__PURE__ */ jsx("span", { children: price }),
+                compareAtPrice ? /* @__PURE__ */ jsx(
+                  "span",
+                  {
+                    style: {
+                      fontSize: theme.typography.captionSize,
+                      fontWeight: 600,
+                      opacity: 0.7,
+                      textDecoration: "line-through"
+                    },
+                    children: compareAtPrice
+                  }
+                ) : null
+              ]
             }
-          ) : null
+          ) : null,
+          /* @__PURE__ */ jsxs(
+            "div",
+            {
+              style: {
+                position: "absolute",
+                left: 16,
+                right: 16,
+                bottom: 16,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                pointerEvents: "none"
+              },
+              children: [
+                subtitle ? /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: 1.1,
+                      textTransform: "uppercase",
+                      color: theme.colors.inverseText,
+                      opacity: 0.88
+                    },
+                    children: subtitle
+                  }
+                ) : null,
+                /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      fontSize: 26,
+                      lineHeight: 1.1,
+                      fontWeight: 800,
+                      letterSpacing: -0.6,
+                      color: theme.colors.inverseText,
+                      maxWidth: "78%"
+                    },
+                    children: resolvedTitle
+                  }
+                )
+              ]
+            }
+          )
         ]
       }
     ) : null,
@@ -146,23 +218,47 @@ function ProductCardWeb({
         style: {
           display: "flex",
           flexDirection: "column",
-          gap: theme.spacing.xs
+          gap: theme.spacing.sm,
+          padding: theme.spacing.lg
         },
         children: [
-          subtitle ? /* @__PURE__ */ jsx(
+          /* @__PURE__ */ jsxs(
             "div",
             {
               style: {
-                fontSize: theme.typography.captionSize,
-                fontWeight: 700,
-                letterSpacing: 1,
-                textTransform: "uppercase",
-                color: theme.colors.mutedText
+                display: "flex",
+                alignItems: "center",
+                gap: 8
               },
-              children: subtitle
+              children: [
+                /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      width: 28,
+                      height: 4,
+                      borderRadius: 999,
+                      background: accent
+                    }
+                  }
+                ),
+                /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: 0.9,
+                      textTransform: "uppercase",
+                      color: theme.colors.mutedText
+                    },
+                    children: "AI pick"
+                  }
+                )
+              ]
             }
-          ) : null,
-          /* @__PURE__ */ jsx(
+          ),
+          !resolvedImage ? /* @__PURE__ */ jsx(
             "div",
             {
               style: {
@@ -172,7 +268,7 @@ function ProductCardWeb({
               },
               children: resolvedTitle
             }
-          ),
+          ) : null,
           !resolvedImage && price ? /* @__PURE__ */ jsx(
             "div",
             {
@@ -224,11 +320,11 @@ function ProductCardWeb({
                 badge
               ))
             }
-          ) : null
+          ) : null,
+          /* @__PURE__ */ jsx(ActionButtons, { actions, sourceBlockId: "ProductCard" })
         ]
       }
-    ),
-    /* @__PURE__ */ jsx(ActionButtons, { actions, sourceBlockId: "ProductCard" })
+    )
   ] });
 }
 function FactCardWeb({ title = "Details", body, facts = [], actions = [] }) {
@@ -785,6 +881,10 @@ const webBlockDefinitions = [
       price: {
         type: "string",
         description: 'The product price exactly as displayed, e.g. "$199.00".'
+      },
+      compareAtPrice: {
+        type: "string",
+        description: 'Optional original/strike-through price exactly as displayed, e.g. "$249.00".'
       },
       badges: {
         type: "array"

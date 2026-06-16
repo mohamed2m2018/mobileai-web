@@ -63,7 +63,7 @@ function looksLikeInternalPlanText(text) {
 // ─── Provider ──────────────────────────────────────────────────
 
 export class GeminiProvider {
-  constructor(apiKey, model = 'gemini-3.1-flash-lite', proxyUrl, proxyHeaders) {
+  constructor(apiKey, model = 'gemini-3.1-flash-lite', proxyUrl, proxyHeaders, enableWebSearch) {
     if (proxyUrl) {
       this.baseUrl = proxyUrl.replace(/\/$/, '');
       this.headers = {
@@ -82,6 +82,7 @@ export class GeminiProvider {
       throw new Error('[twomilia] You must provide either "apiKey" or "proxyUrl" to AIAgent.');
     }
     this.model = model;
+    this.enableWebSearch = enableWebSearch ?? false;
     this._cachedDeclaration = null;
     this._cachedToolCount = -1;
 
@@ -90,6 +91,60 @@ export class GeminiProvider {
       ? (proxyUrl.includes('twomilia.com') ? 'h' : 'c') + _h(proxyUrl)
       : 'k' + (apiKey ? _h(apiKey.slice(0, 8)) : '0');
   }
+  /**
+   * Returns a web_search tool that makes a separate Gemini call with Google
+   * Search grounding (built-in googleSearch can't be combined with function
+   * calling, so it's a separate request). Null when web search is disabled.
+   * Mirrors RN createWebSearchTool.
+   */
+  createWebSearchTool() {
+    if (!this.enableWebSearch) return null;
+    const self = this;
+    return {
+      name: 'web_search',
+      description: 'Search the web for real-time, domain-relevant information that is NOT available on screen or in the knowledge base. Use ONLY for app-related queries: product info, current promotions, store/restaurant details, delivery status from external sources, dietary or allergen info for menu items, etc. Do NOT use for general knowledge questions unrelated to the app.',
+      parameters: {
+        query: {
+          type: 'string',
+          description: 'The search query — should be specific and related to the app domain',
+          required: true
+        }
+      },
+      execute: async args => {
+        const query = args.query;
+        if (!query?.trim()) return 'Error: search query is required.';
+        logger.info('WebSearch', `Searching: "${query}"`);
+        try {
+          const data = await retryWithBackoff(async () => {
+            const response = await fetch(self.buildGenerateContentUrl(), {
+              method: 'POST',
+              headers: self.headers,
+              body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: query }] }],
+                tools: [{ googleSearch: {} }],
+                generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
+              })
+            });
+            if (!response.ok) {
+              const errorBody = await response.text();
+              const err = new Error(`Gemini API error ${response.status}: ${errorBody}`);
+              err.status = response.status;
+              throw err;
+            }
+            return response.json();
+          }, 'WebSearch');
+          const text = data?.candidates?.[0]?.content?.parts?.filter(p => p.text)?.map(p => p.text)?.join('\n');
+          if (!text) return 'Web search returned no results for this query.';
+          logger.info('WebSearch', `Got ${text.length} chars`);
+          return `Web search results for "${query}":\n\n${text}`;
+        } catch (error) {
+          logger.error('WebSearch', `Failed: ${error.message}`);
+          return `Web search failed: ${error.message}. Try answering from available app data instead.`;
+        }
+      }
+    };
+  }
+
   async generateContent(systemPrompt, userMessage, tools, history, screenshot, signal, userImages) {
     logger.info('GeminiProvider', `Sending request. Model: ${this.model}, Tools: ${tools.length}${screenshot ? ', with screenshot' : ''}${userImages?.length ? `, with ${userImages.length} user image(s)` : ''}`);
 

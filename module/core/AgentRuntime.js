@@ -26,6 +26,32 @@ import { DefaultActionSafetyClassifier } from "./DefaultActionSafetyClassifier.j
 const DEFAULT_MAX_STEPS = 40;
 const DEFAULT_ACTION_SAFETY_TIMEOUT_MS = 300;
 const DEFAULT_MIN_CONFIDENCE_TO_ALLOW = 0.75;
+const DEFAULT_STABILIZATION_MAX_MS = 650;
+const DEFAULT_STABILIZATION_STABLE_FRAMES = 2;
+// Wait one animation frame (web equivalent of RN's nextFrame).
+function nextFrameWeb() {
+  return new Promise(resolve => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 16);
+  });
+}
+// setTimeout that resolves early if the task is aborted — keeps cancel snappy
+// during the wait tool and inter-step delays.
+function abortableDelay(ms, signal) {
+  return new Promise(resolve => {
+    if (signal?.aborted) return resolve();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      signal?.removeEventListener?.('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener?.('abort', finish);
+  });
+}
 function generateTraceId() {
   return `trace_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -159,6 +185,8 @@ export class AgentRuntime {
   _cachedProviderTools = null;
   _cachedProviderToolMap = null;
   currentUserGoal = '';
+  preTaskSnapshot = null;
+  goalVerifyAttempts = 0;
   verifierProvider = null;
   outcomeVerifier = null;
   pendingCriticalVerification = null;
@@ -193,6 +221,8 @@ export class AgentRuntime {
   static APP_ACTION_TOOLS = new Set(['tap', 'type', 'scroll', 'navigate', 'long_press', 'adjust_slider', 'select_picker', 'set_date', 'dismiss_keyboard']);
   static UI_EFFECT_TOOLS = new Set([...AgentRuntime.APP_ACTION_TOOLS, 'guide_user', 'simplify_zone', 'render_block', 'inject_card', 'restore_zone']);
   static NON_UI_TOOLS = new Set(['done', 'ask_user', 'wait', 'capture_screenshot', 'query_knowledge', 'query_data', 'escalate_to_human', 'report_issue', 'guide', 'simplify', 'restore', 'web_search']);
+  // Overlay-only tools that never change the host page — skip post-tool settle.
+  static SKIP_STABILIZATION_TOOLS = new Set(['guide_user', 'simplify_zone', 'render_block', 'inject_card', 'restore_zone']);
   getConfig() {
     return this.config;
   }
@@ -833,6 +863,74 @@ export class AgentRuntime {
     return this.pendingCriticalVerification !== null;
   }
 
+  isTaskCompletionVerifyEnabled() {
+    if (this.config.verifier?.enabled === false) return false;
+    return this.config.verifier?.verifyTaskCompletion === true;
+  }
+
+  getMaxGoalChecks() {
+    return this.config.verifier?.maxGoalChecks ?? 2;
+  }
+
+  /**
+   * Goal-completion verifier. Fires on done(success=true) and compares the
+   * task-start snapshot, the user's goal, and the final UI. Returns true when
+   * the goal is confirmed satisfied (or we gave up after maxGoalChecks) and
+   * done() may complete. Returns false when done() must be blocked: an
+   * observation is pushed and the loop continues so the agent can recover.
+   * Matches RN runGoalCompletionCheck.
+   */
+  async runGoalCompletionCheck(doneArgs, screenName, screenContent, elements, screenshot, stepIndex) {
+    if (!this.isTaskCompletionVerifyEnabled()) return true;
+    const verifier = this.getVerifier();
+    if (!verifier) return true;
+    if (!this.preTaskSnapshot) return true;
+    if (!this.currentUserGoal) return true;
+
+    const maxGoalChecks = this.getMaxGoalChecks();
+    if (this.goalVerifyAttempts >= maxGoalChecks) {
+      this.emitTrace('task_completion_unverified_giveup', {
+        attempts: this.goalVerifyAttempts,
+        maxGoalChecks
+      }, stepIndex);
+      return true;
+    }
+
+    const postAction = this.createCurrentVerificationSnapshot(screenName, screenContent, elements, screenshot);
+    const action = buildVerificationAction('done', doneArgs, elements, 'Complete task');
+    const result = await verifier.verify({
+      goal: this.currentUserGoal,
+      action,
+      preAction: this.preTaskSnapshot,
+      postAction
+    }, this.taskAbortController?.signal);
+
+    this.emitTrace('task_completion_verified', {
+      status: result.status,
+      failureKind: result.failureKind,
+      evidence: result.evidence,
+      missingFields: result.missingFields,
+      validationMessages: result.validationMessages,
+      source: result.source,
+      attempts: this.goalVerifyAttempts + 1
+    }, stepIndex);
+
+    if (result.status === 'success') return true;
+
+    this.goalVerifyAttempts += 1;
+    const validationDetails = result.validationMessages?.length ? ` Visible validation messages: ${result.validationMessages.join(' | ')}.` : '';
+    const goalText = this.currentUserGoal.replace(/\s+/g, ' ').trim().slice(0, 240);
+    const guidance = result.status === 'error' ? 'Re-check the screen and either fix the gap (extra/missing items, wrong selection, miscount) or call done(success=false) with a clear explanation.' : 'The goal could not be confirmed from the current UI. Re-check the visible state before completing — verify counts, quantities, and selections match the goal.';
+    this.observations.push(`Goal verifier: you called done(success=true) but the final UI does not clearly satisfy the user's goal "${goalText}". ${result.evidence}${validationDetails} ${guidance}`);
+    this.emitTrace('task_completion_blocked', {
+      goal: goalText,
+      status: result.status,
+      attempts: this.goalVerifyAttempts,
+      maxGoalChecks
+    }, stepIndex);
+    return false;
+  }
+
   // ─── Tool Registration ─────────────────────────────────────
 
   registerBuiltInTools() {
@@ -870,6 +968,16 @@ export class AgentRuntime {
         });
       }
     });
+
+    // web_search — grounded web search (only if enableWebSearch and the
+    // provider supports it). The provider returns null when disabled.
+    if (this.config.enableWebSearch !== false) {
+      const searchTool = this.provider?.createWebSearchTool?.();
+      if (searchTool) {
+        this.tools.set('web_search', searchTool);
+        logger.info('AgentRuntime', 'Web search tool registered');
+      }
+    }
 
     // done — complete the task
     this.tools.set('done', {
@@ -934,7 +1042,7 @@ export class AgentRuntime {
       },
       execute: async args => {
         const seconds = Math.min(Number(args.seconds) || 2, 5);
-        await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+        await abortableDelay(seconds * 1000, this.taskAbortController?.signal);
         return `⏳ Waited ${seconds} seconds for the screen to update.`;
       }
     });
@@ -1398,6 +1506,56 @@ ${snapshot.elementsText}
    * The global ErrorUtils handler is task-scoped (installed in execute()),
    * so this method only needs to CHECK for errors, not install/remove.
    */
+  shouldStabilizeAfterTool(toolName, tool) {
+    if (this.config.toolStabilization?.enabled === false) return false;
+    if (tool?.effect === 'read' || tool?.effect === 'support') return false;
+    if (AgentRuntime.SKIP_STABILIZATION_TOOLS.has(toolName)) return false;
+    return AgentRuntime.UI_EFFECT_TOOLS.has(toolName);
+  }
+
+  /**
+   * Poll the screen signature after a UI tool until it stabilizes (or maxMs),
+   * instead of a flat 2s sleep. Breaks early on stable/changed/async-error/
+   * cancel. Matches RN waitForUIStability.
+   */
+  async waitForUIStability(toolName, beforeSignature, stepIndex) {
+    this.config.onStatusUpdate?.('Waiting for screen to settle...');
+    const maxMs = this.config.toolStabilization?.maxMs ?? DEFAULT_STABILIZATION_MAX_MS;
+    const stableFrames = Math.max(1, this.config.toolStabilization?.stableFrames ?? DEFAULT_STABILIZATION_STABLE_FRAMES);
+    const started = Date.now();
+    let lastSignature = '';
+    let stableCount = 0;
+    let changed = false;
+    let reason = 'timeout';
+    while (Date.now() - started < maxMs) {
+      if (this.isCancelRequested || this.taskAbortController?.signal?.aborted) break;
+      await nextFrameWeb();
+      if (this.lastSuppressedError) {
+        reason = 'async_error';
+        break;
+      }
+      const current = this.getPlatformAdapter().getScreenSnapshot();
+      const signature = this.getScreenSignature(current, current.elementsText);
+      if (signature !== beforeSignature) changed = true;
+      if (signature === lastSignature) {
+        stableCount += 1;
+        if (stableCount >= stableFrames) {
+          reason = changed ? 'changed_stable' : 'unchanged_stable';
+          break;
+        }
+      } else {
+        stableCount = 1;
+        lastSignature = signature;
+      }
+    }
+    this.emitTrace('tool_stabilization_finished', {
+      tool: toolName,
+      reason,
+      durationMs: Date.now() - started,
+      changed
+    }, stepIndex);
+  }
+
   async executeToolSafely(tool, args, toolName, stepIndex) {
     // Clear any previous suppressed error before this tool
     this.lastSuppressedError = null;
@@ -1461,11 +1619,24 @@ ${snapshot.elementsText}
       const safetyDecision = await this.evaluateActionSafety(tool, args, toolName, stepIndex);
       const safetyBlock = await this.enforceActionSafetyDecision(safetyDecision, toolName, args, stepIndex);
       if (safetyBlock) return safetyBlock;
+      // Capture the pre-action screen signature so we can detect when the UI
+      // settles after the tool runs (adaptive, instead of a flat 2s sleep).
+      let beforeSignature = null;
+      if (this.shouldStabilizeAfterTool(toolName, tool)) {
+        const beforeSnap = this.getPlatformAdapter().getScreenSnapshot();
+        beforeSignature = this.getScreenSignature(beforeSnap, beforeSnap.elementsText);
+      }
       const result = await tool.execute(args);
 
-      // Settle window for async side-effects (useEffect, native callbacks)
-      // The global ErrorUtils handler catches any errors during this window
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Settle window for async side-effects (useEffect, async callbacks). For
+      // UI tools, poll the screen signature until it stabilizes (≤650ms,
+      // cancel-aware); for non-UI tools a brief window lets async errors surface.
+      // The global error handler catches any errors during this window.
+      if (beforeSignature !== null) {
+        await this.waitForUIStability(toolName, beforeSignature, stepIndex);
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 120));
+      }
       const suppressedError = this.lastSuppressedError;
       if (suppressedError) {
         logger.warn('AgentRuntime', `🛡️ Tool "${toolName}" caused async error (suppressed): ${suppressedError.message}`);
@@ -1879,6 +2050,8 @@ ${snapshot.elementsText}
     this.pendingCriticalVerification = null;
     this.outcomeVerifier = null;
     this.verifierProvider = null;
+    this.preTaskSnapshot = null;
+    this.goalVerifyAttempts = 0;
     this.currentUserGoal = userMessage;
     // Reset workflow approval for each new task
     this.resetAppActionApproval('new task');
@@ -2055,6 +2228,10 @@ ${snapshot.elementsText}
         const hasUserImages = step === 0 && userImages?.length > 0;
         const screenshot = hasUserImages ? undefined : await this.getPlatformAdapter().captureScreenshot();
         await this.updateCriticalVerification(screenName, screenContent, screen.elements, screenshot, step);
+        // Capture the task-start baseline once, for goal-completion verification.
+        if (!this.preTaskSnapshot) {
+          this.preTaskSnapshot = this.createCurrentVerificationSnapshot(screenName, screenContent, screen.elements, screenshot);
+        }
 
         // 5. Assemble structured user prompt after verification updates so
         // any new observations are included in the very next model turn.
@@ -2286,6 +2463,12 @@ ${snapshot.elementsText}
             }, step);
             continue;
           }
+          // Goal-completion verify: block done(success=true) if the final UI
+          // does not clearly satisfy the user's goal (up to maxGoalChecks).
+          if (toolCall.args.success !== false) {
+            const goalOk = await this.runGoalCompletionCheck(toolCall.args, screenName, screenContent, screen.elements, screenshot, step);
+            if (!goalOk) continue;
+          }
           const fallbackReplySource = toolCall.args.reply || toolCall.args.text || toolCall.args.message || output || reasoning.plan || '';
           let reply = normalizeRichContent(fallbackReplySource, toolCall.args.text || toolCall.args.message || output || reasoning.plan || '');
           const structuredReplyCandidate = typeof toolCall.args.reply === 'string' ? toolCall.args.reply : typeof toolCall.args.text === 'string' ? toolCall.args.text : typeof toolCall.args.message === 'string' ? toolCall.args.message : '';
@@ -2340,7 +2523,7 @@ ${snapshot.elementsText}
         // Step delay — skip for non-UI tools (no render settle needed)
         const NON_UI_TOOLS = new Set(['done', 'ask_user', 'wait', 'capture_screenshot', 'query_knowledge', 'query_data', 'escalate_to_human', 'report_issue', 'guide', 'simplify', 'restore', 'web_search']);
         if (!NON_UI_TOOLS.has(toolCall.name)) {
-          await new Promise(resolve => setTimeout(resolve, stepDelay));
+          await abortableDelay(stepDelay, this.taskAbortController?.signal);
         }
       }
 

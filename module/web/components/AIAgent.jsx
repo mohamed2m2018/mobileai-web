@@ -34,6 +34,7 @@ import { logger } from '../../utils/logger.js';
 import { WebPlatformAdapter } from '../core/WebPlatformAdapter.js';
 import { webBlockDefinitions } from '../blocks.js';
 import { RichContentRendererWeb } from './RichContentRendererWeb.js';
+import { QuickActionsPanelWeb } from './QuickActionsPanelWeb.js';
 const APPROVAL_GRANTED_TOKEN = '__APPROVAL_GRANTED__';
 const APPROVAL_REJECTED_TOKEN = '__APPROVAL_REJECTED__';
 const ASK_USER_CANCELLED_TOKEN = '__ASK_USER_CANCELLED__';
@@ -45,6 +46,9 @@ const COMPOSER_CANCEL_ARM_MS = 900;
 const WEB_POPUP_WIDTH = 340;
 const WEB_LAUNCHER_SIZE = 60;
 const WEB_FLOATING_EDGE_PADDING = 12;
+const DISCOVERY_TOOLTIP_SESSION_KEY = '@mobileai_web_discovery_tooltip_seen';
+const DISCOVERY_TOOLTIP_DEFAULT_MESSAGE = 'Ask me to find items, answer questions, or complete tasks';
+const DISCOVERY_TOOLTIP_AUTO_DISMISS_MS = 6000;
 
 // Per-action highlight glyphs/labels — mirrors RN HighlightOverlay so every
 // agent action (tap/type/scroll/…) rings its target with a small action pill.
@@ -463,6 +467,34 @@ function WebSendArrowIcon({ size = 18, color = '#fff' }) {
 function makeStorageKey(provider) {
   return `@mobileai_web_ai_consent_${provider || 'default'}`;
 }
+// Provider display info for the in-panel consent card "Learn more" link.
+const CONSENT_PROVIDER_INFO = {
+  gemini: { name: 'Google Gemini', url: 'https://ai.google.dev/terms' },
+  openai: { name: 'OpenAI GPT', url: 'https://openai.com/policies/terms-of-use' },
+};
+const CONSENT_SHARED_DATA_ITEMS = [
+  'Your message',
+  'Relevant information from the current app screen',
+];
+// Convert a #rgb/#rrggbb accent into an rgba() string for translucent surfaces.
+// Falls back to a brand-green tint if the value isn't a parseable hex.
+function hexToRgba(hex, alpha = 1) {
+  if (typeof hex !== 'string') return `rgba(13, 147, 115, ${alpha})`;
+  let value = hex.trim().replace('#', '');
+  if (value.length === 3) {
+    value = value
+      .split('')
+      .map((c) => c + c)
+      .join('');
+  }
+  if (value.length !== 6 || /[^0-9a-fA-F]/.test(value)) {
+    return `rgba(13, 147, 115, ${alpha})`;
+  }
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 function loadPersistedChatState(storageKey) {
   if (!storageKey || typeof window === 'undefined') return null;
   try {
@@ -590,6 +622,38 @@ function formatRelativeTimestamp(timestamp) {
   if (diff < 86_400_000) return `${Math.max(1, Math.round(diff / 3_600_000))}h ago`;
   return `${Math.max(1, Math.round(diff / 86_400_000))}d ago`;
 }
+// U5 — human-chat time formatting (mirrors RN SupportChatModal).
+function formatMessageClock(timestamp) {
+  if (!timestamp) return '';
+  try {
+    return new Date(timestamp).toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+function formatDateSeparator(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const sameDay = (a, b) =>
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (sameDay(date, today)) return 'Today';
+  if (sameDay(date, yesterday)) return 'Yesterday';
+  try {
+    return date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: today.getFullYear() === date.getFullYear() ? undefined : 'numeric',
+    });
+  } catch {
+    return '';
+  }
+}
 async function ensureConsent(requireConsent, providerName) {
   if (!requireConsent || typeof window === 'undefined') return true;
   const key = makeStorageKey(providerName);
@@ -609,6 +673,14 @@ async function ensureConsent(requireConsent, providerName) {
     }
   }
   return approved;
+}
+// U6(b) — auto-grow a composer textarea with its content (capped at 140px),
+// matching the RN multiline input behavior. Pass `reset` to collapse it back to
+// its base height after a send.
+function autoGrowTextarea(el, reset = false) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = reset ? '' : `${Math.min(el.scrollHeight, 140)}px`;
 }
 function toUserHistory(messages) {
   return messages.map((entry) => ({
@@ -1175,7 +1247,23 @@ export function AIAgent({
   confirmSelectors,
   persistenceKey = 'twomilia-chat',
   proactiveHelp,
+  accentColor,
+  privacyPolicyUrl,
+  enableWebSearch = false,
+  showDiscoveryTooltip = true,
+  discoveryTooltipMessage,
 }) {
+  // U1 — single accent source for the widget's own chrome (FAB, send/approve
+  // buttons, user bubbles, active tab, loading dots). Mirrors RN, which threads
+  // theme.primaryColor / accentColor (AgentChatBar.tsx). #0D9373 stays as the
+  // fallback only.
+  const accent = accentColor || theme?.primaryColor || '#0D9373';
+  // Translucent accent tint for soft surfaces (active tab, user voice bubble).
+  const accentTint = useMemo(() => hexToRgba(accent, 0.22), [accent]);
+  const accentGradient = useMemo(() => {
+    if (accent === '#0D9373') return 'linear-gradient(135deg, #11A582 0%, #0D9373 100%)';
+    return `linear-gradient(135deg, ${accent} 0%, ${accent} 100%)`;
+  }, [accent]);
   const persistedState = useMemo(() => loadPersistedChatState(persistenceKey), [persistenceKey]);
   const persistedConversationHistory = useMemo(
     () => loadPersistedConversationHistory(persistenceKey),
@@ -1193,10 +1281,16 @@ export function AIAgent({
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState([]);
   const fileInputRef = useRef(null);
+  const composerInputRef = useRef(null);
+  const supportInputRef = useRef(null);
   const [isOpen, setIsOpen] = useState(persistedState?.isOpen ?? defaultOpen);
   const [popupPosition, setPopupPosition] = useState(null);
   const [localConversationKey, setLocalConversationKey] = useState(() => `local-${Date.now()}`);
   const [pendingPrompt, setPendingPrompt] = useState(null);
+  // U2 — styled in-panel AI consent (replaces window.confirm). Holds the pending
+  // promise resolver so the Allow / Don't-Allow buttons settle the same promise
+  // the old window.confirm path returned. Mirrors RN AgentChatBar consentVisible.
+  const [consentRequest, setConsentRequest] = useState(null);
   const [guide, setGuide] = useState(null);
   // Minimize-while-executing + proactive help (web ports of the RN UX).
   // `actingOnPage` = the agent is mid-action (collapse trigger + maximize gate).
@@ -1211,6 +1305,9 @@ export function AIAgent({
   const lastAssistantMsgIdRef = useRef(null);
   const [proactiveStage, setProactiveStage] = useState('hidden');
   const [proactiveText, setProactiveText] = useState('');
+  // U4 — one-time discovery tooltip above the FAB (mirrors RN DiscoveryTooltip):
+  // spring-in, auto-dismiss after ~6s, shown once per browser session.
+  const [discoveryVisible, setDiscoveryVisible] = useState(false);
   const idleDetectorRef = useRef(null);
   const proactiveDismissedRef = useRef(false);
   const [mode, setMode] = useState('text');
@@ -1229,6 +1326,9 @@ export function AIAgent({
   const [deviceId, setDeviceId] = useState(null);
   const [csatPrompt, setCsatPrompt] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  // U3 — when true, the text-mode popup shows the QuickActions self-service panel
+  // instead of the chat thread. "Chat with AI" flips this off.
+  const [showQuickActions, setShowQuickActions] = useState(false);
   const [conversationHistory, setConversationHistory] = useState(() => persistedConversationHistory);
   const guideTimerRef = useRef(null);
   const appRootRef = useRef(null);
@@ -1270,6 +1370,10 @@ export function AIAgent({
   const [supportInput, setSupportInput] = useState('');
   const selectedTicket = selectedTicketId ? tickets.find((ticket) => ticket.id === selectedTicketId) || null : null;
   const supportModeEnabled = !!supportMode?.enabled;
+  // U3 — self-service QuickActions layer (mirrors RN). Entirely gated behind the
+  // config flag: when absent, nothing changes.
+  const quickActionsConfig = supportMode?.quickActions;
+  const quickActionsEnabled = !!quickActionsConfig?.enabled && (quickActionsConfig?.topics?.length || 0) > 0;
   const csatEnabled = supportModeEnabled && supportMode?.csat?.enabled !== false;
   const showVoiceTab = !!enableVoice;
   const voiceEnabled = showVoiceTab && !!(voiceProxyUrl || analyticsKey || proxyUrl || apiKey);
@@ -1494,6 +1598,40 @@ export function AIAgent({
     },
     [appendUserMessage, pendingPrompt],
   );
+  // U2 — request AI consent via the styled in-panel card. Returns a promise that
+  // resolves true/false (same contract the old window.confirm path had). If
+  // consent was already granted this origin, resolves true immediately. The card
+  // is rendered inside the chat popup; its buttons call resolveConsent().
+  const requestConsent = useCallback(() => {
+    if (!requireConsent || typeof window === 'undefined') return Promise.resolve(true);
+    const key = makeStorageKey(provider);
+    try {
+      if (window.localStorage.getItem(key) === 'granted') return Promise.resolve(true);
+    } catch {
+      // Ignore storage failures.
+    }
+    setIsOpen(true);
+    setMode('text');
+    setShowHistory(false);
+    return new Promise((resolve) => {
+      setConsentRequest({ resolve, storageKey: key });
+    });
+  }, [provider, requireConsent]);
+  const resolveConsent = useCallback((approved) => {
+    setConsentRequest((current) => {
+      if (current) {
+        if (approved) {
+          try {
+            window.localStorage.setItem(current.storageKey, 'granted');
+          } catch {
+            // Ignore storage failures.
+          }
+        }
+        current.resolve(approved);
+      }
+      return null;
+    });
+  }, []);
   const handleWindowPointerMove = useCallback((event) => {
     const dragState = dragStateRef.current;
     if (!dragState || typeof window === 'undefined') return;
@@ -1599,9 +1737,17 @@ export function AIAgent({
         );
       }
       setLocalUnread(0);
+      // U3 — open straight into the QuickActions self-service panel when enabled
+      // and the user has no in-progress chat thread. Gated entirely behind the
+      // config flag so nothing changes when it's absent.
+      if (quickActionsEnabled && messagesRef.current.length === 0) {
+        setMode('text');
+        setShowHistory(false);
+        setShowQuickActions(true);
+      }
       setIsOpen(true);
     },
-    [popupPosition],
+    [popupPosition, quickActionsEnabled],
   );
   const minimizePopup = useCallback(() => {
     if (popupPosition && popupRef.current && typeof window !== 'undefined') {
@@ -2207,8 +2353,17 @@ export function AIAgent({
     ],
   );
   const runtime = useMemo(
-    () => new AgentRuntime(createProvider(provider, apiKey, model, proxyUrl, resolvedProxyHeaders), runtimeConfig, null, null),
-    [apiKey, model, provider, resolvedProxyHeaders, proxyUrl, runtimeConfig],
+    () =>
+      new AgentRuntime(
+        // Thread enableWebSearch through to the provider factory (matches RN
+        // ProviderFactory.createProvider signature) so web_search can be enabled
+        // end-to-end. Defaults to false.
+        createProvider(provider, apiKey, model, proxyUrl, resolvedProxyHeaders, enableWebSearch),
+        runtimeConfig,
+        null,
+        null,
+      ),
+    [apiKey, model, provider, resolvedProxyHeaders, proxyUrl, runtimeConfig, enableWebSearch],
   );
   const runtimeRef = useRef(runtime);
   useEffect(() => {
@@ -2278,7 +2433,7 @@ export function AIAgent({
     if (typeof window === 'undefined') return undefined;
     if (proactiveHelp?.enabled === false || proactiveDismissedRef.current) return undefined;
     const detector = idleDetectorRef.current || (idleDetectorRef.current = new IdleDetector());
-    const defaultText = proactiveHelp?.badgeText || 'Can I help you with something?';
+    const defaultText = proactiveHelp?.badgeText || 'Need help with this screen?';
     detector.start({
       pulseAfterMs: (proactiveHelp?.pulseAfterMinutes ?? 0.5) * 60000,
       badgeAfterMs: (proactiveHelp?.badgeAfterMinutes ?? 1) * 60000,
@@ -2315,6 +2470,40 @@ export function AIAgent({
     setProactiveStage('hidden');
     idleDetectorRef.current?.dismiss();
   }, []);
+  const dismissDiscoveryTooltip = useCallback(() => {
+    setDiscoveryVisible(false);
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.setItem(DISCOVERY_TOOLTIP_SESSION_KEY, '1');
+      } catch {
+        // Ignore storage failures.
+      }
+    }
+  }, []);
+  // U4 — show the discovery tooltip once per session, only while the panel is
+  // closed. Auto-dismiss after ~6s (mirrors RN DiscoveryTooltip AUTO_DISMISS_MS).
+  useEffect(() => {
+    if (!showDiscoveryTooltip || isOpen || typeof window === 'undefined') return undefined;
+    let seen = false;
+    try {
+      seen = window.sessionStorage.getItem(DISCOVERY_TOOLTIP_SESSION_KEY) === '1';
+    } catch {
+      seen = false;
+    }
+    if (seen) return undefined;
+    setDiscoveryVisible(true);
+    const timer = window.setTimeout(() => {
+      dismissDiscoveryTooltip();
+    }, DISCOVERY_TOOLTIP_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+    // Only run when the tooltip prop or open state changes.
+  }, [showDiscoveryTooltip, isOpen, dismissDiscoveryTooltip]);
+  // Hide the tooltip as soon as the panel opens.
+  useEffect(() => {
+    if (isOpen && discoveryVisible) {
+      dismissDiscoveryTooltip();
+    }
+  }, [isOpen, discoveryVisible, dismissDiscoveryTooltip]);
   const send = useCallback(
     async (message, options) => {
       // Extract images — options can be an images array (from chat bar) or object
@@ -2337,7 +2526,7 @@ export function AIAgent({
       } else if (isLoading && !hasImages) {
         return;
       }
-      const consentGranted = await ensureConsent(requireConsent, provider);
+      const consentGranted = await requestConsent();
       if (!consentGranted) {
         const denied = {
           success: false,
@@ -2411,7 +2600,7 @@ export function AIAgent({
         setStatusText('');
       }
     },
-    [appendUserMessage, isLoading, mode, persistenceKey, provider, requireConsent, runtime],
+    [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, runtime],
   );
   // Re-run the active goal on a freshly-loaded page (after an MPA navigation),
   // continuing the task with the restored conversation as context. No new user
@@ -2526,6 +2715,26 @@ export function AIAgent({
     syncedMessageCountRef.current = 0;
     remoteConversationHydratedRef.current = true;
   }, []);
+  // U3 — handoff from the QuickActions panel into normal chat. Mirrors RN: if the
+  // user came from a topic/article, prefill+send a contextual message; otherwise
+  // just drop them into the empty chat composer.
+  const handleQuickActionsChatWithAI = useCallback(
+    (context) => {
+      setShowQuickActions(false);
+      setMode('text');
+      setShowHistory(false);
+      const topic = context?.topicId
+        ? (quickActionsConfig?.topics || []).find((t) => t.id === context.topicId)
+        : null;
+      if (topic) {
+        const prefill = `I was browsing help topic "${topic.label}"${
+          context?.articleQuestion ? ` — specifically "${context.articleQuestion}"` : ''
+        }. I need more help.`;
+        void send(prefill);
+      }
+    },
+    [quickActionsConfig?.topics, send],
+  );
   const deleteConversationHistoryEntry = useCallback(
     (conversation) => {
       if (!conversation?.id) return;
@@ -3071,7 +3280,7 @@ export function AIAgent({
   const modeButtonStyle = (selected) => ({
     flex: 1,
     border: 'none',
-    background: selected ? 'rgba(13, 147, 115, 0.22)' : 'transparent',
+    background: selected ? accentTint : 'transparent',
     color: '#fff',
     fontSize: 12,
     fontWeight: 700,
@@ -3079,6 +3288,127 @@ export function AIAgent({
     padding: '10px 12px',
     cursor: 'pointer',
   });
+  // U2 — styled in-panel consent card (replaces window.confirm). Shows a
+  // "What we'll share with the assistant" bulleted summary, an optional
+  // privacy-policy / Learn-more link, and accent-styled Allow / Don't-Allow
+  // buttons. Mirrors RN AgentChatBar consentVisible path.
+  const renderConsentCard = () => {
+    if (!consentRequest) return null;
+    const providerInfo = CONSENT_PROVIDER_INFO[provider] || CONSENT_PROVIDER_INFO.gemini;
+    const learnMoreUrl = privacyPolicyUrl || providerInfo.url;
+    const learnMoreLabel = privacyPolicyUrl ? 'Privacy Policy' : 'Learn more';
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          marginTop: 12,
+          borderRadius: 18,
+          padding: '16px',
+          background: 'rgba(255,255,255,0.06)',
+          border: '1px solid rgba(255,255,255,0.1)',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: '#fff',
+          }}
+        >
+          {"What we'll share with the assistant:"}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          {CONSENT_SHARED_DATA_ITEMS.map((item) => (
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'flex-start',
+                color: 'rgba(255,255,255,0.82)',
+                fontSize: 13,
+                lineHeight: 1.45,
+              }}
+              key={item}
+            >
+              <span
+                style={{
+                  color: accent,
+                  fontWeight: 800,
+                  lineHeight: 1.45,
+                }}
+              >
+                {'•'}
+              </span>
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+        {learnMoreUrl ? (
+          <a
+            href={learnMoreUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              color: accent,
+              textDecoration: 'none',
+              alignSelf: 'flex-start',
+            }}
+          >
+            {learnMoreLabel}
+          </a>
+        ) : null}
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => resolveConsent(false)}
+            style={{
+              flex: 1,
+              border: '1px solid rgba(255,255,255,0.14)',
+              borderRadius: 999,
+              background: 'rgba(255,255,255,0.08)',
+              color: '#fff',
+              fontWeight: 700,
+              padding: '10px 14px',
+              cursor: 'pointer',
+            }}
+          >
+            {"Don't Allow"}
+          </button>
+          <button
+            type="button"
+            onClick={() => resolveConsent(true)}
+            style={{
+              flex: 1,
+              border: 'none',
+              borderRadius: 999,
+              background: accent,
+              color: '#fff',
+              fontWeight: 700,
+              padding: '10px 14px',
+              cursor: 'pointer',
+            }}
+          >
+            {'Allow'}
+          </button>
+        </div>
+      </div>
+    );
+  };
   const renderChatMessages = () => (
     <div
       ref={messagesScrollRef}
@@ -3108,11 +3438,11 @@ export function AIAgent({
               width: 48,
               height: 48,
               borderRadius: 999,
-              background: 'linear-gradient(145deg, #11A582 0%, #0B7D63 100%)',
+              background: accent === '#0D9373' ? 'linear-gradient(145deg, #11A582 0%, #0B7D63 100%)' : accent,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 8px 22px rgba(11, 125, 99, 0.45)',
+              boxShadow: `0 8px 22px ${hexToRgba(accent, 0.45)}`,
             }}
           >
             <WebAIBadge size={24} />
@@ -3213,9 +3543,9 @@ export function AIAgent({
               flexShrink: 0,
               borderRadius: 18,
               padding: '11px 14px',
-              background: isUser ? 'linear-gradient(135deg, #11A582 0%, #0D9373 100%)' : 'rgba(255,255,255,0.07)',
+              background: isUser ? accentGradient : 'rgba(255,255,255,0.07)',
               border: isUser ? 'none' : '1px solid rgba(255,255,255,0.08)',
-              boxShadow: isUser ? '0 4px 14px rgba(11, 125, 99, 0.32)' : 'none',
+              boxShadow: isUser ? `0 4px 14px ${hexToRgba(accent, 0.32)}` : 'none',
               color: '#fff',
               borderBottomRightRadius: isUser ? 5 : 18,
               borderBottomLeftRadius: isUser ? 18 : 5,
@@ -3244,7 +3574,7 @@ export function AIAgent({
             style={{
               border: 'none',
               borderRadius: 999,
-              background: '#0D9373',
+              background: accent,
               color: '#fff',
               fontWeight: 700,
               padding: '10px 14px',
@@ -3580,7 +3910,7 @@ export function AIAgent({
                   alignSelf: 'flex-start',
                   border: 'none',
                   borderRadius: 999,
-                  background: '#0D9373',
+                  background: accent,
                   color: '#fff',
                   fontWeight: 700,
                   padding: '10px 14px',
@@ -3620,8 +3950,13 @@ export function AIAgent({
             >
               <WebSpeakerIcon size={18} color="#fff" muted={isSpeakerMuted} />
             </button>
+            {/* U6(a) — Talk/Stop/Speaking semantics (mirrors RN VoiceControlsRow).
+               Connecting (dots) → Talk (accent, idle) → Stop (red, recording) →
+               Speaking (blue). Pressing while recording ends the whole session;
+               pressing while idle-but-connected starts the mic again. */}
             <button
               type="button"
+              disabled={!isVoiceConnected}
               style={{
                 flex: 1,
                 minHeight: 56,
@@ -3633,7 +3968,7 @@ export function AIAgent({
                     ? '#5aa8ff'
                     : isMicActive
                       ? '#ff6b6b'
-                      : '#0D9373',
+                      : accent,
                 color: '#fff',
                 cursor: !isVoiceConnected ? 'default' : 'pointer',
                 opacity: !isVoiceConnected ? 0.72 : 1,
@@ -3646,9 +3981,23 @@ export function AIAgent({
               }}
               onClick={() => {
                 if (!isVoiceConnected) return;
-                setIsMicActive((value) => !value);
+                if (isMicActive) {
+                  // Stop button: full session cleanup (matches RN onStopSession).
+                  stopVoiceSession();
+                } else {
+                  // Talk button: (re)start the mic.
+                  setIsMicActive(true);
+                }
               }}
-              title={!isVoiceConnected ? 'Connecting voice' : isMicActive ? 'Mute microphone' : 'Unmute microphone'}
+              title={
+                !isVoiceConnected
+                  ? 'Connecting voice'
+                  : isAISpeaking
+                    ? 'Assistant speaking'
+                    : isMicActive
+                      ? 'Stop voice session'
+                      : 'Start talking'
+              }
             >
               {!isVoiceConnected ? (
                 <WebLoadingDots size={18} color="#fff" />
@@ -3664,9 +4013,9 @@ export function AIAgent({
                   {isAISpeaking ? (
                     <WebSpeakerIcon size={18} color="#fff" />
                   ) : isMicActive ? (
-                    <WebMicIcon size={18} color="#fff" />
-                  ) : (
                     <WebStopIcon size={18} color="#fff" />
+                  ) : (
+                    <WebMicIcon size={18} color="#fff" />
                   )}
                 </div>
               )}
@@ -3676,7 +4025,7 @@ export function AIAgent({
                   fontWeight: 700,
                 }}
               >
-                {!isVoiceConnected ? 'Connecting...' : isAISpeaking ? 'Speaking...' : isMicActive ? 'Mute' : 'Unmute'}
+                {!isVoiceConnected ? 'Connecting...' : isAISpeaking ? 'Speaking...' : isMicActive ? 'Stop' : 'Talk'}
               </div>
             </button>
             <button
@@ -3753,7 +4102,7 @@ export function AIAgent({
                     minWidth: 0,
                     borderRadius: 20,
                     padding: '12px 14px',
-                    background: entry.role === 'user' ? 'rgba(13, 147, 115, 0.22)' : 'rgba(255,255,255,0.08)',
+                    background: entry.role === 'user' ? accentTint : 'rgba(255,255,255,0.08)',
                     color: '#fff',
                     opacity: entry.final ? 1 : 0.72,
                     flexShrink: 0,
@@ -3912,36 +4261,148 @@ export function AIAgent({
             paddingRight: 4,
           }}
         >
-          {supportMessages.map((message) => {
+          {/* U5 — human chat polish: date separators (Today/Yesterday), agent
+             avatars, message timestamps, animated typing dots. Mirrors RN
+             SupportChatModal. */}
+          {supportMessages.map((message, index) => {
             const isUser = message.role === 'user';
+            const prev = supportMessages[index - 1];
+            const showDateSeparator =
+              !prev || formatDateSeparator(prev.timestamp) !== formatDateSeparator(message.timestamp);
+            const clock = formatMessageClock(message.timestamp);
             return (
-              <div
-                style={{
-                  alignSelf: isUser ? 'flex-end' : 'stretch',
-                  maxWidth: isUser ? '82%' : '100%',
-                  minWidth: 0,
-                  borderRadius: 20,
-                  padding: '12px 14px',
-                  background: isUser ? 'rgba(13, 147, 115, 0.22)' : 'rgba(255,255,255,0.08)',
-                  color: '#fff',
-                  flexShrink: 0,
-                  overflowWrap: 'anywhere',
-                  wordBreak: 'break-word',
-                }}
-                key={message.id}
-              >
-                <RichContentRendererWeb content={message.content} surface="support" isUser={isUser} />
+              <div key={message.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                {showDateSeparator && formatDateSeparator(message.timestamp) ? (
+                  <div
+                    style={{
+                      alignSelf: 'center',
+                      margin: '4px 0',
+                      padding: '3px 12px',
+                      borderRadius: 999,
+                      background: 'rgba(255,255,255,0.06)',
+                      color: 'rgba(255,255,255,0.5)',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: '0.03em',
+                    }}
+                  >
+                    {formatDateSeparator(message.timestamp)}
+                  </div>
+                ) : null}
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: isUser ? 'row-reverse' : 'row',
+                    alignItems: 'flex-end',
+                    gap: 8,
+                    minWidth: 0,
+                  }}
+                >
+                  {!isUser ? (
+                    <div
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 999,
+                        flexShrink: 0,
+                        background: accentGradient,
+                        color: '#fff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 12,
+                        fontWeight: 800,
+                      }}
+                      aria-hidden="true"
+                    >
+                      {(greetingAgentName || 'S').trim().charAt(0).toUpperCase() || 'S'}
+                    </div>
+                  ) : null}
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: isUser ? 'flex-end' : 'flex-start',
+                      gap: 3,
+                      minWidth: 0,
+                      maxWidth: '82%',
+                    }}
+                  >
+                    <div
+                      style={{
+                        minWidth: 0,
+                        borderRadius: 20,
+                        padding: '12px 14px',
+                        background: isUser ? accentTint : 'rgba(255,255,255,0.08)',
+                        color: '#fff',
+                        overflowWrap: 'anywhere',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      <RichContentRendererWeb content={message.content} surface="support" isUser={isUser} />
+                    </div>
+                    {clock ? (
+                      <div
+                        style={{
+                          fontSize: 10.5,
+                          color: 'rgba(255,255,255,0.42)',
+                          padding: '0 4px',
+                        }}
+                      >
+                        {clock}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             );
           })}
           {isAgentTyping ? (
-            <div
-              style={{
-                color: 'rgba(255,255,255,0.7)',
-                fontSize: 13,
-              }}
-            >
-              {'Human agent is typing...'}
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+              <div
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 999,
+                  flexShrink: 0,
+                  background: accentGradient,
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 800,
+                }}
+                aria-hidden="true"
+              >
+                {(greetingAgentName || 'S').trim().charAt(0).toUpperCase() || 'S'}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  borderRadius: 18,
+                  borderBottomLeftRadius: 5,
+                  padding: '12px 14px',
+                  background: 'rgba(255,255,255,0.08)',
+                }}
+                aria-label="Human agent is typing"
+              >
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className="tw-typing-dot"
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: '50%',
+                      background: 'rgba(255,255,255,0.75)',
+                      animation: `tw-typing 1.3s ${i * 0.16}s ease-in-out infinite`,
+                    }}
+                  />
+                ))}
+              </div>
             </div>
           ) : null}
         </div>
@@ -3969,13 +4430,16 @@ export function AIAgent({
             }}
           >
             <textarea
+              ref={supportInputRef}
               value={supportInput}
               placeholder="Message the human agent…"
               onChange={(event) => setSupportInput(event.target.value)}
+              onInput={(event) => autoGrowTextarea(event.currentTarget)}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter' || event.shiftKey) return;
                 event.preventDefault();
                 sendSupportMessage(supportInput);
+                autoGrowTextarea(event.currentTarget, true);
               }}
               style={{
                 flex: 1,
@@ -3995,13 +4459,16 @@ export function AIAgent({
             />
             <button
               type="button"
-              onClick={() => sendSupportMessage(supportInput)}
+              onClick={() => {
+                sendSupportMessage(supportInput);
+                autoGrowTextarea(supportInputRef.current, true);
+              }}
               style={{
                 width: 44,
                 height: 44,
                 borderRadius: 999,
                 border: 'none',
-                background: '#0D9373',
+                background: accent,
                 color: '#fff',
                 fontSize: 16,
                 cursor: 'pointer',
@@ -4098,8 +4565,13 @@ export function AIAgent({
               0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
               30% { transform: translateY(-5px); opacity: 1; }
             }
+            @keyframes tw-discovery-in {
+              0% { opacity: 0; transform: translateY(6px) scale(0.7); }
+              60% { opacity: 1; transform: translateY(0) scale(1.06); }
+              100% { opacity: 1; transform: translateY(0) scale(1); }
+            }
             @media (prefers-reduced-motion: reduce) {
-              .tw-fab, .tw-pulse-ring, .tw-typing-dot { animation: none !important; transition: none !important; }
+              .tw-fab, .tw-pulse-ring, .tw-typing-dot, .tw-discovery { animation: none !important; transition: none !important; }
             }
           `}</style>
           {guide ? (
@@ -4530,6 +5002,7 @@ export function AIAgent({
                       onClick={(event) => {
                         event.stopPropagation();
                         clearMessages();
+                        setShowQuickActions(false);
                         setMode('text');
                       }}
                       title="Start new conversation"
@@ -4571,12 +5044,13 @@ export function AIAgent({
                       type="button"
                       onClick={() => {
                         setShowHistory(false);
+                        setShowQuickActions(false);
                         setMode('text');
                       }}
                       style={{
                         flex: 1,
                         border: 'none',
-                        background: mode === 'text' && !showHistory ? 'rgba(255,255,255,0.15)' : 'transparent',
+                        background: mode === 'text' && !showHistory ? accentTint : 'transparent',
                         color: mode === 'text' && !showHistory ? '#fff' : 'rgba(255,255,255,0.5)',
                         fontSize: 13,
                         fontWeight: 700,
@@ -4596,7 +5070,7 @@ export function AIAgent({
                         style={{
                           flex: 1,
                           border: 'none',
-                          background: mode === 'voice' ? 'rgba(255,255,255,0.15)' : 'transparent',
+                          background: mode === 'voice' ? accentTint : 'transparent',
                           color: mode === 'voice' ? '#fff' : 'rgba(255,255,255,0.5)',
                           fontSize: 13,
                           fontWeight: 700,
@@ -4618,7 +5092,7 @@ export function AIAgent({
                         style={{
                           flex: 1,
                           border: 'none',
-                          background: mode === 'human' ? 'rgba(255,255,255,0.15)' : 'transparent',
+                          background: mode === 'human' ? accentTint : 'transparent',
                           color: mode === 'human' ? '#fff' : 'rgba(255,255,255,0.5)',
                           fontSize: 13,
                           fontWeight: 700,
@@ -4655,11 +5129,26 @@ export function AIAgent({
                 {mode === 'text'
                   ? showHistory
                     ? renderHistoryPanel()
-                    : renderChatMessages()
+                    : quickActionsEnabled && showQuickActions
+                      ? (
+                        <QuickActionsPanelWeb
+                          config={quickActionsConfig}
+                          currentScreen={pathname || routerAdapter?.getCurrentScreenName?.() || '/'}
+                          accent={accent}
+                          onChatWithAI={handleQuickActionsChatWithAI}
+                        />
+                      )
+                      : renderChatMessages()
                   : mode === 'voice'
                     ? renderVoiceMode()
                     : renderHumanMode()}
-                {mode === 'text' && !showHistory ? (
+                {mode === 'text' && !showHistory && !(quickActionsEnabled && showQuickActions)
+                  ? renderConsentCard()
+                  : null}
+                {mode === 'text' &&
+                !showHistory &&
+                !consentRequest &&
+                !(quickActionsEnabled && showQuickActions) ? (
                   <div
                     style={{
                       display: 'flex',
@@ -4818,12 +5307,15 @@ export function AIAgent({
                         </svg>
                       </button>
                       <textarea
+                        ref={composerInputRef}
                         value={input}
                         placeholder={inputPlaceholder}
                         onChange={(event) => setInput(event.target.value)}
+                        onInput={(event) => autoGrowTextarea(event.currentTarget)}
                         onKeyDown={(event) => {
                           if (event.key !== 'Enter' || event.shiftKey) return;
                           event.preventDefault();
+                          const el = event.currentTarget;
                           // Any pending prompt — freeform OR approval — is resolved by
                           // typing. Never block the user from answering. Mirrors RN: a
                           // typed reply to an approval prompt is passed back to the agent
@@ -4835,6 +5327,7 @@ export function AIAgent({
                             if (!answer) return;
                             appendUserMessage(answer);
                             setInput('');
+                            autoGrowTextarea(el, true);
                             setPendingPrompt(null);
                             pending.resolve(answer);
                             return;
@@ -4845,6 +5338,7 @@ export function AIAgent({
                           } else {
                             void send(input);
                           }
+                          autoGrowTextarea(el, true);
                         }}
                         style={{
                           flex: 1,
@@ -4908,6 +5402,7 @@ export function AIAgent({
                             if (!answer) return;
                             appendUserMessage(answer);
                             setInput('');
+                            autoGrowTextarea(composerInputRef.current, true);
                             setPendingPrompt(null);
                             pending.resolve(answer);
                             return;
@@ -4918,13 +5413,14 @@ export function AIAgent({
                           } else {
                             void send(input);
                           }
+                          autoGrowTextarea(composerInputRef.current, true);
                         }}
                         style={{
                           width: 44,
                           height: 44,
                           borderRadius: 999,
                           border: 'none',
-                          background: '#0D9373',
+                          background: accent,
                           color: '#fff',
                           fontSize: 13,
                           fontWeight: 800,
@@ -4970,6 +5466,57 @@ export function AIAgent({
                   zIndex: 9999,
                 }}
               >
+                {discoveryVisible && !renderMinimized && !isLoading && !showProactive ? (
+                  <div
+                    className="tw-discovery"
+                    data-mobileai-ignore="true"
+                    role="button"
+                    tabIndex={0}
+                    onClick={dismissDiscoveryTooltip}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') dismissDiscoveryTooltip();
+                    }}
+                    style={{
+                      position: 'absolute',
+                      bottom: WEB_LAUNCHER_SIZE + 12,
+                      ...closedPreviewPlacement,
+                      width: 220,
+                      maxWidth: 260,
+                      borderRadius: 16,
+                      padding: '10px 14px',
+                      background: accent === '#0D9373' ? '#1a1a2e' : accent,
+                      color: '#fff',
+                      boxShadow: '0 8px 22px rgba(0,0,0,0.3)',
+                      cursor: 'pointer',
+                      transformOrigin: 'bottom right',
+                      animation: 'tw-discovery-in 0.32s cubic-bezier(0.18, 0.9, 0.32, 1.25)',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 13,
+                        lineHeight: '19px',
+                        fontWeight: 500,
+                        color: '#fff',
+                      }}
+                    >
+                      {discoveryTooltipMessage || DISCOVERY_TOOLTIP_DEFAULT_MESSAGE}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        position: 'absolute',
+                        bottom: -8,
+                        right: 22,
+                        width: 0,
+                        height: 0,
+                        borderLeft: '8px solid transparent',
+                        borderRight: '8px solid transparent',
+                        borderTop: `8px solid ${accent === '#0D9373' ? '#1a1a2e' : accent}`,
+                      }}
+                    />
+                  </div>
+                ) : null}
                 {renderMinimized ? (
                   <button
                     type="button"
@@ -4996,7 +5543,7 @@ export function AIAgent({
                       animation: 'tw-pop-in 0.18s ease-out',
                     }}
                   >
-                    <WebLoadingDots size={18} color="#34D8B0" />
+                    <WebLoadingDots size={18} color={accent} />
                     <span
                       style={{
                         fontSize: 13,
@@ -5053,7 +5600,7 @@ export function AIAgent({
                         flex: 1,
                       }}
                     >
-                      {proactiveText || 'Can I help you with something?'}
+                      {proactiveText || 'Need help with this screen?'}
                     </button>
                     <button
                       type="button"
@@ -5117,7 +5664,7 @@ export function AIAgent({
                       animation: 'tw-pop-in 0.2s ease-out',
                     }}
                   >
-                    <WebLoadingDots size={18} color="#34D8B0" />
+                    <WebLoadingDots size={18} color={accent} />
                     <span
                       style={{
                         fontSize: 13,
@@ -5222,7 +5769,10 @@ export function AIAgent({
                     height: WEB_LAUNCHER_SIZE,
                     borderRadius: 999,
                     border: 'none',
-                    background: 'linear-gradient(145deg, #11A582 0%, #0D9373 55%, #0B7D63 100%)',
+                    background:
+                      accent === '#0D9373'
+                        ? 'linear-gradient(145deg, #11A582 0%, #0D9373 55%, #0B7D63 100%)'
+                        : accent,
                     color: '#fff',
                     boxShadow: '0 10px 26px rgba(11, 125, 99, 0.42), 0 2px 6px rgba(0,0,0,0.18)',
                     cursor: 'pointer',

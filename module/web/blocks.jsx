@@ -90,18 +90,23 @@ export function ProductCardWeb({
   imageUrl,
   image,
   price,
+  compareAtPrice,
   badges = [],
   actions = [],
 }) {
+  // U6(c) — hero-image layout matching RN ProductCard: full-bleed image + scrim
+  // + overlaid subtitle/title + floating price tag, then a content block with an
+  // "AI pick" kicker, description, and badges. Falls back to the clean no-image
+  // layout (price moves into the body) when there's no usable image.
   const theme = useRichUITheme();
   // If the supplied image URL fails to load (e.g. a hallucinated/relative URL),
-  // drop it so the card degrades to the clean no-image layout (price moves into
-  // the body) instead of showing a broken-image icon.
+  // drop it so the card degrades to the clean no-image layout.
   const [imgFailed, setImgFailed] = useState(false);
   const resolvedTitle = title || name || 'Recommended item';
   const resolvedImage = imgFailed ? null : imageUrl || image;
+  const accent = theme.colors.primaryAccent;
   return (
-    <div style={cardStyle(theme)}>
+    <div style={{ ...cardStyle(theme), padding: 0, overflow: 'hidden', gap: 0 }}>
       {resolvedImage ? (
         <div
           style={{
@@ -114,61 +119,142 @@ export function ProductCardWeb({
             onError={() => setImgFailed(true)}
             style={{
               width: '100%',
-              aspectRatio: '1.7 / 1',
+              aspectRatio: '1.6 / 1',
               objectFit: 'cover',
               display: 'block',
-              borderRadius: theme.shape.mediaRadius,
-              border: `1px solid ${theme.colors.mediaBorder}`,
+            }}
+          />
+          {/* Scrim so the overlaid title stays legible on any image. */}
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background:
+                'linear-gradient(180deg, rgba(12,10,8,0.06) 30%, rgba(12,10,8,0.62) 100%)',
             }}
           />
           {price ? (
             <div
               style={{
                 position: 'absolute',
-                right: theme.spacing.sm,
-                bottom: theme.spacing.sm,
-                background: 'rgba(20, 18, 16, 0.86)',
+                right: 14,
+                bottom: 14,
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 8,
+                background: 'rgba(23, 20, 17, 0.86)',
                 color: theme.colors.inverseText,
                 borderRadius: theme.shape.pillRadius,
-                padding: '10px 14px',
+                padding: '9px 13px',
                 fontSize: theme.typography.priceSize,
                 fontWeight: 800,
               }}
             >
-              {price}
+              <span>{price}</span>
+              {compareAtPrice ? (
+                <span
+                  style={{
+                    fontSize: theme.typography.captionSize,
+                    fontWeight: 600,
+                    opacity: 0.7,
+                    textDecoration: 'line-through',
+                  }}
+                >
+                  {compareAtPrice}
+                </span>
+              ) : null}
             </div>
           ) : null}
+          {/* Overlaid eyebrow + title. */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 16,
+              right: 16,
+              bottom: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              pointerEvents: 'none',
+            }}
+          >
+            {subtitle ? (
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 1.1,
+                  textTransform: 'uppercase',
+                  color: theme.colors.inverseText,
+                  opacity: 0.88,
+                }}
+              >
+                {subtitle}
+              </div>
+            ) : null}
+            <div
+              style={{
+                fontSize: 26,
+                lineHeight: 1.1,
+                fontWeight: 800,
+                letterSpacing: -0.6,
+                color: theme.colors.inverseText,
+                maxWidth: '78%',
+              }}
+            >
+              {resolvedTitle}
+            </div>
+          </div>
         </div>
       ) : null}
       <div
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: theme.spacing.xs,
+          gap: theme.spacing.sm,
+          padding: theme.spacing.lg,
         }}
       >
-        {subtitle ? (
+        {/* "AI pick" kicker. */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
           <div
             style={{
-              fontSize: theme.typography.captionSize,
+              width: 28,
+              height: 4,
+              borderRadius: 999,
+              background: accent,
+            }}
+          />
+          <div
+            style={{
+              fontSize: 11,
               fontWeight: 700,
-              letterSpacing: 1,
+              letterSpacing: 0.9,
               textTransform: 'uppercase',
               color: theme.colors.mutedText,
             }}
           >
-            {subtitle}
+            {'AI pick'}
+          </div>
+        </div>
+        {/* When there's no hero image, the title/price live in the body. */}
+        {!resolvedImage ? (
+          <div
+            style={{
+              fontSize: theme.typography.titleSize,
+              fontWeight: 800,
+              lineHeight: 1.15,
+            }}
+          >
+            {resolvedTitle}
           </div>
         ) : null}
-        <div
-          style={{
-            fontSize: theme.typography.titleSize,
-            fontWeight: 800,
-            lineHeight: 1.15,
-          }}
-        >
-          {resolvedTitle}
-        </div>
         {!resolvedImage && price ? (
           <div
             style={{
@@ -221,8 +307,8 @@ export function ProductCardWeb({
             ))}
           </div>
         ) : null}
+        <ActionButtons actions={actions} sourceBlockId="ProductCard" />
       </div>
-      <ActionButtons actions={actions} sourceBlockId="ProductCard" />
     </div>
   );
 }
@@ -731,6 +817,10 @@ export const webBlockDefinitions = [
       price: {
         type: 'string',
         description: 'The product price exactly as displayed, e.g. "$199.00".',
+      },
+      compareAtPrice: {
+        type: 'string',
+        description: 'Optional original/strike-through price exactly as displayed, e.g. "$249.00".',
       },
       badges: {
         type: 'array',

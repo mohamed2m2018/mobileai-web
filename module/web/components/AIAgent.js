@@ -33,6 +33,7 @@ import { logger } from "../../utils/logger.js";
 import { WebPlatformAdapter } from "../core/WebPlatformAdapter.js";
 import { webBlockDefinitions } from "../blocks.js";
 import { RichContentRendererWeb } from "./RichContentRendererWeb.js";
+import { QuickActionsPanelWeb } from "./QuickActionsPanelWeb.js";
 const APPROVAL_GRANTED_TOKEN = "__APPROVAL_GRANTED__";
 const APPROVAL_REJECTED_TOKEN = "__APPROVAL_REJECTED__";
 const ASK_USER_CANCELLED_TOKEN = "__ASK_USER_CANCELLED__";
@@ -44,6 +45,9 @@ const COMPOSER_CANCEL_ARM_MS = 900;
 const WEB_POPUP_WIDTH = 340;
 const WEB_LAUNCHER_SIZE = 60;
 const WEB_FLOATING_EDGE_PADDING = 12;
+const DISCOVERY_TOOLTIP_SESSION_KEY = "@mobileai_web_discovery_tooltip_seen";
+const DISCOVERY_TOOLTIP_DEFAULT_MESSAGE = "Ask me to find items, answer questions, or complete tasks";
+const DISCOVERY_TOOLTIP_AUTO_DISMISS_MS = 6e3;
 const ACTION_GLYPH_WEB = {
   tap: "\u203A",
   read: "\u25C9",
@@ -471,6 +475,28 @@ function WebSendArrowIcon({ size = 18, color = "#fff" }) {
 function makeStorageKey(provider) {
   return `@mobileai_web_ai_consent_${provider || "default"}`;
 }
+const CONSENT_PROVIDER_INFO = {
+  gemini: { name: "Google Gemini", url: "https://ai.google.dev/terms" },
+  openai: { name: "OpenAI GPT", url: "https://openai.com/policies/terms-of-use" }
+};
+const CONSENT_SHARED_DATA_ITEMS = [
+  "Your message",
+  "Relevant information from the current app screen"
+];
+function hexToRgba(hex, alpha = 1) {
+  if (typeof hex !== "string") return `rgba(13, 147, 115, ${alpha})`;
+  let value = hex.trim().replace("#", "");
+  if (value.length === 3) {
+    value = value.split("").map((c) => c + c).join("");
+  }
+  if (value.length !== 6 || /[^0-9a-fA-F]/.test(value)) {
+    return `rgba(13, 147, 115, ${alpha})`;
+  }
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 function loadPersistedChatState(storageKey) {
   if (!storageKey || typeof window === "undefined") return null;
   try {
@@ -583,6 +609,36 @@ function formatRelativeTimestamp(timestamp) {
   if (diff < 864e5) return `${Math.max(1, Math.round(diff / 36e5))}h ago`;
   return `${Math.max(1, Math.round(diff / 864e5))}d ago`;
 }
+function formatMessageClock(timestamp) {
+  if (!timestamp) return "";
+  try {
+    return new Date(timestamp).toLocaleTimeString(void 0, {
+      hour: "numeric",
+      minute: "2-digit"
+    });
+  } catch {
+    return "";
+  }
+}
+function formatDateSeparator(timestamp) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  const today = /* @__PURE__ */ new Date();
+  const yesterday = /* @__PURE__ */ new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (sameDay(date, today)) return "Today";
+  if (sameDay(date, yesterday)) return "Yesterday";
+  try {
+    return date.toLocaleDateString(void 0, {
+      month: "short",
+      day: "numeric",
+      year: today.getFullYear() === date.getFullYear() ? void 0 : "numeric"
+    });
+  } catch {
+    return "";
+  }
+}
 async function ensureConsent(requireConsent, providerName) {
   if (!requireConsent || typeof window === "undefined") return true;
   const key = makeStorageKey(providerName);
@@ -600,6 +656,11 @@ async function ensureConsent(requireConsent, providerName) {
     }
   }
   return approved;
+}
+function autoGrowTextarea(el, reset = false) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = reset ? "" : `${Math.min(el.scrollHeight, 140)}px`;
 }
 function toUserHistory(messages) {
   return messages.map((entry) => ({
@@ -1136,8 +1197,19 @@ function AIAgent({
   ignoreSelectors,
   confirmSelectors,
   persistenceKey = "twomilia-chat",
-  proactiveHelp
+  proactiveHelp,
+  accentColor,
+  privacyPolicyUrl,
+  enableWebSearch = false,
+  showDiscoveryTooltip = true,
+  discoveryTooltipMessage
 }) {
+  const accent = accentColor || theme?.primaryColor || "#0D9373";
+  const accentTint = useMemo(() => hexToRgba(accent, 0.22), [accent]);
+  const accentGradient = useMemo(() => {
+    if (accent === "#0D9373") return "linear-gradient(135deg, #11A582 0%, #0D9373 100%)";
+    return `linear-gradient(135deg, ${accent} 0%, ${accent} 100%)`;
+  }, [accent]);
   const persistedState = useMemo(() => loadPersistedChatState(persistenceKey), [persistenceKey]);
   const persistedConversationHistory = useMemo(
     () => loadPersistedConversationHistory(persistenceKey),
@@ -1155,10 +1227,13 @@ function AIAgent({
   const [input, setInput] = useState("");
   const [pendingImages, setPendingImages] = useState([]);
   const fileInputRef = useRef(null);
+  const composerInputRef = useRef(null);
+  const supportInputRef = useRef(null);
   const [isOpen, setIsOpen] = useState(persistedState?.isOpen ?? defaultOpen);
   const [popupPosition, setPopupPosition] = useState(null);
   const [localConversationKey, setLocalConversationKey] = useState(() => `local-${Date.now()}`);
   const [pendingPrompt, setPendingPrompt] = useState(null);
+  const [consentRequest, setConsentRequest] = useState(null);
   const [guide, setGuide] = useState(null);
   const [actingOnPage, setActingOnPage] = useState(false);
   const [minimized, setMinimized] = useState(false);
@@ -1168,6 +1243,7 @@ function AIAgent({
   const lastAssistantMsgIdRef = useRef(null);
   const [proactiveStage, setProactiveStage] = useState("hidden");
   const [proactiveText, setProactiveText] = useState("");
+  const [discoveryVisible, setDiscoveryVisible] = useState(false);
   const idleDetectorRef = useRef(null);
   const proactiveDismissedRef = useRef(false);
   const [mode, setMode] = useState("text");
@@ -1186,6 +1262,7 @@ function AIAgent({
   const [deviceId, setDeviceId] = useState(null);
   const [csatPrompt, setCsatPrompt] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showQuickActions, setShowQuickActions] = useState(false);
   const [conversationHistory, setConversationHistory] = useState(() => persistedConversationHistory);
   const guideTimerRef = useRef(null);
   const appRootRef = useRef(null);
@@ -1227,6 +1304,8 @@ function AIAgent({
   const [supportInput, setSupportInput] = useState("");
   const selectedTicket = selectedTicketId ? tickets.find((ticket) => ticket.id === selectedTicketId) || null : null;
   const supportModeEnabled = !!supportMode?.enabled;
+  const quickActionsConfig = supportMode?.quickActions;
+  const quickActionsEnabled = !!quickActionsConfig?.enabled && (quickActionsConfig?.topics?.length || 0) > 0;
   const csatEnabled = supportModeEnabled && supportMode?.csat?.enabled !== false;
   const showVoiceTab = !!enableVoice;
   const voiceEnabled = showVoiceTab && !!(voiceProxyUrl || analyticsKey || proxyUrl || apiKey);
@@ -1431,6 +1510,34 @@ function AIAgent({
     },
     [appendUserMessage, pendingPrompt]
   );
+  const requestConsent = useCallback(() => {
+    if (!requireConsent || typeof window === "undefined") return Promise.resolve(true);
+    const key = makeStorageKey(provider);
+    try {
+      if (window.localStorage.getItem(key) === "granted") return Promise.resolve(true);
+    } catch {
+    }
+    setIsOpen(true);
+    setMode("text");
+    setShowHistory(false);
+    return new Promise((resolve) => {
+      setConsentRequest({ resolve, storageKey: key });
+    });
+  }, [provider, requireConsent]);
+  const resolveConsent = useCallback((approved) => {
+    setConsentRequest((current) => {
+      if (current) {
+        if (approved) {
+          try {
+            window.localStorage.setItem(current.storageKey, "granted");
+          } catch {
+          }
+        }
+        current.resolve(approved);
+      }
+      return null;
+    });
+  }, []);
   const handleWindowPointerMove = useCallback((event) => {
     const dragState = dragStateRef.current;
     if (!dragState || typeof window === "undefined") return;
@@ -1528,9 +1635,14 @@ function AIAgent({
         );
       }
       setLocalUnread(0);
+      if (quickActionsEnabled && messagesRef.current.length === 0) {
+        setMode("text");
+        setShowHistory(false);
+        setShowQuickActions(true);
+      }
       setIsOpen(true);
     },
-    [popupPosition]
+    [popupPosition, quickActionsEnabled]
   );
   const minimizePopup = useCallback(() => {
     if (popupPosition && popupRef.current && typeof window !== "undefined") {
@@ -2097,8 +2209,16 @@ function AIAgent({
     ]
   );
   const runtime = useMemo(
-    () => new AgentRuntime(createProvider(provider, apiKey, model, proxyUrl, resolvedProxyHeaders), runtimeConfig, null, null),
-    [apiKey, model, provider, resolvedProxyHeaders, proxyUrl, runtimeConfig]
+    () => new AgentRuntime(
+      // Thread enableWebSearch through to the provider factory (matches RN
+      // ProviderFactory.createProvider signature) so web_search can be enabled
+      // end-to-end. Defaults to false.
+      createProvider(provider, apiKey, model, proxyUrl, resolvedProxyHeaders, enableWebSearch),
+      runtimeConfig,
+      null,
+      null
+    ),
+    [apiKey, model, provider, resolvedProxyHeaders, proxyUrl, runtimeConfig, enableWebSearch]
   );
   const runtimeRef = useRef(runtime);
   useEffect(() => {
@@ -2149,7 +2269,7 @@ function AIAgent({
     if (typeof window === "undefined") return void 0;
     if (proactiveHelp?.enabled === false || proactiveDismissedRef.current) return void 0;
     const detector = idleDetectorRef.current || (idleDetectorRef.current = new IdleDetector());
-    const defaultText = proactiveHelp?.badgeText || "Can I help you with something?";
+    const defaultText = proactiveHelp?.badgeText || "Need help with this screen?";
     detector.start({
       pulseAfterMs: (proactiveHelp?.pulseAfterMinutes ?? 0.5) * 6e4,
       badgeAfterMs: (proactiveHelp?.badgeAfterMinutes ?? 1) * 6e4,
@@ -2186,6 +2306,35 @@ function AIAgent({
     setProactiveStage("hidden");
     idleDetectorRef.current?.dismiss();
   }, []);
+  const dismissDiscoveryTooltip = useCallback(() => {
+    setDiscoveryVisible(false);
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage.setItem(DISCOVERY_TOOLTIP_SESSION_KEY, "1");
+      } catch {
+      }
+    }
+  }, []);
+  useEffect(() => {
+    if (!showDiscoveryTooltip || isOpen || typeof window === "undefined") return void 0;
+    let seen = false;
+    try {
+      seen = window.sessionStorage.getItem(DISCOVERY_TOOLTIP_SESSION_KEY) === "1";
+    } catch {
+      seen = false;
+    }
+    if (seen) return void 0;
+    setDiscoveryVisible(true);
+    const timer = window.setTimeout(() => {
+      dismissDiscoveryTooltip();
+    }, DISCOVERY_TOOLTIP_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [showDiscoveryTooltip, isOpen, dismissDiscoveryTooltip]);
+  useEffect(() => {
+    if (isOpen && discoveryVisible) {
+      dismissDiscoveryTooltip();
+    }
+  }, [isOpen, discoveryVisible, dismissDiscoveryTooltip]);
   const send = useCallback(
     async (message, options) => {
       const userImages = Array.isArray(options) ? options : options?.images || void 0;
@@ -2205,7 +2354,7 @@ function AIAgent({
       } else if (isLoading && !hasImages) {
         return;
       }
-      const consentGranted = await ensureConsent(requireConsent, provider);
+      const consentGranted = await requestConsent();
       if (!consentGranted) {
         const denied = {
           success: false,
@@ -2274,7 +2423,7 @@ function AIAgent({
         setStatusText("");
       }
     },
-    [appendUserMessage, isLoading, mode, persistenceKey, provider, requireConsent, runtime]
+    [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, runtime]
   );
   const resumeTask = useCallback(
     async (goal) => {
@@ -2373,6 +2522,19 @@ function AIAgent({
     syncedMessageCountRef.current = 0;
     remoteConversationHydratedRef.current = true;
   }, []);
+  const handleQuickActionsChatWithAI = useCallback(
+    (context) => {
+      setShowQuickActions(false);
+      setMode("text");
+      setShowHistory(false);
+      const topic = context?.topicId ? (quickActionsConfig?.topics || []).find((t) => t.id === context.topicId) : null;
+      if (topic) {
+        const prefill = `I was browsing help topic "${topic.label}"${context?.articleQuestion ? ` \u2014 specifically "${context.articleQuestion}"` : ""}. I need more help.`;
+        void send(prefill);
+      }
+    },
+    [quickActionsConfig?.topics, send]
+  );
   const deleteConversationHistoryEntry = useCallback(
     (conversation) => {
       if (!conversation?.id) return;
@@ -2905,7 +3067,7 @@ ${screenContext}`;
   const modeButtonStyle = (selected) => ({
     flex: 1,
     border: "none",
-    background: selected ? "rgba(13, 147, 115, 0.22)" : "transparent",
+    background: selected ? accentTint : "transparent",
     color: "#fff",
     fontSize: 12,
     fontWeight: 700,
@@ -2913,6 +3075,141 @@ ${screenContext}`;
     padding: "10px 12px",
     cursor: "pointer"
   });
+  const renderConsentCard = () => {
+    if (!consentRequest) return null;
+    const providerInfo = CONSENT_PROVIDER_INFO[provider] || CONSENT_PROVIDER_INFO.gemini;
+    const learnMoreUrl = privacyPolicyUrl || providerInfo.url;
+    const learnMoreLabel = privacyPolicyUrl ? "Privacy Policy" : "Learn more";
+    return /* @__PURE__ */ jsxs(
+      "div",
+      {
+        style: {
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+          marginTop: 12,
+          borderRadius: 18,
+          padding: "16px",
+          background: "rgba(255,255,255,0.06)",
+          border: "1px solid rgba(255,255,255,0.1)"
+        },
+        children: [
+          /* @__PURE__ */ jsx(
+            "div",
+            {
+              style: {
+                fontSize: 13,
+                fontWeight: 700,
+                color: "#fff"
+              },
+              children: "What we'll share with the assistant:"
+            }
+          ),
+          /* @__PURE__ */ jsx(
+            "div",
+            {
+              style: {
+                display: "flex",
+                flexDirection: "column",
+                gap: 6
+              },
+              children: CONSENT_SHARED_DATA_ITEMS.map((item) => /* @__PURE__ */ jsxs(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "flex-start",
+                    color: "rgba(255,255,255,0.82)",
+                    fontSize: 13,
+                    lineHeight: 1.45
+                  },
+                  children: [
+                    /* @__PURE__ */ jsx(
+                      "span",
+                      {
+                        style: {
+                          color: accent,
+                          fontWeight: 800,
+                          lineHeight: 1.45
+                        },
+                        children: "\u2022"
+                      }
+                    ),
+                    /* @__PURE__ */ jsx("span", { children: item })
+                  ]
+                },
+                item
+              ))
+            }
+          ),
+          learnMoreUrl ? /* @__PURE__ */ jsx(
+            "a",
+            {
+              href: learnMoreUrl,
+              target: "_blank",
+              rel: "noreferrer noopener",
+              style: {
+                fontSize: 12,
+                fontWeight: 700,
+                color: accent,
+                textDecoration: "none",
+                alignSelf: "flex-start"
+              },
+              children: learnMoreLabel
+            }
+          ) : null,
+          /* @__PURE__ */ jsxs(
+            "div",
+            {
+              style: {
+                display: "flex",
+                gap: 8
+              },
+              children: [
+                /* @__PURE__ */ jsx(
+                  "button",
+                  {
+                    type: "button",
+                    onClick: () => resolveConsent(false),
+                    style: {
+                      flex: 1,
+                      border: "1px solid rgba(255,255,255,0.14)",
+                      borderRadius: 999,
+                      background: "rgba(255,255,255,0.08)",
+                      color: "#fff",
+                      fontWeight: 700,
+                      padding: "10px 14px",
+                      cursor: "pointer"
+                    },
+                    children: "Don't Allow"
+                  }
+                ),
+                /* @__PURE__ */ jsx(
+                  "button",
+                  {
+                    type: "button",
+                    onClick: () => resolveConsent(true),
+                    style: {
+                      flex: 1,
+                      border: "none",
+                      borderRadius: 999,
+                      background: accent,
+                      color: "#fff",
+                      fontWeight: 700,
+                      padding: "10px 14px",
+                      cursor: "pointer"
+                    },
+                    children: "Allow"
+                  }
+                )
+              ]
+            }
+          )
+        ]
+      }
+    );
+  };
   const renderChatMessages = () => /* @__PURE__ */ jsxs(
     "div",
     {
@@ -2946,11 +3243,11 @@ ${screenContext}`;
                     width: 48,
                     height: 48,
                     borderRadius: 999,
-                    background: "linear-gradient(145deg, #11A582 0%, #0B7D63 100%)",
+                    background: accent === "#0D9373" ? "linear-gradient(145deg, #11A582 0%, #0B7D63 100%)" : accent,
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    boxShadow: "0 8px 22px rgba(11, 125, 99, 0.45)"
+                    boxShadow: `0 8px 22px ${hexToRgba(accent, 0.45)}`
                   },
                   children: /* @__PURE__ */ jsx(WebAIBadge, { size: 24 })
                 }
@@ -3065,9 +3362,9 @@ ${screenContext}`;
                 flexShrink: 0,
                 borderRadius: 18,
                 padding: "11px 14px",
-                background: isUser ? "linear-gradient(135deg, #11A582 0%, #0D9373 100%)" : "rgba(255,255,255,0.07)",
+                background: isUser ? accentGradient : "rgba(255,255,255,0.07)",
                 border: isUser ? "none" : "1px solid rgba(255,255,255,0.08)",
-                boxShadow: isUser ? "0 4px 14px rgba(11, 125, 99, 0.32)" : "none",
+                boxShadow: isUser ? `0 4px 14px ${hexToRgba(accent, 0.32)}` : "none",
                 color: "#fff",
                 borderBottomRightRadius: isUser ? 5 : 18,
                 borderBottomLeftRadius: isUser ? 18 : 5,
@@ -3098,7 +3395,7 @@ ${screenContext}`;
                   style: {
                     border: "none",
                     borderRadius: 999,
-                    background: "#0D9373",
+                    background: accent,
                     color: "#fff",
                     fontWeight: 700,
                     padding: "10px 14px",
@@ -3484,7 +3781,7 @@ ${screenContext}`;
                 alignSelf: "flex-start",
                 border: "none",
                 borderRadius: 999,
-                background: "#0D9373",
+                background: accent,
                 color: "#fff",
                 fontWeight: 700,
                 padding: "10px 14px",
@@ -3533,12 +3830,13 @@ ${screenContext}`;
             "button",
             {
               type: "button",
+              disabled: !isVoiceConnected,
               style: {
                 flex: 1,
                 minHeight: 56,
                 borderRadius: 999,
                 border: "none",
-                background: !isVoiceConnected ? "rgba(255,255,255,0.08)" : isAISpeaking ? "#5aa8ff" : isMicActive ? "#ff6b6b" : "#0D9373",
+                background: !isVoiceConnected ? "rgba(255,255,255,0.08)" : isAISpeaking ? "#5aa8ff" : isMicActive ? "#ff6b6b" : accent,
                 color: "#fff",
                 cursor: !isVoiceConnected ? "default" : "pointer",
                 opacity: !isVoiceConnected ? 0.72 : 1,
@@ -3551,9 +3849,13 @@ ${screenContext}`;
               },
               onClick: () => {
                 if (!isVoiceConnected) return;
-                setIsMicActive((value) => !value);
+                if (isMicActive) {
+                  stopVoiceSession();
+                } else {
+                  setIsMicActive(true);
+                }
               },
-              title: !isVoiceConnected ? "Connecting voice" : isMicActive ? "Mute microphone" : "Unmute microphone",
+              title: !isVoiceConnected ? "Connecting voice" : isAISpeaking ? "Assistant speaking" : isMicActive ? "Stop voice session" : "Start talking",
               children: [
                 !isVoiceConnected ? /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: "#fff" }) : /* @__PURE__ */ jsx(
                   "div",
@@ -3564,7 +3866,7 @@ ${screenContext}`;
                       justifyContent: "center",
                       height: 18
                     },
-                    children: isAISpeaking ? /* @__PURE__ */ jsx(WebSpeakerIcon, { size: 18, color: "#fff" }) : isMicActive ? /* @__PURE__ */ jsx(WebMicIcon, { size: 18, color: "#fff" }) : /* @__PURE__ */ jsx(WebStopIcon, { size: 18, color: "#fff" })
+                    children: isAISpeaking ? /* @__PURE__ */ jsx(WebSpeakerIcon, { size: 18, color: "#fff" }) : isMicActive ? /* @__PURE__ */ jsx(WebStopIcon, { size: 18, color: "#fff" }) : /* @__PURE__ */ jsx(WebMicIcon, { size: 18, color: "#fff" })
                   }
                 ),
                 /* @__PURE__ */ jsx(
@@ -3574,7 +3876,7 @@ ${screenContext}`;
                       fontSize: 12,
                       fontWeight: 700
                     },
-                    children: !isVoiceConnected ? "Connecting..." : isAISpeaking ? "Speaking..." : isMicActive ? "Mute" : "Unmute"
+                    children: !isVoiceConnected ? "Connecting..." : isAISpeaking ? "Speaking..." : isMicActive ? "Stop" : "Talk"
                   }
                 )
               ]
@@ -3657,7 +3959,7 @@ ${screenContext}`;
               minWidth: 0,
               borderRadius: 20,
               padding: "12px 14px",
-              background: entry.role === "user" ? "rgba(13, 147, 115, 0.22)" : "rgba(255,255,255,0.08)",
+              background: entry.role === "user" ? accentTint : "rgba(255,255,255,0.08)",
               color: "#fff",
               opacity: entry.final ? 1 : 0.72,
               flexShrink: 0,
@@ -3831,38 +4133,157 @@ ${screenContext}`;
             paddingRight: 4
           },
           children: [
-            supportMessages.map((message) => {
+            supportMessages.map((message, index) => {
               const isUser = message.role === "user";
-              return /* @__PURE__ */ jsx(
+              const prev = supportMessages[index - 1];
+              const showDateSeparator = !prev || formatDateSeparator(prev.timestamp) !== formatDateSeparator(message.timestamp);
+              const clock = formatMessageClock(message.timestamp);
+              return /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }, children: [
+                showDateSeparator && formatDateSeparator(message.timestamp) ? /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      alignSelf: "center",
+                      margin: "4px 0",
+                      padding: "3px 12px",
+                      borderRadius: 999,
+                      background: "rgba(255,255,255,0.06)",
+                      color: "rgba(255,255,255,0.5)",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: "0.03em"
+                    },
+                    children: formatDateSeparator(message.timestamp)
+                  }
+                ) : null,
+                /* @__PURE__ */ jsxs(
+                  "div",
+                  {
+                    style: {
+                      display: "flex",
+                      flexDirection: isUser ? "row-reverse" : "row",
+                      alignItems: "flex-end",
+                      gap: 8,
+                      minWidth: 0
+                    },
+                    children: [
+                      !isUser ? /* @__PURE__ */ jsx(
+                        "div",
+                        {
+                          style: {
+                            width: 28,
+                            height: 28,
+                            borderRadius: 999,
+                            flexShrink: 0,
+                            background: accentGradient,
+                            color: "#fff",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 12,
+                            fontWeight: 800
+                          },
+                          "aria-hidden": "true",
+                          children: (greetingAgentName || "S").trim().charAt(0).toUpperCase() || "S"
+                        }
+                      ) : null,
+                      /* @__PURE__ */ jsxs(
+                        "div",
+                        {
+                          style: {
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: isUser ? "flex-end" : "flex-start",
+                            gap: 3,
+                            minWidth: 0,
+                            maxWidth: "82%"
+                          },
+                          children: [
+                            /* @__PURE__ */ jsx(
+                              "div",
+                              {
+                                style: {
+                                  minWidth: 0,
+                                  borderRadius: 20,
+                                  padding: "12px 14px",
+                                  background: isUser ? accentTint : "rgba(255,255,255,0.08)",
+                                  color: "#fff",
+                                  overflowWrap: "anywhere",
+                                  wordBreak: "break-word"
+                                },
+                                children: /* @__PURE__ */ jsx(RichContentRendererWeb, { content: message.content, surface: "support", isUser })
+                              }
+                            ),
+                            clock ? /* @__PURE__ */ jsx(
+                              "div",
+                              {
+                                style: {
+                                  fontSize: 10.5,
+                                  color: "rgba(255,255,255,0.42)",
+                                  padding: "0 4px"
+                                },
+                                children: clock
+                              }
+                            ) : null
+                          ]
+                        }
+                      )
+                    ]
+                  }
+                )
+              ] }, message.id);
+            }),
+            isAgentTyping ? /* @__PURE__ */ jsxs("div", { style: { display: "flex", alignItems: "flex-end", gap: 8 }, children: [
+              /* @__PURE__ */ jsx(
                 "div",
                 {
                   style: {
-                    alignSelf: isUser ? "flex-end" : "stretch",
-                    maxWidth: isUser ? "82%" : "100%",
-                    minWidth: 0,
-                    borderRadius: 20,
-                    padding: "12px 14px",
-                    background: isUser ? "rgba(13, 147, 115, 0.22)" : "rgba(255,255,255,0.08)",
-                    color: "#fff",
+                    width: 28,
+                    height: 28,
+                    borderRadius: 999,
                     flexShrink: 0,
-                    overflowWrap: "anywhere",
-                    wordBreak: "break-word"
+                    background: accentGradient,
+                    color: "#fff",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 12,
+                    fontWeight: 800
                   },
-                  children: /* @__PURE__ */ jsx(RichContentRendererWeb, { content: message.content, surface: "support", isUser })
-                },
-                message.id
-              );
-            }),
-            isAgentTyping ? /* @__PURE__ */ jsx(
-              "div",
-              {
-                style: {
-                  color: "rgba(255,255,255,0.7)",
-                  fontSize: 13
-                },
-                children: "Human agent is typing..."
-              }
-            ) : null
+                  "aria-hidden": "true",
+                  children: (greetingAgentName || "S").trim().charAt(0).toUpperCase() || "S"
+                }
+              ),
+              /* @__PURE__ */ jsx(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    borderRadius: 18,
+                    borderBottomLeftRadius: 5,
+                    padding: "12px 14px",
+                    background: "rgba(255,255,255,0.08)"
+                  },
+                  "aria-label": "Human agent is typing",
+                  children: [0, 1, 2].map((i) => /* @__PURE__ */ jsx(
+                    "span",
+                    {
+                      className: "tw-typing-dot",
+                      style: {
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: "rgba(255,255,255,0.75)",
+                        animation: `tw-typing 1.3s ${i * 0.16}s ease-in-out infinite`
+                      }
+                    },
+                    i
+                  ))
+                }
+              )
+            ] }) : null
           ]
         }
       ),
@@ -3893,13 +4314,16 @@ ${screenContext}`;
             /* @__PURE__ */ jsx(
               "textarea",
               {
+                ref: supportInputRef,
                 value: supportInput,
                 placeholder: "Message the human agent\u2026",
                 onChange: (event) => setSupportInput(event.target.value),
+                onInput: (event) => autoGrowTextarea(event.currentTarget),
                 onKeyDown: (event) => {
                   if (event.key !== "Enter" || event.shiftKey) return;
                   event.preventDefault();
                   sendSupportMessage(supportInput);
+                  autoGrowTextarea(event.currentTarget, true);
                 },
                 style: {
                   flex: 1,
@@ -3922,13 +4346,16 @@ ${screenContext}`;
               "button",
               {
                 type: "button",
-                onClick: () => sendSupportMessage(supportInput),
+                onClick: () => {
+                  sendSupportMessage(supportInput);
+                  autoGrowTextarea(supportInputRef.current, true);
+                },
                 style: {
                   width: 44,
                   height: 44,
                   borderRadius: 999,
                   border: "none",
-                  background: "#0D9373",
+                  background: accent,
                   color: "#fff",
                   fontSize: 16,
                   cursor: "pointer",
@@ -4019,8 +4446,13 @@ ${screenContext}`;
               0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
               30% { transform: translateY(-5px); opacity: 1; }
             }
+            @keyframes tw-discovery-in {
+              0% { opacity: 0; transform: translateY(6px) scale(0.7); }
+              60% { opacity: 1; transform: translateY(0) scale(1.06); }
+              100% { opacity: 1; transform: translateY(0) scale(1); }
+            }
             @media (prefers-reduced-motion: reduce) {
-              .tw-fab, .tw-pulse-ring, .tw-typing-dot { animation: none !important; transition: none !important; }
+              .tw-fab, .tw-pulse-ring, .tw-typing-dot, .tw-discovery { animation: none !important; transition: none !important; }
             }
           ` }),
     guide ? /* @__PURE__ */ jsxs(
@@ -4491,6 +4923,7 @@ ${screenContext}`;
                     onClick: (event) => {
                       event.stopPropagation();
                       clearMessages();
+                      setShowQuickActions(false);
                       setMode("text");
                     },
                     title: "Start new conversation",
@@ -4536,12 +4969,13 @@ ${screenContext}`;
                     type: "button",
                     onClick: () => {
                       setShowHistory(false);
+                      setShowQuickActions(false);
                       setMode("text");
                     },
                     style: {
                       flex: 1,
                       border: "none",
-                      background: mode === "text" && !showHistory ? "rgba(255,255,255,0.15)" : "transparent",
+                      background: mode === "text" && !showHistory ? accentTint : "transparent",
                       color: mode === "text" && !showHistory ? "#fff" : "rgba(255,255,255,0.5)",
                       fontSize: 13,
                       fontWeight: 700,
@@ -4562,7 +4996,7 @@ ${screenContext}`;
                     style: {
                       flex: 1,
                       border: "none",
-                      background: mode === "voice" ? "rgba(255,255,255,0.15)" : "transparent",
+                      background: mode === "voice" ? accentTint : "transparent",
                       color: mode === "voice" ? "#fff" : "rgba(255,255,255,0.5)",
                       fontSize: 13,
                       fontWeight: 700,
@@ -4584,7 +5018,7 @@ ${screenContext}`;
                     style: {
                       flex: 1,
                       border: "none",
-                      background: mode === "human" ? "rgba(255,255,255,0.15)" : "transparent",
+                      background: mode === "human" ? accentTint : "transparent",
                       color: mode === "human" ? "#fff" : "rgba(255,255,255,0.5)",
                       fontSize: 13,
                       fontWeight: 700,
@@ -4620,8 +5054,17 @@ ${screenContext}`;
               ]
             }
           ) : null,
-          mode === "text" ? showHistory ? renderHistoryPanel() : renderChatMessages() : mode === "voice" ? renderVoiceMode() : renderHumanMode(),
-          mode === "text" && !showHistory ? /* @__PURE__ */ jsxs(
+          mode === "text" ? showHistory ? renderHistoryPanel() : quickActionsEnabled && showQuickActions ? /* @__PURE__ */ jsx(
+            QuickActionsPanelWeb,
+            {
+              config: quickActionsConfig,
+              currentScreen: pathname || routerAdapter?.getCurrentScreenName?.() || "/",
+              accent,
+              onChatWithAI: handleQuickActionsChatWithAI
+            }
+          ) : renderChatMessages() : mode === "voice" ? renderVoiceMode() : renderHumanMode(),
+          mode === "text" && !showHistory && !(quickActionsEnabled && showQuickActions) ? renderConsentCard() : null,
+          mode === "text" && !showHistory && !consentRequest && !(quickActionsEnabled && showQuickActions) ? /* @__PURE__ */ jsxs(
             "div",
             {
               style: {
@@ -4797,18 +5240,22 @@ ${screenContext}`;
                       /* @__PURE__ */ jsx(
                         "textarea",
                         {
+                          ref: composerInputRef,
                           value: input,
                           placeholder: inputPlaceholder,
                           onChange: (event) => setInput(event.target.value),
+                          onInput: (event) => autoGrowTextarea(event.currentTarget),
                           onKeyDown: (event) => {
                             if (event.key !== "Enter" || event.shiftKey) return;
                             event.preventDefault();
+                            const el = event.currentTarget;
                             if (pendingPrompt) {
                               const pending = pendingPrompt;
                               const answer = input.trim();
                               if (!answer) return;
                               appendUserMessage(answer);
                               setInput("");
+                              autoGrowTextarea(el, true);
                               setPendingPrompt(null);
                               pending.resolve(answer);
                               return;
@@ -4819,6 +5266,7 @@ ${screenContext}`;
                             } else {
                               void send(input);
                             }
+                            autoGrowTextarea(el, true);
                           },
                           style: {
                             flex: 1,
@@ -4879,6 +5327,7 @@ ${screenContext}`;
                               if (!answer) return;
                               appendUserMessage(answer);
                               setInput("");
+                              autoGrowTextarea(composerInputRef.current, true);
                               setPendingPrompt(null);
                               pending.resolve(answer);
                               return;
@@ -4889,13 +5338,14 @@ ${screenContext}`;
                             } else {
                               void send(input);
                             }
+                            autoGrowTextarea(composerInputRef.current, true);
                           },
                           style: {
                             width: 44,
                             height: 44,
                             borderRadius: 999,
                             border: "none",
-                            background: "#0D9373",
+                            background: accent,
                             color: "#fff",
                             fontSize: 13,
                             fontWeight: 800,
@@ -4932,6 +5382,64 @@ ${screenContext}`;
           zIndex: 9999
         },
         children: [
+          discoveryVisible && !renderMinimized && !isLoading && !showProactive ? /* @__PURE__ */ jsxs(
+            "div",
+            {
+              className: "tw-discovery",
+              "data-mobileai-ignore": "true",
+              role: "button",
+              tabIndex: 0,
+              onClick: dismissDiscoveryTooltip,
+              onKeyDown: (event) => {
+                if (event.key === "Enter" || event.key === " ") dismissDiscoveryTooltip();
+              },
+              style: {
+                position: "absolute",
+                bottom: WEB_LAUNCHER_SIZE + 12,
+                ...closedPreviewPlacement,
+                width: 220,
+                maxWidth: 260,
+                borderRadius: 16,
+                padding: "10px 14px",
+                background: accent === "#0D9373" ? "#1a1a2e" : accent,
+                color: "#fff",
+                boxShadow: "0 8px 22px rgba(0,0,0,0.3)",
+                cursor: "pointer",
+                transformOrigin: "bottom right",
+                animation: "tw-discovery-in 0.32s cubic-bezier(0.18, 0.9, 0.32, 1.25)"
+              },
+              children: [
+                /* @__PURE__ */ jsx(
+                  "span",
+                  {
+                    style: {
+                      fontSize: 13,
+                      lineHeight: "19px",
+                      fontWeight: 500,
+                      color: "#fff"
+                    },
+                    children: discoveryTooltipMessage || DISCOVERY_TOOLTIP_DEFAULT_MESSAGE
+                  }
+                ),
+                /* @__PURE__ */ jsx(
+                  "span",
+                  {
+                    "aria-hidden": "true",
+                    style: {
+                      position: "absolute",
+                      bottom: -8,
+                      right: 22,
+                      width: 0,
+                      height: 0,
+                      borderLeft: "8px solid transparent",
+                      borderRight: "8px solid transparent",
+                      borderTop: `8px solid ${accent === "#0D9373" ? "#1a1a2e" : accent}`
+                    }
+                  }
+                )
+              ]
+            }
+          ) : null,
           renderMinimized ? /* @__PURE__ */ jsxs(
             "button",
             {
@@ -4959,7 +5467,7 @@ ${screenContext}`;
                 animation: "tw-pop-in 0.18s ease-out"
               },
               children: [
-                /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: "#34D8B0" }),
+                /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: accent }),
                 /* @__PURE__ */ jsx(
                   "span",
                   {
@@ -5021,7 +5529,7 @@ ${screenContext}`;
                       padding: 0,
                       flex: 1
                     },
-                    children: proactiveText || "Can I help you with something?"
+                    children: proactiveText || "Need help with this screen?"
                   }
                 ),
                 /* @__PURE__ */ jsx(
@@ -5091,7 +5599,7 @@ ${screenContext}`;
                 animation: "tw-pop-in 0.2s ease-out"
               },
               children: [
-                /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: "#34D8B0" }),
+                /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: accent }),
                 /* @__PURE__ */ jsx(
                   "span",
                   {
@@ -5213,7 +5721,7 @@ ${screenContext}`;
                 height: WEB_LAUNCHER_SIZE,
                 borderRadius: 999,
                 border: "none",
-                background: "linear-gradient(145deg, #11A582 0%, #0D9373 55%, #0B7D63 100%)",
+                background: accent === "#0D9373" ? "linear-gradient(145deg, #11A582 0%, #0D9373 55%, #0B7D63 100%)" : accent,
                 color: "#fff",
                 boxShadow: "0 10px 26px rgba(11, 125, 99, 0.42), 0 2px 6px rgba(0,0,0,0.18)",
                 cursor: "pointer",
