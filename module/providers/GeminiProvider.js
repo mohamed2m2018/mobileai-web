@@ -59,7 +59,7 @@ export class GeminiProvider {
       ? (proxyUrl.includes('twomilia.com') ? 'h' : 'c') + _h(proxyUrl)
       : 'k' + (apiKey ? _h(apiKey.slice(0, 8)) : '0');
   }
-  async generateContent(systemPrompt, userMessage, tools, history, screenshot, _chatHistory, userImages) {
+  async generateContent(systemPrompt, userMessage, tools, history, screenshot, signal, userImages) {
     logger.info('GeminiProvider', `Sending request. Model: ${this.model}, Tools: ${tools.length}${screenshot ? ', with screenshot' : ''}${userImages?.length ? `, with ${userImages.length} user image(s)` : ''}`);
 
     // Build single agent_step function declaration
@@ -71,6 +71,7 @@ export class GeminiProvider {
     try {
       const response = await fetch(this.buildGenerateContentUrl(), {
         method: 'POST',
+        signal,
         headers: this.headers,
         body: JSON.stringify({
           systemInstruction: {

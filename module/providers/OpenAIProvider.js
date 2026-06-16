@@ -45,7 +45,7 @@ export class OpenAIProvider {
     }
     this.model = model;
   }
-  async generateContent(systemPrompt, userMessage, tools, _history, screenshot) {
+  async generateContent(systemPrompt, userMessage, tools, _history, screenshot, signal) {
     logger.info('OpenAIProvider', `Sending request. Model: ${this.model}, Tools: ${tools.length}${screenshot ? ', with screenshot' : ''}`);
     const agentStepTool = this.buildAgentStepTool(tools);
     const messages = this.buildMessages(systemPrompt, userMessage, screenshot);
@@ -53,6 +53,7 @@ export class OpenAIProvider {
     try {
       const response = await fetch(this.baseUrl, {
         method: 'POST',
+        signal,
         headers: this.headers,
         body: JSON.stringify({
           model: this.model,
