@@ -1213,6 +1213,7 @@ export function AIAgent({
   model,
   verifier,
   supportStyle,
+  headerTitle,
   maxSteps,
   stepDelay,
   customTools,
@@ -1260,6 +1261,10 @@ export function AIAgent({
   const accent = accentColor || theme?.primaryColor || '#0D9373';
   // Translucent accent tint for soft surfaces (active tab, user voice bubble).
   const accentTint = useMemo(() => hexToRgba(accent, 0.22), [accent]);
+  // Title for the single-mode header bar (shown when there are no Chat/Voice
+  // tabs). Falls back to the support persona/greeting name, then a generic one.
+  const resolvedHeaderTitle =
+    headerTitle || supportMode?.persona?.agentName || supportMode?.greeting?.agentName || 'AI Assistant';
   const accentGradient = useMemo(() => {
     if (accent === '#0D9373') return 'linear-gradient(135deg, #11A582 0%, #0D9373 100%)';
     return `linear-gradient(135deg, ${accent} 0%, ${accent} 100%)`;
@@ -5022,6 +5027,55 @@ export function AIAgent({
                     >
                       <WebNewChatIcon size={16} color="rgba(255,255,255,0.78)" />
                     </button>
+                  </div>
+                ) : null}
+                {visibleModeCount === 1 && !showHistory ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      marginTop: 0,
+                      marginBottom: 12,
+                      minHeight: 46,
+                      borderRadius: 12,
+                      background: 'rgba(255,255,255,0.08)',
+                      padding: '0 56px',
+                      cursor: 'grab',
+                      touchAction: 'none',
+                    }}
+                    onPointerDown={handlePopupPointerDown}
+                  >
+                    <div
+                      style={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: 999,
+                        background:
+                          accent === '#0D9373'
+                            ? 'linear-gradient(145deg, #11A582 0%, #0B7D63 100%)'
+                            : accent,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flex: '0 0 auto',
+                      }}
+                    >
+                      <WebAIBadge size={13} />
+                    </div>
+                    <span
+                      style={{
+                        color: '#fff',
+                        fontSize: 14,
+                        fontWeight: 700,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {resolvedHeaderTitle}
+                    </span>
                   </div>
                 ) : null}
                 {visibleModeCount > 1 && !showHistory ? (

@@ -1164,6 +1164,7 @@ function AIAgent({
   model,
   verifier,
   supportStyle,
+  headerTitle,
   maxSteps,
   stepDelay,
   customTools,
@@ -1206,6 +1207,7 @@ function AIAgent({
 }) {
   const accent = accentColor || theme?.primaryColor || "#0D9373";
   const accentTint = useMemo(() => hexToRgba(accent, 0.22), [accent]);
+  const resolvedHeaderTitle = headerTitle || supportMode?.persona?.agentName || supportMode?.greeting?.agentName || "AI Assistant";
   const accentGradient = useMemo(() => {
     if (accent === "#0D9373") return "linear-gradient(135deg, #11A582 0%, #0D9373 100%)";
     return `linear-gradient(135deg, ${accent} 0%, ${accent} 100%)`;
@@ -4941,6 +4943,58 @@ ${screenContext}`;
                       padding: 0
                     },
                     children: /* @__PURE__ */ jsx(WebNewChatIcon, { size: 16, color: "rgba(255,255,255,0.78)" })
+                  }
+                )
+              ]
+            }
+          ) : null,
+          visibleModeCount === 1 && !showHistory ? /* @__PURE__ */ jsxs(
+            "div",
+            {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                marginTop: 0,
+                marginBottom: 12,
+                minHeight: 46,
+                borderRadius: 12,
+                background: "rgba(255,255,255,0.08)",
+                padding: "0 56px",
+                cursor: "grab",
+                touchAction: "none"
+              },
+              onPointerDown: handlePopupPointerDown,
+              children: [
+                /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      width: 24,
+                      height: 24,
+                      borderRadius: 999,
+                      background: accent === "#0D9373" ? "linear-gradient(145deg, #11A582 0%, #0B7D63 100%)" : accent,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flex: "0 0 auto"
+                    },
+                    children: /* @__PURE__ */ jsx(WebAIBadge, { size: 13 })
+                  }
+                ),
+                /* @__PURE__ */ jsx(
+                  "span",
+                  {
+                    style: {
+                      color: "#fff",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap"
+                    },
+                    children: resolvedHeaderTitle
                   }
                 )
               ]
