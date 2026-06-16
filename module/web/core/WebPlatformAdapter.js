@@ -15,6 +15,22 @@ function isInstanceOf(node, constructorName) {
 function isInputElement(node) {
   return isInstanceOf(node, 'HTMLInputElement');
 }
+// A credential/secret field the AI must NEVER fill — the value would pass
+// through the AI. Code-enforced (the prompt rule alone doesn't stop the model
+// once a user volunteers a password in chat). Covers password inputs plus
+// card-number / CVV / password autocomplete hints.
+function isSecretField(node) {
+  if (!isInputElement(node)) return false;
+  const typeAttr = String(node.type || node.getAttribute?.('type') || '').toLowerCase();
+  if (typeAttr === 'password') return true;
+  const autocomplete = String(node.autocomplete || node.getAttribute?.('autocomplete') || '').toLowerCase();
+  return (
+    autocomplete.includes('cc-number') ||
+    autocomplete.includes('cc-csc') ||
+    autocomplete.includes('current-password') ||
+    autocomplete.includes('new-password')
+  );
+}
 function isTextAreaElement(node) {
   return isInstanceOf(node, 'HTMLTextAreaElement');
 }
@@ -66,6 +82,18 @@ function findScrollableTarget(node, win) {
     current = current.parentElement;
   }
   return null;
+}
+// True when the node is part of the agent's own UI (the chat widget), which is
+// marked with data-mobileai-ignore. Used to keep page scrolls from targeting
+// the widget's scrollable chat panel — when the widget has focus its container
+// would otherwise hijack a "scroll the page" request (e.g. on an article page).
+function isInsideAgentUI(node) {
+  let current = isHTMLElementLike(node) ? node : null;
+  while (current) {
+    if (current.getAttribute?.('data-mobileai-ignore') != null) return true;
+    current = current.parentElement;
+  }
+  return false;
 }
 function getScrollTargetName(target) {
   if (isHTMLElementLike(target)) {
@@ -480,6 +508,9 @@ export class WebPlatformAdapter {
     if (!element || !node) {
       return `❌ Element with index ${index} not found.`;
     }
+    if (isSecretField(node)) {
+      return `🔒 Refused to type into [${index}] "${element.label}" — it is a password or other secret field. For the user's security a credential must NEVER pass through the AI or be filled by it. Do not attempt to fill it and do not ask for it in chat. Instead, ask the user to type it directly into this field on the page themselves (you cannot see it), and continue once they confirm it is filled.`;
+    }
     if (isInputElement(node) || isTextAreaElement(node)) {
       this.scrollNodeIntoView(node);
       await this.showActionHighlight(node, 'type');
@@ -514,8 +545,15 @@ export class WebPlatformAdapter {
       }
       await this.showActionHighlight(element, 'scroll');
       target = findScrollableTarget(element, win) || PageControllerWeb.findNearestScrollableContainer(element);
-    } else if (isHTMLElementLike(doc.activeElement)) {
-      target = findScrollableTarget(doc.activeElement, win) || win;
+    } else if (isHTMLElementLike(doc.activeElement) && !isInsideAgentUI(doc.activeElement)) {
+      // Only honor the focused element's scroll container when it belongs to the
+      // host page — never the agent's own chat widget. When the widget has focus
+      // (it usually does right after an action), its scrollable panel must not
+      // capture a page scroll; fall back to the window so the page/article moves.
+      const candidate = findScrollableTarget(doc.activeElement, win);
+      if (candidate && !isInsideAgentUI(candidate)) {
+        target = candidate;
+      }
     }
     if (!target) {
       return '❌ Could not find a scrollable target.';
@@ -523,28 +561,31 @@ export class WebPlatformAdapter {
     const topDirection = direction === 'down' ? 1 : -1;
     const before = getScrollPosition(target);
     const limits = getScrollLimits(target, doc);
-    if ('scrollTo' in target && typeof target.scrollTo === 'function' && amount) {
-      if (amount === 'toStart') {
-        target.scrollTo({
-          top: 0,
-          behavior: 'auto'
-        });
-      } else if (amount === 'toEnd') {
-        if (isHTMLElementLike(target)) {
-          target.scrollTo({
-            top: target.scrollHeight,
-            behavior: 'auto'
-          });
-        } else {
-          target.scrollTo({
-            top: doc?.body?.scrollHeight || 0,
-            behavior: 'auto'
-          });
-        }
-      }
-    } else if ('scrollBy' in target && typeof target.scrollBy === 'function') {
+    const canScrollTo = 'scrollTo' in target && typeof target.scrollTo === 'function';
+    const canScrollBy = 'scrollBy' in target && typeof target.scrollBy === 'function';
+    if (amount === 'toStart' && canScrollTo) {
+      target.scrollTo({
+        top: 0,
+        behavior: 'auto'
+      });
+    } else if (amount === 'toEnd' && canScrollTo) {
+      target.scrollTo({
+        top: isHTMLElementLike(target) ? target.scrollHeight : (doc?.body?.scrollHeight || 0),
+        behavior: 'auto'
+      });
+    } else if (canScrollBy) {
+      // 'page' (the default) and any other value scroll by one screenful.
+      // Previously 'page' fell into the scrollTo branch, matched neither
+      // toStart/toEnd, and silently scrolled nothing — so normal "scroll down"
+      // requests no-opped and the agent reported it could not scroll.
       target.scrollBy({
         top: (delta || 0) * topDirection,
+        behavior: 'auto'
+      });
+    } else if (canScrollTo) {
+      // Fallback: target exposes scrollTo but not scrollBy.
+      target.scrollTo({
+        top: getScrollPosition(target).top + (delta || 0) * topDirection,
         behavior: 'auto'
       });
     }
