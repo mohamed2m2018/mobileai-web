@@ -48,6 +48,7 @@ export class ServerAgentClient {
           const startMsg = {
             type: 'start',
             userMessage,
+            chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
             screenState: {
               screenName: snapshot.screenName,
               availableScreens: snapshot.availableScreens,
