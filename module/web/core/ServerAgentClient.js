@@ -43,42 +43,49 @@ export class ServerAgentClient {
       this._ws = ws;
 
       ws.onopen = () => {
-        const startMsg = {
-          type: 'start',
-          userMessage,
-          screenState: {
-            screenName: snapshot.screenName,
-            availableScreens: snapshot.availableScreens,
-            elementsText: snapshot.elementsText,
-            elements: snapshot.elements.map(e => ({
-              index: e.index,
-              type: e.type,
-              label: e.label,
-              requiresConfirmation: e.requiresConfirmation,
-              zoneId: e.zoneId,
-              props: e.props || {},
-            })),
-          },
-          screenshot,
-          userImages,
-          config: {
-            interactionMode: config?.interactionMode || 'copilot',
-            language: config?.language,
-            maxSteps: config?.maxSteps,
-            enableScreenshots: config?.enableScreenshots,
-            enableKnowledge: config?.enableKnowledge,
-            enableWebSearch: config?.enableWebSearch,
-            customTools: config?.customTools,
-            screenMap: config?.screenMap,
-            intentManifest: config?.intentManifest,
-            supportStyle: config?.supportStyle,
-          },
-        };
-        ws.send(JSON.stringify(startMsg));
+        if (this._ws !== ws) return;
+        try {
+          const startMsg = {
+            type: 'start',
+            userMessage,
+            screenState: {
+              screenName: snapshot.screenName,
+              availableScreens: snapshot.availableScreens,
+              elementsText: snapshot.elementsText,
+              elements: snapshot.elements.map(e => ({
+                index: e.index,
+                type: e.type,
+                label: e.label,
+                requiresConfirmation: e.requiresConfirmation,
+                zoneId: e.zoneId,
+                props: e.props || {},
+              })),
+            },
+            screenshot,
+            userImages,
+            config: {
+              interactionMode: config?.interactionMode || 'copilot',
+              language: config?.language,
+              maxSteps: config?.maxSteps,
+              enableScreenshots: config?.enableScreenshots,
+              enableKnowledge: config?.enableKnowledge,
+              enableWebSearch: config?.enableWebSearch,
+              customTools: config?.customTools,
+              screenMap: config?.screenMap,
+              intentManifest: config?.intentManifest,
+              supportStyle: config?.supportStyle,
+            },
+          };
+          ws.send(JSON.stringify(startMsg));
+        } catch (err) {
+          logger.error('ServerAgentClient', `Failed to send start message: ${err?.message}`);
+          reject(err);
+          this._cleanup();
+        }
       };
 
       ws.onmessage = (event) => {
-        if (this._aborted) return;
+        if (this._ws !== ws || this._aborted) return;
         try {
           const msg = JSON.parse(event.data);
           this._handleServerMessage(msg);
@@ -88,12 +95,14 @@ export class ServerAgentClient {
       };
 
       ws.onerror = (err) => {
+        if (this._ws !== ws) return;
         logger.error('ServerAgentClient', `WS error: ${err?.message || 'unknown'}`);
         reject(new Error('WebSocket connection failed'));
         this._cleanup();
       };
 
       ws.onclose = (event) => {
+        if (this._ws !== ws) return;
         if (!this._aborted && this._resolve) {
           reject(new Error(`Connection closed unexpectedly (code: ${event.code})`));
         }
