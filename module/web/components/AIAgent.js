@@ -2338,6 +2338,8 @@ function AIAgent({
         setMessages((prev) => [...prev, assistantMessage]);
         setLastResult(result);
         options?.onResult?.(result);
+      } catch (err) {
+        logger.warn("AIAgent", `Send did not complete: ${err?.message || err}`);
       } finally {
         requestStartedAtRef.current = 0;
         setIsLoading(false);

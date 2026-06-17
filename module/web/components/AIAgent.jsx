@@ -2503,6 +2503,10 @@ export function AIAgent({
         setMessages((prev) => [...prev, assistantMessage]);
         setLastResult(result);
         options?.onResult?.(result);
+      } catch (err) {
+        // A newer request superseded this one (or the socket failed). Unwind quietly —
+        // the superseding request renders its own reply; don't surface a broken bubble.
+        logger.warn('AIAgent', `Send did not complete: ${err?.message || err}`);
       } finally {
         requestStartedAtRef.current = 0;
         setIsLoading(false);

@@ -18,14 +18,38 @@ export class ServerAgentClient {
 
   abort() {
     this._aborted = true;
-    if (this._ws && this._ws.readyState <= 1) {
-      this._ws.send(JSON.stringify({ type: 'cancel' }));
-      this._ws.close();
-    }
+    const ws = this._ws;
     this._ws = null;
+    if (ws) {
+      // Only OPEN sockets can receive a cancel frame; sending on a CONNECTING
+      // socket throws. Always close, never throw.
+      try { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'cancel' })); } catch { /* ignore */ }
+      try { ws.close(); } catch { /* ignore */ }
+    }
+  }
+
+  // Tear down any in-flight connection before starting a new one. This client is a
+  // singleton reused across turns, so two overlapping execute() calls (e.g. an MPA
+  // resume-on-reload racing a user send) would otherwise clobber this._ws and orphan
+  // a socket whose `start` is never sent — the server holds it open and the user gets
+  // no reply. Closing the previous socket here guarantees only one live connection.
+  _supersedePrevious() {
+    const prevWs = this._ws;
+    const prevReject = this._reject;
+    this._ws = null;
+    this._resolve = null;
+    this._reject = null;
+    if (prevWs) {
+      try { if (prevWs.readyState === WebSocket.OPEN) prevWs.send(JSON.stringify({ type: 'cancel' })); } catch { /* ignore */ }
+      try { prevWs.close(); } catch { /* ignore */ }
+    }
+    if (prevReject) {
+      try { prevReject(new Error('Request superseded by a newer one')); } catch { /* ignore */ }
+    }
   }
 
   async execute(userMessage, chatHistory, userImages, config) {
+    this._supersedePrevious();
     this._aborted = false;
     const snapshot = this.adapter.getScreenSnapshot();
     let screenshot;
@@ -59,7 +83,7 @@ export class ServerAgentClient {
                 label: e.label,
                 requiresConfirmation: e.requiresConfirmation,
                 zoneId: e.zoneId,
-                props: e.props || {},
+                props: this._safeProps(e.props),
               })),
             },
             screenshot,
@@ -365,6 +389,25 @@ export class ServerAgentClient {
       default:
         return { type: toolName, ...args };
     }
+  }
+
+  // Element props can carry non-serializable values on framework-heavy pages — e.g.
+  // a jQuery/Bootstrap tooltip stashes a back-reference to its own DOM node, making
+  // the props circular. JSON.stringify then throws and the start/action message is
+  // never sent (the user gets no reply, intermittently). Whitelist serializable
+  // primitives only, so every message is serializable by construction.
+  _safeProps(p) {
+    if (!p || typeof p !== 'object') return {};
+    const out = {};
+    for (const key of ['role', 'disabled', 'value', 'placeholder', 'checked', 'inputType', 'scrollable', 'nearbyText', 'parentSectionLabel']) {
+      const t = typeof p[key];
+      if (t === 'string' || t === 'number' || t === 'boolean') out[key] = p[key];
+    }
+    const sd = p.scrollData;
+    if (sd && typeof sd === 'object') {
+      out.scrollData = { up: +sd.up || 0, down: +sd.down || 0, left: +sd.left || 0, right: +sd.right || 0 };
+    }
+    return out;
   }
 
   _send(msg) {
