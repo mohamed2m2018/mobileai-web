@@ -105,7 +105,7 @@ function QuickActionsPanelWeb({ config, currentScreen = "", accent = "#0D9373", 
             color: "rgba(255,255,255,0.85)",
             fontSize: 14,
             lineHeight: 1.55,
-            paddingRight: 4
+            paddingInlineEnd: 4
           },
           children: /* @__PURE__ */ jsx(RichContentRendererWeb, { content: selectedArticle.answer, surface: "chat" })
         }
@@ -151,13 +151,13 @@ function QuickActionsPanelWeb({ config, currentScreen = "", accent = "#0D9373", 
         selectedTopic.icon ? `${selectedTopic.icon} ` : "",
         selectedTopic.label
       ] }),
-      /* @__PURE__ */ jsx("div", { style: { overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 4 }, children: (selectedTopic.articles || []).map((article, i) => /* @__PURE__ */ jsx(
+      /* @__PURE__ */ jsx("div", { style: { overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingInlineEnd: 4 }, children: (selectedTopic.articles || []).map((article, i) => /* @__PURE__ */ jsx(
         "button",
         {
           type: "button",
           onClick: () => setSelectedArticle(article),
           style: {
-            textAlign: "left",
+            textAlign: "start",
             border: "1px solid rgba(255,255,255,0.06)",
             background: "rgba(255,255,255,0.05)",
             borderRadius: 12,
@@ -205,7 +205,7 @@ function QuickActionsPanelWeb({ config, currentScreen = "", accent = "#0D9373", 
         }
       }
     ) : null,
-    /* @__PURE__ */ jsx("div", { style: { overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingRight: 4 }, children: isSearching ? searchResults.length > 0 ? searchResults.map(({ topic, article }, i) => /* @__PURE__ */ jsxs(
+    /* @__PURE__ */ jsx("div", { style: { overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingInlineEnd: 4 }, children: isSearching ? searchResults.length > 0 ? searchResults.map(({ topic, article }, i) => /* @__PURE__ */ jsxs(
       "button",
       {
         type: "button",
@@ -214,7 +214,7 @@ function QuickActionsPanelWeb({ config, currentScreen = "", accent = "#0D9373", 
           setSelectedArticle(article);
         },
         style: {
-          textAlign: "left",
+          textAlign: "start",
           border: "1px solid rgba(255,255,255,0.06)",
           background: "rgba(255,255,255,0.05)",
           borderRadius: 12,
@@ -257,7 +257,7 @@ function QuickActionsPanelWeb({ config, currentScreen = "", accent = "#0D9373", 
               type: "button",
               onClick: () => setSelectedTopic(topic),
               style: {
-                textAlign: "left",
+                textAlign: "start",
                 border: topic.isContextual ? `1px solid ${accent}` : "1px solid rgba(255,255,255,0.06)",
                 background: topic.isContextual ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.05)",
                 borderRadius: 14,

@@ -118,7 +118,7 @@ export function QuickActionsPanelWeb({ config, currentScreen = '', accent = '#0D
             color: 'rgba(255,255,255,0.85)',
             fontSize: 14,
             lineHeight: 1.55,
-            paddingRight: 4,
+            paddingInlineEnd: 4,
           }}
         >
           <RichContentRendererWeb content={selectedArticle.answer} surface="chat" />
@@ -164,14 +164,14 @@ export function QuickActionsPanelWeb({ config, currentScreen = '', accent = '#0D
           {selectedTopic.icon ? `${selectedTopic.icon} ` : ''}
           {selectedTopic.label}
         </div>
-        <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 4 }}>
+        <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingInlineEnd: 4 }}>
           {(selectedTopic.articles || []).map((article, i) => (
             <button
               type="button"
               key={`${article.question}-${i}`}
               onClick={() => setSelectedArticle(article)}
               style={{
-                textAlign: 'left',
+                textAlign: 'start',
                 border: '1px solid rgba(255,255,255,0.06)',
                 background: 'rgba(255,255,255,0.05)',
                 borderRadius: 12,
@@ -221,7 +221,7 @@ export function QuickActionsPanelWeb({ config, currentScreen = '', accent = '#0D
           }}
         />
       ) : null}
-      <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingRight: 4 }}>
+      <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingInlineEnd: 4 }}>
         {isSearching ? (
           searchResults.length > 0 ? (
             searchResults.map(({ topic, article }, i) => (
@@ -233,7 +233,7 @@ export function QuickActionsPanelWeb({ config, currentScreen = '', accent = '#0D
                   setSelectedArticle(article);
                 }}
                 style={{
-                  textAlign: 'left',
+                  textAlign: 'start',
                   border: '1px solid rgba(255,255,255,0.06)',
                   background: 'rgba(255,255,255,0.05)',
                   borderRadius: 12,
@@ -281,7 +281,7 @@ export function QuickActionsPanelWeb({ config, currentScreen = '', accent = '#0D
                     type="button"
                     onClick={() => setSelectedTopic(topic)}
                     style={{
-                      textAlign: 'left',
+                      textAlign: 'start',
                       border: topic.isContextual
                         ? `1px solid ${accent}`
                         : '1px solid rgba(255,255,255,0.06)',

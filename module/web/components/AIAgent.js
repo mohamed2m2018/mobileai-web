@@ -175,7 +175,7 @@ function WebTypingBubble() {
         alignItems: "center",
         gap: 5,
         borderRadius: 18,
-        borderBottomLeftRadius: 5,
+        borderEndStartRadius: 5,
         padding: "14px 15px",
         background: "rgba(255,255,255,0.07)",
         border: "1px solid rgba(255,255,255,0.08)",
@@ -251,7 +251,7 @@ function WebAgentOverlay({ visible, statusText, onCancel }) {
                 onClick: onCancel,
                 "aria-label": "Cancel AI request",
                 style: {
-                  marginLeft: 2,
+                  marginInlineStart: 2,
                   width: 22,
                   height: 22,
                   borderRadius: 999,
@@ -461,7 +461,9 @@ function WebSendArrowIcon({ size = 18, color = "#fff" }) {
       height: size,
       viewBox: "0 0 24 24",
       fill: "none",
-      "aria-hidden": true
+      "aria-hidden": true,
+      // Directional glyph: mirror under RTL so it points toward the text's end.
+      className: "tw-send-arrow"
     },
     React.createElement("polygon", {
       points: "8,6 18,12 8,18",
@@ -714,6 +716,26 @@ function historyToSupportMessages(ticketId, history) {
 function getBrowserLanguage() {
   const raw = typeof navigator !== "undefined" && navigator.language ? navigator.language : "en";
   return raw.split("-")[0] || "en";
+}
+const RTL_LANGUAGES = /* @__PURE__ */ new Set(["ar", "arc", "ckb", "dv", "fa", "ha", "he", "khw", "ks", "nqo", "ps", "sd", "ug", "ur", "yi"]);
+function detectDocumentDirection() {
+  if (typeof document === "undefined") return "ltr";
+  try {
+    const attr = (document.documentElement?.getAttribute("dir") || document.body?.getAttribute("dir") || "").toLowerCase();
+    if (attr === "rtl" || attr === "ltr") return attr;
+    const computed = typeof window !== "undefined" && window.getComputedStyle ? window.getComputedStyle(document.documentElement).direction : "";
+    if (computed === "rtl") return "rtl";
+    const lang = (document.documentElement?.lang || (typeof navigator !== "undefined" ? navigator.language : "") || "").toLowerCase();
+    if (RTL_LANGUAGES.has(lang.split("-")[0])) return "rtl";
+  } catch {
+  }
+  return "ltr";
+}
+function resolveWidgetDirection(direction, rtl) {
+  if (rtl === true) return "rtl";
+  if (direction === "rtl" || direction === "ltr") return direction;
+  if (rtl === false) return "ltr";
+  return detectDocumentDirection();
 }
 function describeMicrophonePermissionError(error) {
   const name = typeof error?.name === "string" ? error.name : "";
@@ -1204,9 +1226,12 @@ function AIAgent({
   privacyPolicyUrl,
   enableWebSearch = false,
   showDiscoveryTooltip = true,
-  discoveryTooltipMessage
+  discoveryTooltipMessage,
+  direction = "auto",
+  rtl
 }) {
   const accent = accentColor || theme?.primaryColor || "#0D9373";
+  const resolvedDirection = useMemo(() => resolveWidgetDirection(direction, rtl), [direction, rtl]);
   const accentTint = useMemo(() => hexToRgba(accent, 0.22), [accent]);
   const resolvedHeaderTitle = headerTitle || supportMode?.persona?.agentName || supportMode?.greeting?.agentName || "AI Assistant";
   const accentGradient = useMemo(() => {
@@ -3227,7 +3252,7 @@ ${screenContext}`;
         gap: 8,
         maxHeight: "calc(min(65vh, 520px) - 178px)",
         flexShrink: 1,
-        paddingRight: 4
+        paddingInlineEnd: 4
       },
       children: [
         !supportModeEnabled && messages.length === 0 && !isLoading && !pendingPrompt ? /* @__PURE__ */ jsxs(
@@ -3361,6 +3386,7 @@ ${screenContext}`;
             "div",
             {
               className: "mobileai-web-chat-bubble",
+              dir: "auto",
               style: {
                 alignSelf: isUser ? "flex-end" : "flex-start",
                 maxWidth: "85%",
@@ -3372,8 +3398,8 @@ ${screenContext}`;
                 border: isUser ? "none" : "1px solid rgba(255,255,255,0.08)",
                 boxShadow: isUser ? `0 4px 14px ${hexToRgba(accent, 0.32)}` : "none",
                 color: "#fff",
-                borderBottomRightRadius: isUser ? 5 : 18,
-                borderBottomLeftRadius: isUser ? 18 : 5,
+                borderEndEndRadius: isUser ? 5 : 18,
+                borderEndStartRadius: isUser ? 18 : 5,
                 marginBottom: 8,
                 overflowWrap: "anywhere",
                 wordBreak: "break-word"
@@ -3584,7 +3610,7 @@ ${screenContext}`;
               display: "flex",
               flexDirection: "column",
               gap: 8,
-              paddingRight: 4
+              paddingInlineEnd: 4
             },
             children: conversationHistory.map((conversation) => /* @__PURE__ */ jsxs(
               "div",
@@ -3619,7 +3645,7 @@ ${screenContext}`;
                         background: "transparent",
                         padding: "12px 48px 12px 14px",
                         color: "#fff",
-                        textAlign: "left",
+                        textAlign: "start",
                         cursor: "pointer"
                       },
                       children: [
@@ -3712,7 +3738,7 @@ ${screenContext}`;
                       "aria-label": "Delete conversation",
                       style: {
                         position: "absolute",
-                        right: 12,
+                        insetInlineEnd: 12,
                         top: 12,
                         width: 30,
                         height: 30,
@@ -3942,7 +3968,7 @@ ${screenContext}`;
           display: "flex",
           flexDirection: "column",
           gap: 10,
-          paddingRight: 4
+          paddingInlineEnd: 4
         },
         children: voiceTranscript.length === 0 ? /* @__PURE__ */ jsx(
           "div",
@@ -3991,7 +4017,7 @@ ${screenContext}`;
             display: "flex",
             flexDirection: "column",
             gap: 10,
-            paddingRight: 4
+            paddingInlineEnd: 4
           },
           children: tickets.length === 0 ? /* @__PURE__ */ jsx(
             "div",
@@ -4015,7 +4041,7 @@ ${screenContext}`;
                 background: "rgba(255,255,255,0.06)",
                 borderRadius: 18,
                 padding: "14px 16px",
-                textAlign: "left",
+                textAlign: "start",
                 color: "#fff",
                 cursor: "pointer"
               },
@@ -4136,7 +4162,7 @@ ${screenContext}`;
             display: "flex",
             flexDirection: "column",
             gap: 10,
-            paddingRight: 4
+            paddingInlineEnd: 4
           },
           children: [
             supportMessages.map((message, index) => {
@@ -4268,7 +4294,7 @@ ${screenContext}`;
                     alignItems: "center",
                     gap: 5,
                     borderRadius: 18,
-                    borderBottomLeftRadius: 5,
+                    borderEndStartRadius: 5,
                     padding: "12px 14px",
                     background: "rgba(255,255,255,0.08)"
                   },
@@ -4321,6 +4347,7 @@ ${screenContext}`;
               "textarea",
               {
                 ref: supportInputRef,
+                dir: "auto",
                 value: supportInput,
                 placeholder: "Message the human agent\u2026",
                 onChange: (event) => setSupportInput(event.target.value),
@@ -4460,1396 +4487,1401 @@ ${screenContext}`;
             @media (prefers-reduced-motion: reduce) {
               .tw-fab, .tw-pulse-ring, .tw-typing-dot, .tw-discovery { animation: none !important; transition: none !important; }
             }
+            /* Mirror the directional send glyph under RTL (points toward text end). */
+            [dir="rtl"] .tw-send-arrow { transform: scaleX(-1); }
           ` }),
-    guide ? /* @__PURE__ */ jsxs(
-      "div",
-      {
-        "data-mobileai-ignore": "true",
-        style: {
-          position: "fixed",
-          inset: 0,
-          pointerEvents: "none",
-          zIndex: 9998
-        },
-        children: [
-          /* @__PURE__ */ jsx(
-            "div",
-            {
-              style: {
-                position: "fixed",
-                left: guide.rect.left - 6,
-                top: guide.rect.top - 6,
-                width: guide.rect.width + 12,
-                height: guide.rect.height + 12,
-                borderRadius: 16,
-                border: "2px solid #0D9373",
-                background: guide.action ? "rgba(124, 104, 245, 0.14)" : "transparent",
-                boxShadow: guide.action ? "0 0 0 4px rgba(124, 104, 245, 0.22), 0 10px 30px rgba(124, 104, 245, 0.32)" : "0 0 0 9999px rgba(10, 12, 18, 0.24)",
-                transition: "width 0.12s ease, height 0.12s ease"
+    /* @__PURE__ */ jsxs("div", { "data-twomilia-dir": resolvedDirection, dir: resolvedDirection, style: { display: "contents" }, children: [
+      guide ? /* @__PURE__ */ jsxs(
+        "div",
+        {
+          "data-mobileai-ignore": "true",
+          style: {
+            position: "fixed",
+            inset: 0,
+            pointerEvents: "none",
+            zIndex: 9998
+          },
+          children: [
+            /* @__PURE__ */ jsx(
+              "div",
+              {
+                style: {
+                  position: "fixed",
+                  left: guide.rect.left - 6,
+                  top: guide.rect.top - 6,
+                  width: guide.rect.width + 12,
+                  height: guide.rect.height + 12,
+                  borderRadius: 16,
+                  border: "2px solid #0D9373",
+                  background: guide.action ? "rgba(124, 104, 245, 0.14)" : "transparent",
+                  boxShadow: guide.action ? "0 0 0 4px rgba(124, 104, 245, 0.22), 0 10px 30px rgba(124, 104, 245, 0.32)" : "0 0 0 9999px rgba(10, 12, 18, 0.24)",
+                  transition: "width 0.12s ease, height 0.12s ease"
+                }
               }
-            }
-          ),
-          guide.action ? /* @__PURE__ */ jsxs(
-            "div",
-            {
-              style: {
-                position: "fixed",
-                left: guide.rect.left,
-                top: guide.rect.top - 38 >= 8 ? guide.rect.top - 38 : guide.rect.bottom + 10,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                background: "#0D9373",
-                color: "#fff",
-                borderRadius: 999,
-                padding: "6px 12px 6px 7px",
-                fontSize: 13,
-                fontWeight: 700,
-                boxShadow: "0 12px 30px rgba(124, 104, 245, 0.42)"
-              },
-              children: [
-                /* @__PURE__ */ jsx(
-                  "span",
-                  {
-                    style: {
-                      width: 20,
-                      height: 20,
-                      borderRadius: 10,
-                      background: "rgba(255, 255, 255, 0.22)",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 13,
-                      lineHeight: "16px"
-                    },
-                    children: ACTION_GLYPH_WEB[guide.action] || "\u203A"
-                  }
-                ),
-                /* @__PURE__ */ jsx("span", { children: guide.message || ACTION_LABEL_WEB[guide.action] || "" })
-              ]
-            }
-          ) : guide.message ? /* @__PURE__ */ jsx(
-            "div",
-            {
-              style: {
-                position: "fixed",
-                left: guide.rect.left,
-                top: Math.max(16, guide.rect.bottom + 10),
-                background: "#1f2330",
-                color: "#fff",
-                borderRadius: 14,
-                padding: "10px 12px",
-                fontSize: 13,
-                fontWeight: 600,
-                boxShadow: "0 14px 36px rgba(15, 18, 24, 0.28)",
-                maxWidth: 280
-              },
-              children: guide.message
-            }
-          ) : null
-        ]
-      }
-    ) : null,
-    voicePermissionIssue ? /* @__PURE__ */ jsx(
-      "div",
-      {
-        "data-mobileai-ignore": "true",
-        style: {
-          position: "fixed",
-          inset: 0,
-          zIndex: 1e4,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 20,
-          background: "rgba(8, 10, 16, 0.48)"
-        },
-        children: /* @__PURE__ */ jsxs(
-          "div",
-          {
-            style: {
-              width: 392,
-              maxWidth: "calc(100vw - 32px)",
-              borderRadius: 28,
-              padding: 22,
-              background: "linear-gradient(180deg, rgba(16,18,32,0.98) 0%, rgba(26,26,46,0.98) 100%)",
-              color: "#fff",
-              boxShadow: "0 24px 56px rgba(0, 0, 0, 0.42)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 14
-            },
-            children: [
-              /* @__PURE__ */ jsx(
-                "div",
-                {
-                  style: {
-                    alignSelf: "flex-start",
-                    padding: "6px 10px",
-                    borderRadius: 999,
-                    background: "rgba(110,118,255,0.16)",
-                    color: "#b8c0ff",
-                    fontSize: 11,
-                    fontWeight: 800,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase"
-                  },
-                  children: "Voice setup"
-                }
-              ),
-              /* @__PURE__ */ jsx(
-                "div",
-                {
-                  style: {
-                    fontSize: 24,
-                    lineHeight: 1.1,
-                    fontWeight: 800
-                  },
-                  children: "Microphone Access Needed"
-                }
-              ),
-              /* @__PURE__ */ jsx(
-                "div",
-                {
-                  style: {
-                    fontSize: 14,
-                    lineHeight: 1.5,
-                    color: "rgba(255,255,255,0.84)"
-                  },
-                  children: voicePermissionIssue.message
-                }
-              ),
-              voicePermissionGuidance ? /* @__PURE__ */ jsxs(
-                "div",
-                {
-                  style: {
-                    borderRadius: 20,
-                    padding: "14px 16px",
-                    background: "rgba(255,255,255,0.06)",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8
-                  },
-                  children: [
-                    /* @__PURE__ */ jsx(
-                      "div",
-                      {
-                        style: {
-                          fontSize: 13,
-                          fontWeight: 700,
-                          color: "#fff"
-                        },
-                        children: voicePermissionGuidance.title
-                      }
-                    ),
-                    voicePermissionGuidance.steps.map((step, index) => /* @__PURE__ */ jsxs(
-                      "div",
-                      {
-                        style: {
-                          display: "flex",
-                          gap: 10,
-                          alignItems: "flex-start",
-                          color: "rgba(255,255,255,0.76)",
-                          fontSize: 13,
-                          lineHeight: 1.45
-                        },
-                        children: [
-                          /* @__PURE__ */ jsx(
-                            "div",
-                            {
-                              style: {
-                                width: 20,
-                                height: 20,
-                                borderRadius: 999,
-                                background: "rgba(110,118,255,0.18)",
-                                color: "#d6dbff",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontSize: 11,
-                                fontWeight: 800,
-                                flexShrink: 0
-                              },
-                              children: index + 1
-                            }
-                          ),
-                          /* @__PURE__ */ jsx("div", { children: step })
-                        ]
+            ),
+            guide.action ? /* @__PURE__ */ jsxs(
+              "div",
+              {
+                style: {
+                  position: "fixed",
+                  left: guide.rect.left,
+                  top: guide.rect.top - 38 >= 8 ? guide.rect.top - 38 : guide.rect.bottom + 10,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "#0D9373",
+                  color: "#fff",
+                  borderRadius: 999,
+                  padding: "6px 12px 6px 7px",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  boxShadow: "0 12px 30px rgba(124, 104, 245, 0.42)"
+                },
+                children: [
+                  /* @__PURE__ */ jsx(
+                    "span",
+                    {
+                      style: {
+                        width: 20,
+                        height: 20,
+                        borderRadius: 10,
+                        background: "rgba(255, 255, 255, 0.22)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 13,
+                        lineHeight: "16px"
                       },
-                      `${voicePermissionIssue.kind}-${index}`
-                    ))
-                  ]
-                }
-              ) : null,
-              /* @__PURE__ */ jsx(
-                "div",
-                {
-                  style: {
-                    fontSize: 12,
-                    lineHeight: 1.45,
-                    color: "rgba(255,255,255,0.56)"
-                  },
-                  children: voicePermissionIssue.kind === "denied" ? "The browser will only show the native microphone prompt again after you change the site permission." : "Once the browser is ready, try the microphone action again from here."
-                }
-              ),
-              /* @__PURE__ */ jsxs(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    gap: 10,
-                    flexWrap: "wrap"
-                  },
-                  children: [
-                    /* @__PURE__ */ jsx(
-                      "button",
-                      {
-                        type: "button",
-                        onClick: () => {
-                          void enterVoiceMode();
-                        },
-                        style: {
-                          border: "none",
-                          borderRadius: 999,
-                          background: "#0D9373",
-                          color: "#fff",
-                          fontWeight: 700,
-                          padding: "10px 14px",
-                          cursor: "pointer"
-                        },
-                        children: voicePermissionPrimaryLabel
-                      }
-                    ),
-                    /* @__PURE__ */ jsx(
-                      "button",
-                      {
-                        type: "button",
-                        onClick: () => setVoicePermissionIssue(null),
-                        style: {
-                          border: "1px solid rgba(255,255,255,0.14)",
-                          borderRadius: 999,
-                          background: "rgba(255,255,255,0.08)",
-                          color: "#fff",
-                          fontWeight: 700,
-                          padding: "10px 14px",
-                          cursor: "pointer"
-                        },
-                        children: "Close"
-                      }
-                    )
-                  ]
-                }
-              )
-            ]
-          }
-        )
-      }
-    ) : null,
-    csatPrompt && supportMode?.csat ? /* @__PURE__ */ jsx(
-      "div",
-      {
-        "data-mobileai-ignore": "true",
-        style: {
-          position: "fixed",
-          inset: 0,
-          zIndex: 1e4,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 20,
-          background: "rgba(8, 10, 16, 0.48)"
-        },
-        children: /* @__PURE__ */ jsx(
-          CSATSurvey,
-          {
-            config: supportMode.csat,
-            metadata: csatPrompt.metadata,
-            onDismiss: () => setCsatPrompt(null),
-            theme: {
-              primaryColor: "#0D9373",
-              textColor: "#ffffff",
-              backgroundColor: "rgba(26, 26, 46, 0.98)"
-            }
-          }
-        )
-      }
-    ) : null,
-    showChat ? isOpen && !renderMinimized ? /* @__PURE__ */ jsxs(
-      "div",
-      {
-        "data-mobileai-ignore": "true",
-        ref: popupRef,
-        style: {
-          position: "fixed",
-          right: popupPosition ? "auto" : 20,
-          bottom: popupPosition ? "auto" : 20,
-          left: popupPosition?.left,
-          top: popupPosition?.top,
-          width: WEB_POPUP_WIDTH,
-          maxWidth: "calc(100vw - 32px)",
-          maxHeight: "min(65vh, 520px)",
-          zIndex: 9999,
-          display: "flex",
-          flexDirection: "column",
-          borderRadius: 24,
-          padding: 16,
-          paddingTop: 8,
-          background: "linear-gradient(180deg, rgba(28, 30, 50, 0.97) 0%, rgba(20, 22, 38, 0.97) 100%)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          boxShadow: "0 24px 60px rgba(0, 0, 0, 0.46), 0 2px 10px rgba(0,0,0,0.3)",
-          backdropFilter: "blur(16px)",
-          color: "#fff",
-          animation: "tw-panel-in 0.22s ease-out"
-        },
-        children: [
-          /* @__PURE__ */ jsx(
-            WebAgentOverlay,
-            {
-              visible: isLoading && !pendingPrompt && !!statusText && statusText !== "Thinking..." && statusText !== "Working on it\u2026",
-              statusText,
-              onCancel: isLoading ? () => cancel({
-                source: "overlay"
-              }) : void 0
-            }
-          ),
-          /* @__PURE__ */ jsx(
+                      children: ACTION_GLYPH_WEB[guide.action] || "\u203A"
+                    }
+                  ),
+                  /* @__PURE__ */ jsx("span", { children: guide.message || ACTION_LABEL_WEB[guide.action] || "" })
+                ]
+              }
+            ) : guide.message ? /* @__PURE__ */ jsx(
+              "div",
+              {
+                style: {
+                  position: "fixed",
+                  left: guide.rect.left,
+                  top: Math.max(16, guide.rect.bottom + 10),
+                  background: "#1f2330",
+                  color: "#fff",
+                  borderRadius: 14,
+                  padding: "10px 12px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  boxShadow: "0 14px 36px rgba(15, 18, 24, 0.28)",
+                  maxWidth: 280
+                },
+                children: guide.message
+              }
+            ) : null
+          ]
+        }
+      ) : null,
+      voicePermissionIssue ? /* @__PURE__ */ jsx(
+        "div",
+        {
+          "data-mobileai-ignore": "true",
+          style: {
+            position: "fixed",
+            inset: 0,
+            zIndex: 1e4,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            background: "rgba(8, 10, 16, 0.48)"
+          },
+          children: /* @__PURE__ */ jsxs(
             "div",
             {
               style: {
-                width: "100%",
-                height: 30,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                marginBottom: 8,
-                cursor: "grab",
-                touchAction: "none"
-              },
-              onPointerDown: handlePopupPointerDown,
-              children: /* @__PURE__ */ jsx(
-                "div",
-                {
-                  style: {
-                    width: 40,
-                    height: 5,
-                    borderRadius: 4,
-                    background: "rgba(255,255,255,0.3)"
-                  }
-                }
-              )
-            }
-          ),
-          /* @__PURE__ */ jsx(
-            "button",
-            {
-              type: "button",
-              onClick: minimizePopup,
-              "aria-label": "Minimize AI chat",
-              style: {
-                position: "absolute",
-                right: 0,
-                top: 0,
-                padding: 12,
-                border: "none",
-                background: "transparent",
+                width: 392,
+                maxWidth: "calc(100vw - 32px)",
+                borderRadius: 28,
+                padding: 22,
+                background: "linear-gradient(180deg, rgba(16,18,32,0.98) 0%, rgba(26,26,46,0.98) 100%)",
                 color: "#fff",
-                cursor: "pointer",
-                fontSize: 18,
-                fontWeight: 700,
-                lineHeight: 1,
-                zIndex: 2
-              },
-              children: "\u2212"
-            }
-          ),
-          !showHistory ? /* @__PURE__ */ jsxs(
-            "div",
-            {
-              style: {
-                position: "absolute",
-                top: 12,
-                left: 16,
-                zIndex: 3,
-                display: "flex",
-                alignItems: "center",
-                gap: 8
-              },
-              children: [
-                /* @__PURE__ */ jsx(
-                  "button",
-                  {
-                    type: "button",
-                    onClick: (event) => {
-                      event.stopPropagation();
-                      setShowHistory(true);
-                      setMode("text");
-                    },
-                    title: "View conversation history",
-                    style: {
-                      width: 24,
-                      height: 24,
-                      borderRadius: 999,
-                      border: "none",
-                      background: "transparent",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: 0
-                    },
-                    children: /* @__PURE__ */ jsx(WebHistoryIcon, { size: 18, color: "rgba(255,255,255,0.55)" })
-                  }
-                ),
-                conversationHistory.length > 0 ? /* @__PURE__ */ jsx(
-                  "div",
-                  {
-                    style: {
-                      position: "absolute",
-                      left: 14,
-                      top: -8,
-                      minWidth: 18,
-                      height: 18,
-                      borderRadius: 999,
-                      background: "#0D9373",
-                      color: "#fff",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: "0 5px",
-                      fontSize: 10,
-                      fontWeight: 700
-                    },
-                    children: conversationHistory.length > 9 ? "9+" : conversationHistory.length
-                  }
-                ) : null,
-                /* @__PURE__ */ jsx(
-                  "button",
-                  {
-                    type: "button",
-                    onClick: (event) => {
-                      event.stopPropagation();
-                      clearMessages();
-                      setShowQuickActions(false);
-                      setMode("text");
-                    },
-                    title: "Start new conversation",
-                    style: {
-                      width: 24,
-                      height: 24,
-                      borderRadius: 999,
-                      border: "none",
-                      background: "rgba(255,255,255,0.08)",
-                      color: "#fff",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: 0
-                    },
-                    children: /* @__PURE__ */ jsx(WebNewChatIcon, { size: 16, color: "rgba(255,255,255,0.78)" })
-                  }
-                )
-              ]
-            }
-          ) : null,
-          visibleModeCount === 1 && !showHistory ? /* @__PURE__ */ jsxs(
-            "div",
-            {
-              style: {
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-                marginTop: 0,
-                marginBottom: 12,
-                minHeight: 46,
-                borderRadius: 12,
-                background: "rgba(255,255,255,0.08)",
-                padding: "0 56px",
-                cursor: "grab",
-                touchAction: "none"
-              },
-              onPointerDown: handlePopupPointerDown,
-              children: [
-                /* @__PURE__ */ jsx(
-                  "div",
-                  {
-                    style: {
-                      width: 24,
-                      height: 24,
-                      borderRadius: 999,
-                      background: accent === "#0D9373" ? "linear-gradient(145deg, #11A582 0%, #0B7D63 100%)" : accent,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flex: "0 0 auto"
-                    },
-                    children: /* @__PURE__ */ jsx(WebAIBadge, { size: 13 })
-                  }
-                ),
-                /* @__PURE__ */ jsx(
-                  "span",
-                  {
-                    style: {
-                      color: "#fff",
-                      fontSize: 14,
-                      fontWeight: 700,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap"
-                    },
-                    children: resolvedHeaderTitle
-                  }
-                )
-              ]
-            }
-          ) : null,
-          visibleModeCount > 1 && !showHistory ? /* @__PURE__ */ jsxs(
-            "div",
-            {
-              style: {
-                display: "flex",
-                flexDirection: "row",
-                marginTop: 0,
-                marginBottom: 12,
-                borderRadius: 12,
-                background: "rgba(255,255,255,0.08)",
-                padding: 3,
-                cursor: "grab",
-                touchAction: "none",
-                minHeight: 46
-              },
-              onPointerDown: handlePopupPointerDown,
-              children: [
-                /* @__PURE__ */ jsx(
-                  "button",
-                  {
-                    type: "button",
-                    onClick: () => {
-                      setShowHistory(false);
-                      setShowQuickActions(false);
-                      setMode("text");
-                    },
-                    style: {
-                      flex: 1,
-                      border: "none",
-                      background: mode === "text" && !showHistory ? accentTint : "transparent",
-                      color: mode === "text" && !showHistory ? "#fff" : "rgba(255,255,255,0.5)",
-                      fontSize: 13,
-                      fontWeight: 700,
-                      borderRadius: 10,
-                      padding: "10px 12px",
-                      cursor: "pointer"
-                    },
-                    children: "Chat"
-                  }
-                ),
-                showVoiceTab ? /* @__PURE__ */ jsx(
-                  "button",
-                  {
-                    type: "button",
-                    onClick: () => {
-                      void enterVoiceMode();
-                    },
-                    style: {
-                      flex: 1,
-                      border: "none",
-                      background: mode === "voice" ? accentTint : "transparent",
-                      color: mode === "voice" ? "#fff" : "rgba(255,255,255,0.5)",
-                      fontSize: 13,
-                      fontWeight: 700,
-                      borderRadius: 10,
-                      padding: "10px 12px",
-                      cursor: "pointer"
-                    },
-                    children: "Voice"
-                  }
-                ) : null,
-                tickets.length > 0 ? /* @__PURE__ */ jsxs(
-                  "button",
-                  {
-                    type: "button",
-                    onClick: () => {
-                      setShowHistory(false);
-                      setMode("human");
-                    },
-                    style: {
-                      flex: 1,
-                      border: "none",
-                      background: mode === "human" ? accentTint : "transparent",
-                      color: mode === "human" ? "#fff" : "rgba(255,255,255,0.5)",
-                      fontSize: 13,
-                      fontWeight: 700,
-                      borderRadius: 10,
-                      padding: "10px 12px",
-                      cursor: "pointer"
-                    },
-                    children: [
-                      "Human",
-                      totalUnread > 0 ? /* @__PURE__ */ jsx(
-                        "span",
-                        {
-                          style: {
-                            marginLeft: 3,
-                            minWidth: 14,
-                            height: 14,
-                            borderRadius: 999,
-                            background: "#FF3B30",
-                            color: "#fff",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            padding: "0 3px",
-                            fontSize: 8,
-                            fontWeight: 700
-                          },
-                          children: totalUnread > 99 ? "99+" : totalUnread
-                        }
-                      ) : null
-                    ]
-                  }
-                ) : null
-              ]
-            }
-          ) : null,
-          mode === "text" ? showHistory ? renderHistoryPanel() : quickActionsEnabled && showQuickActions ? /* @__PURE__ */ jsx(
-            QuickActionsPanelWeb,
-            {
-              config: quickActionsConfig,
-              currentScreen: pathname || routerAdapter?.getCurrentScreenName?.() || "/",
-              accent,
-              onChatWithAI: handleQuickActionsChatWithAI
-            }
-          ) : renderChatMessages() : mode === "voice" ? renderVoiceMode() : renderHumanMode(),
-          mode === "text" && !showHistory && !(quickActionsEnabled && showQuickActions) ? renderConsentCard() : null,
-          mode === "text" && !showHistory && !consentRequest && !(quickActionsEnabled && showQuickActions) ? /* @__PURE__ */ jsxs(
-            "div",
-            {
-              style: {
+                boxShadow: "0 24px 56px rgba(0, 0, 0, 0.42)",
                 display: "flex",
                 flexDirection: "column",
-                gap: 8,
-                paddingTop: 0,
-                marginTop: messages.length > 0 || pendingPrompt ? 12 : 0,
-                minWidth: 0
+                gap: 14
               },
               children: [
-                pendingImages.length > 0 ? /* @__PURE__ */ jsx(
+                /* @__PURE__ */ jsx(
                   "div",
                   {
                     style: {
-                      display: "flex",
-                      gap: 8,
-                      flexWrap: "wrap",
-                      paddingLeft: 4
+                      alignSelf: "flex-start",
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      background: "rgba(110,118,255,0.16)",
+                      color: "#b8c0ff",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase"
                     },
-                    children: pendingImages.map((img, idx) => /* @__PURE__ */ jsxs(
-                      "div",
-                      {
-                        style: {
-                          position: "relative",
-                          width: 56,
-                          height: 56
-                        },
-                        children: [
-                          /* @__PURE__ */ jsx(
-                            "img",
-                            {
-                              src: `data:${img.mimeType};base64,${img.base64}`,
-                              alt: "pending",
-                              style: {
-                                width: 56,
-                                height: 56,
-                                borderRadius: 8,
-                                objectFit: "cover"
+                    children: "Voice setup"
+                  }
+                ),
+                /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      fontSize: 24,
+                      lineHeight: 1.1,
+                      fontWeight: 800
+                    },
+                    children: "Microphone Access Needed"
+                  }
+                ),
+                /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                      color: "rgba(255,255,255,0.84)"
+                    },
+                    children: voicePermissionIssue.message
+                  }
+                ),
+                voicePermissionGuidance ? /* @__PURE__ */ jsxs(
+                  "div",
+                  {
+                    style: {
+                      borderRadius: 20,
+                      padding: "14px 16px",
+                      background: "rgba(255,255,255,0.06)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8
+                    },
+                    children: [
+                      /* @__PURE__ */ jsx(
+                        "div",
+                        {
+                          style: {
+                            fontSize: 13,
+                            fontWeight: 700,
+                            color: "#fff"
+                          },
+                          children: voicePermissionGuidance.title
+                        }
+                      ),
+                      voicePermissionGuidance.steps.map((step, index) => /* @__PURE__ */ jsxs(
+                        "div",
+                        {
+                          style: {
+                            display: "flex",
+                            gap: 10,
+                            alignItems: "flex-start",
+                            color: "rgba(255,255,255,0.76)",
+                            fontSize: 13,
+                            lineHeight: 1.45
+                          },
+                          children: [
+                            /* @__PURE__ */ jsx(
+                              "div",
+                              {
+                                style: {
+                                  width: 20,
+                                  height: 20,
+                                  borderRadius: 999,
+                                  background: "rgba(110,118,255,0.18)",
+                                  color: "#d6dbff",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  flexShrink: 0
+                                },
+                                children: index + 1
                               }
-                            }
-                          ),
-                          /* @__PURE__ */ jsx(
-                            "button",
-                            {
-                              type: "button",
-                              onClick: () => setPendingImages((prev) => prev.filter((_, i) => i !== idx)),
-                              "aria-label": "Remove image",
-                              style: {
-                                position: "absolute",
-                                top: -6,
-                                right: -6,
-                                width: 20,
-                                height: 20,
-                                borderRadius: 10,
-                                border: "none",
-                                background: "rgba(220,53,69,0.9)",
-                                color: "#fff",
-                                fontSize: 14,
-                                fontWeight: 700,
-                                cursor: "pointer",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                padding: 0
-                              },
-                              children: "\xD7"
-                            }
-                          )
-                        ]
-                      },
-                      `pending-img-${idx}`
-                    ))
+                            ),
+                            /* @__PURE__ */ jsx("div", { children: step })
+                          ]
+                        },
+                        `${voicePermissionIssue.kind}-${index}`
+                      ))
+                    ]
                   }
                 ) : null,
+                /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      fontSize: 12,
+                      lineHeight: 1.45,
+                      color: "rgba(255,255,255,0.56)"
+                    },
+                    children: voicePermissionIssue.kind === "denied" ? "The browser will only show the native microphone prompt again after you change the site permission." : "Once the browser is ready, try the microphone action again from here."
+                  }
+                ),
                 /* @__PURE__ */ jsxs(
                   "div",
                   {
                     style: {
                       display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      minWidth: 0
+                      gap: 10,
+                      flexWrap: "wrap"
                     },
                     children: [
                       /* @__PURE__ */ jsx(
-                        "input",
+                        "button",
                         {
-                          ref: fileInputRef,
-                          type: "file",
-                          accept: "image/*",
-                          multiple: true,
-                          style: {
-                            display: "none"
+                          type: "button",
+                          onClick: () => {
+                            void enterVoiceMode();
                           },
-                          onChange: async (event) => {
-                            const files = event?.target?.files;
-                            if (!files) return;
-                            for (let i = 0; i < files.length; i++) {
-                              const file = files[i];
-                              if (!file.type.startsWith("image/")) continue;
-                              const reader = new FileReader();
-                              reader.onload = async (e) => {
-                                const dataUrl = e.target?.result;
-                                if (typeof dataUrl !== "string") return;
-                                const rawBase64 = dataUrl.split(",")[1] || "";
-                                const img = new Image();
-                                img.onload = () => {
-                                  const MAX_DIM = 1024;
-                                  let w = img.width, h = img.height;
-                                  if (w > MAX_DIM || h > MAX_DIM) {
-                                    const scale = MAX_DIM / Math.max(w, h);
-                                    w = Math.round(w * scale);
-                                    h = Math.round(h * scale);
-                                  }
-                                  const canvas = document.createElement("canvas");
-                                  canvas.width = w;
-                                  canvas.height = h;
-                                  canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-                                  const compressed = canvas.toDataURL("image/jpeg", 0.3).split(",")[1] || "";
-                                  setPendingImages((prev) => [
-                                    ...prev,
-                                    {
-                                      base64: compressed,
-                                      mimeType: "image/jpeg"
-                                    }
-                                  ]);
-                                };
-                                img.src = `data:${file.type};base64,${rawBase64}`;
-                              };
-                              reader.readAsDataURL(file);
-                            }
-                            if (fileInputRef.current) fileInputRef.current.value = "";
-                          }
+                          style: {
+                            border: "none",
+                            borderRadius: 999,
+                            background: "#0D9373",
+                            color: "#fff",
+                            fontWeight: 700,
+                            padding: "10px 14px",
+                            cursor: "pointer"
+                          },
+                          children: voicePermissionPrimaryLabel
                         }
                       ),
                       /* @__PURE__ */ jsx(
                         "button",
                         {
                           type: "button",
-                          onClick: () => fileInputRef.current?.click(),
-                          "aria-label": "Attach image",
+                          onClick: () => setVoicePermissionIssue(null),
                           style: {
-                            width: 44,
-                            height: 44,
+                            border: "1px solid rgba(255,255,255,0.14)",
                             borderRadius: 999,
-                            border: "none",
-                            background: "rgba(255,255,255,0.15)",
-                            color: "#fff",
-                            cursor: "pointer",
-                            flexShrink: 0,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            padding: 0
-                          },
-                          children: /* @__PURE__ */ jsx(
-                            "svg",
-                            {
-                              width: 18,
-                              height: 18,
-                              viewBox: "0 0 24 24",
-                              fill: "none",
-                              stroke: "currentColor",
-                              strokeWidth: 2,
-                              strokeLinecap: "round",
-                              strokeLinejoin: "round",
-                              children: /* @__PURE__ */ jsx("path", { d: "M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" })
-                            }
-                          )
-                        }
-                      ),
-                      /* @__PURE__ */ jsx(
-                        "textarea",
-                        {
-                          ref: composerInputRef,
-                          value: input,
-                          placeholder: inputPlaceholder,
-                          onChange: (event) => setInput(event.target.value),
-                          onInput: (event) => autoGrowTextarea(event.currentTarget),
-                          onKeyDown: (event) => {
-                            if (event.key !== "Enter" || event.shiftKey) return;
-                            event.preventDefault();
-                            const el = event.currentTarget;
-                            if (pendingPrompt) {
-                              const pending = pendingPrompt;
-                              const answer = input.trim();
-                              if (!answer) return;
-                              appendUserMessage(answer);
-                              setInput("");
-                              autoGrowTextarea(el, true);
-                              setPendingPrompt(null);
-                              pending.resolve(answer);
-                              return;
-                            }
-                            if (pendingImages.length > 0) {
-                              void send(input, pendingImages);
-                              setPendingImages([]);
-                            } else {
-                              void send(input);
-                            }
-                            autoGrowTextarea(el, true);
-                          },
-                          style: {
-                            flex: 1,
-                            minWidth: 0,
-                            borderRadius: 24,
-                            border: "1px solid rgba(255,255,255,0.08)",
                             background: "rgba(255,255,255,0.08)",
                             color: "#fff",
-                            padding: "13px 18px",
-                            outline: "none",
-                            boxShadow: "none",
-                            fontSize: 15,
-                            fontFamily: "inherit",
-                            fontWeight: 400,
-                            minHeight: 48,
-                            maxHeight: 140,
-                            lineHeight: 1.35,
-                            resize: "none",
-                            overflowY: "auto"
-                          }
-                        }
-                      ),
-                      isLoading && pendingImages.length === 0 ? /* @__PURE__ */ jsx(
-                        "button",
-                        {
-                          type: "button",
-                          onClick: () => cancel({
-                            source: "composer"
-                          }),
-                          "aria-label": "Stop AI request",
-                          style: {
-                            width: 44,
-                            height: 44,
-                            borderRadius: 999,
-                            border: "1px solid rgba(255,255,255,0.14)",
-                            background: "rgba(255,255,255,0.1)",
-                            color: "#fff",
-                            cursor: "pointer",
-                            flexShrink: 0,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            padding: 0
-                          },
-                          children: /* @__PURE__ */ jsx(WebStopIcon, { size: 18, color: "#fff" })
-                        }
-                      ) : null,
-                      /* @__PURE__ */ jsx(
-                        "button",
-                        {
-                          type: "button",
-                          disabled: pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0,
-                          "aria-label": "Send message",
-                          onClick: () => {
-                            if (pendingPrompt) {
-                              const pending = pendingPrompt;
-                              const answer = input.trim();
-                              if (!answer) return;
-                              appendUserMessage(answer);
-                              setInput("");
-                              autoGrowTextarea(composerInputRef.current, true);
-                              setPendingPrompt(null);
-                              pending.resolve(answer);
-                              return;
-                            }
-                            if (pendingImages.length > 0) {
-                              void send(input, pendingImages);
-                              setPendingImages([]);
-                            } else {
-                              void send(input);
-                            }
-                            autoGrowTextarea(composerInputRef.current, true);
-                          },
-                          style: {
-                            width: 44,
-                            height: 44,
-                            borderRadius: 999,
-                            border: "none",
-                            background: accent,
-                            color: "#fff",
-                            fontSize: 13,
-                            fontWeight: 800,
-                            lineHeight: 1,
-                            cursor: (pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0) ? "default" : "pointer",
-                            opacity: (pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0) ? 0.5 : 1,
-                            flexShrink: 0,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            padding: 0
-                          },
-                          children: /* @__PURE__ */ jsx(WebSendArrowIcon, { size: 18, color: "#fff" })
-                        }
-                      )
-                    ]
-                  }
-                )
-              ]
-            }
-          ) : null
-        ]
-      }
-    ) : /* @__PURE__ */ jsxs(
-      "div",
-      {
-        "data-mobileai-ignore": "true",
-        style: {
-          position: "fixed",
-          right: popupPosition ? "auto" : 20,
-          bottom: popupPosition ? "auto" : 20,
-          left: popupPosition?.left,
-          top: popupPosition?.top,
-          zIndex: 9999
-        },
-        children: [
-          discoveryVisible && !renderMinimized && !isLoading && !showProactive ? /* @__PURE__ */ jsxs(
-            "div",
-            {
-              className: "tw-discovery",
-              "data-mobileai-ignore": "true",
-              role: "button",
-              tabIndex: 0,
-              onClick: dismissDiscoveryTooltip,
-              onKeyDown: (event) => {
-                if (event.key === "Enter" || event.key === " ") dismissDiscoveryTooltip();
-              },
-              style: {
-                position: "absolute",
-                bottom: WEB_LAUNCHER_SIZE + 12,
-                ...closedPreviewPlacement,
-                width: 220,
-                maxWidth: 260,
-                borderRadius: 16,
-                padding: "10px 14px",
-                background: accent === "#0D9373" ? "#1a1a2e" : accent,
-                color: "#fff",
-                boxShadow: "0 8px 22px rgba(0,0,0,0.3)",
-                cursor: "pointer",
-                transformOrigin: "bottom right",
-                animation: "tw-discovery-in 0.32s cubic-bezier(0.18, 0.9, 0.32, 1.25)"
-              },
-              children: [
-                /* @__PURE__ */ jsx(
-                  "span",
-                  {
-                    style: {
-                      fontSize: 13,
-                      lineHeight: "19px",
-                      fontWeight: 500,
-                      color: "#fff"
-                    },
-                    children: discoveryTooltipMessage || DISCOVERY_TOOLTIP_DEFAULT_MESSAGE
-                  }
-                ),
-                /* @__PURE__ */ jsx(
-                  "span",
-                  {
-                    "aria-hidden": "true",
-                    style: {
-                      position: "absolute",
-                      bottom: -8,
-                      right: 22,
-                      width: 0,
-                      height: 0,
-                      borderLeft: "8px solid transparent",
-                      borderRight: "8px solid transparent",
-                      borderTop: `8px solid ${accent === "#0D9373" ? "#1a1a2e" : accent}`
-                    }
-                  }
-                )
-              ]
-            }
-          ) : null,
-          renderMinimized ? /* @__PURE__ */ jsxs(
-            "button",
-            {
-              type: "button",
-              onClick: () => setForceExpandDuringRun(true),
-              "aria-label": "Expand AI chat",
-              style: {
-                position: "absolute",
-                bottom: WEB_LAUNCHER_SIZE + 12,
-                ...closedPreviewPlacement,
-                width: 230,
-                minHeight: 50,
-                border: "none",
-                borderRadius: 18,
-                background: "rgba(20, 24, 38, 0.96)",
-                backdropFilter: "blur(12px)",
-                color: "#fff",
-                boxShadow: "0 14px 34px rgba(0,0,0,0.34)",
-                padding: "12px 14px",
-                cursor: "pointer",
-                textAlign: "left",
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                animation: "tw-pop-in 0.18s ease-out"
-              },
-              children: [
-                /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: accent }),
-                /* @__PURE__ */ jsx(
-                  "span",
-                  {
-                    style: {
-                      fontSize: 13,
-                      fontWeight: 600,
-                      lineHeight: 1.35,
-                      color: "rgba(255,255,255,0.92)",
-                      flex: 1,
-                      overflow: "hidden",
-                      display: "-webkit-box",
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: "vertical"
-                    },
-                    children: minimizedPillText
-                  }
-                )
-              ]
-            }
-          ) : null,
-          showProactive && proactiveStage === "badge" ? /* @__PURE__ */ jsxs(
-            "div",
-            {
-              "data-mobileai-ignore": "true",
-              style: {
-                position: "absolute",
-                bottom: WEB_LAUNCHER_SIZE + 12,
-                ...closedPreviewPlacement,
-                maxWidth: 244,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                background: "#fff",
-                color: "#0F172A",
-                borderRadius: 16,
-                padding: "11px 12px 11px 15px",
-                boxShadow: "0 16px 36px rgba(0,0,0,0.20)",
-                animation: "tw-pop-in 0.24s cubic-bezier(0.18, 0.9, 0.32, 1.25)"
-              },
-              children: [
-                /* @__PURE__ */ jsx(
-                  "button",
-                  {
-                    type: "button",
-                    onClick: () => {
-                      dismissProactive();
-                      openFromLauncher();
-                    },
-                    style: {
-                      border: "none",
-                      background: "transparent",
-                      color: "inherit",
-                      font: "inherit",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      lineHeight: 1.35,
-                      textAlign: "left",
-                      cursor: "pointer",
-                      padding: 0,
-                      flex: 1
-                    },
-                    children: proactiveText || "Need help with this screen?"
-                  }
-                ),
-                /* @__PURE__ */ jsx(
-                  "button",
-                  {
-                    type: "button",
-                    onClick: dismissProactive,
-                    "aria-label": "Dismiss",
-                    style: {
-                      flexShrink: 0,
-                      width: 22,
-                      height: 22,
-                      borderRadius: 999,
-                      border: "none",
-                      background: "rgba(15,23,42,0.06)",
-                      color: "#64748B",
-                      fontSize: 15,
-                      fontWeight: 700,
-                      lineHeight: 1,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: 0
-                    },
-                    children: "\xD7"
-                  }
-                )
-              ]
-            }
-          ) : null,
-          showProactive && proactiveStage === "pulse" ? /* @__PURE__ */ jsx(
-            "span",
-            {
-              className: "tw-pulse-ring",
-              "aria-hidden": "true",
-              style: {
-                position: "absolute",
-                right: 0,
-                bottom: 0,
-                width: WEB_LAUNCHER_SIZE,
-                height: WEB_LAUNCHER_SIZE,
-                borderRadius: 999,
-                background: "rgba(13, 147, 115, 0.5)",
-                pointerEvents: "none"
-              }
-            }
-          ) : null,
-          isLoading ? /* @__PURE__ */ jsxs(
-            "div",
-            {
-              "data-mobileai-ignore": "true",
-              style: {
-                position: "absolute",
-                bottom: WEB_LAUNCHER_SIZE + 12,
-                ...closedPreviewPlacement,
-                width: 204,
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                background: "rgba(20, 24, 38, 0.96)",
-                backdropFilter: "blur(12px)",
-                color: "#fff",
-                borderRadius: 18,
-                padding: "12px 15px",
-                boxShadow: "0 14px 34px rgba(0,0,0,0.32)",
-                animation: "tw-pop-in 0.2s ease-out"
-              },
-              children: [
-                /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: accent }),
-                /* @__PURE__ */ jsx(
-                  "span",
-                  {
-                    style: {
-                      fontSize: 13,
-                      fontWeight: 600,
-                      lineHeight: 1.3,
-                      color: "rgba(255,255,255,0.92)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap"
-                    },
-                    children: statusText || "Thinking\u2026"
-                  }
-                )
-              ]
-            }
-          ) : localUnread > 0 && messages.length > 0 ? /* @__PURE__ */ jsxs(
-            "button",
-            {
-              type: "button",
-              onClick: openFromLauncher,
-              style: {
-                position: "absolute",
-                bottom: WEB_LAUNCHER_SIZE + 12,
-                ...closedPreviewPlacement,
-                width: 250,
-                border: "none",
-                borderRadius: 18,
-                background: "#fff",
-                color: "#0F172A",
-                boxShadow: "0 16px 38px rgba(15, 23, 42, 0.18)",
-                padding: 14,
-                cursor: "pointer",
-                textAlign: "left",
-                display: "flex",
-                flexDirection: "column",
-                gap: 7,
-                animation: "tw-pop-in 0.22s cubic-bezier(0.18, 0.9, 0.32, 1.2)"
-              },
-              children: [
-                /* @__PURE__ */ jsxs(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 7
-                    },
-                    children: [
-                      /* @__PURE__ */ jsx(
-                        "span",
-                        {
-                          style: {
-                            width: 20,
-                            height: 20,
-                            borderRadius: 999,
-                            background: "linear-gradient(145deg, #11A582, #0B7D63)",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            flexShrink: 0
-                          },
-                          children: /* @__PURE__ */ jsx(WebAIBadge, { size: 12 })
-                        }
-                      ),
-                      /* @__PURE__ */ jsx(
-                        "span",
-                        {
-                          style: {
-                            fontSize: 11,
                             fontWeight: 700,
-                            letterSpacing: "0.04em",
-                            textTransform: "uppercase",
-                            color: "#0D9373"
+                            padding: "10px 14px",
+                            cursor: "pointer"
                           },
-                          children: "Twomilia"
+                          children: "Close"
                         }
                       )
                     ]
-                  }
-                ),
-                /* @__PURE__ */ jsx(
-                  "span",
-                  {
-                    style: {
-                      fontSize: 13.5,
-                      fontWeight: 500,
-                      lineHeight: 1.4,
-                      color: "#1E293B",
-                      overflow: "hidden",
-                      display: "-webkit-box",
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: "vertical"
-                    },
-                    children: latestClosedPreview
                   }
                 )
-              ]
-            }
-          ) : null,
-          /* @__PURE__ */ jsxs(
-            "button",
-            {
-              type: "button",
-              className: "tw-fab",
-              onClick: (event) => {
-                dismissProactive();
-                if (renderMinimized) {
-                  setForceExpandDuringRun(true);
-                } else {
-                  openFromLauncher(event);
-                }
-              },
-              onPointerDown: handleLauncherPointerDown,
-              "aria-label": displayUnread > 0 ? `Open AI chat - ${displayUnread} unread messages` : "Open AI chat",
-              style: {
-                width: WEB_LAUNCHER_SIZE,
-                height: WEB_LAUNCHER_SIZE,
-                borderRadius: 999,
-                border: "none",
-                background: accent === "#0D9373" ? "linear-gradient(145deg, #11A582 0%, #0D9373 55%, #0B7D63 100%)" : accent,
-                color: "#fff",
-                boxShadow: "0 10px 26px rgba(11, 125, 99, 0.42), 0 2px 6px rgba(0,0,0,0.18)",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                position: "relative"
-              },
-              children: [
-                isLoading ? /* @__PURE__ */ jsx(WebLoadingDots, { size: 28, color: "#fff" }) : /* @__PURE__ */ jsx(WebAIBadge, { size: 28 }),
-                displayUnread > 0 ? /* @__PURE__ */ jsxs(
-                  "span",
-                  {
-                    "aria-hidden": "true",
-                    style: {
-                      position: "absolute",
-                      top: -3,
-                      right: -3,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center"
-                    },
-                    children: [
-                      /* @__PURE__ */ jsx(
-                        "span",
-                        {
-                          style: {
-                            position: "absolute",
-                            inset: 0,
-                            borderRadius: 999,
-                            background: "#FF3B47",
-                            animation: "tw-ping 1.9s cubic-bezier(0, 0, 0.2, 1) 2"
-                          }
-                        }
-                      ),
-                      /* @__PURE__ */ jsx(
-                        "span",
-                        {
-                          style: {
-                            position: "relative",
-                            minWidth: 18,
-                            height: 18,
-                            borderRadius: 999,
-                            background: "#FF3B47",
-                            color: "#fff",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            padding: "0 5px",
-                            fontSize: 10.5,
-                            fontWeight: 700,
-                            lineHeight: 1,
-                            fontVariantNumeric: "tabular-nums",
-                            letterSpacing: "0.01em",
-                            boxShadow: "0 1px 4px rgba(15, 23, 42, 0.28)",
-                            outline: "1.5px solid rgba(255,255,255,0.95)",
-                            animation: "tw-badge-pop 0.3s cubic-bezier(0.18, 0.9, 0.32, 1.4)"
-                          },
-                          children: displayUnread > 99 ? "99+" : displayUnread
-                        }
-                      )
-                    ]
-                  }
-                ) : null
               ]
             }
           )
-        ]
-      }
-    ) : null
+        }
+      ) : null,
+      csatPrompt && supportMode?.csat ? /* @__PURE__ */ jsx(
+        "div",
+        {
+          "data-mobileai-ignore": "true",
+          style: {
+            position: "fixed",
+            inset: 0,
+            zIndex: 1e4,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            background: "rgba(8, 10, 16, 0.48)"
+          },
+          children: /* @__PURE__ */ jsx(
+            CSATSurvey,
+            {
+              config: supportMode.csat,
+              metadata: csatPrompt.metadata,
+              onDismiss: () => setCsatPrompt(null),
+              theme: {
+                primaryColor: "#0D9373",
+                textColor: "#ffffff",
+                backgroundColor: "rgba(26, 26, 46, 0.98)"
+              }
+            }
+          )
+        }
+      ) : null,
+      showChat ? isOpen && !renderMinimized ? /* @__PURE__ */ jsxs(
+        "div",
+        {
+          "data-mobileai-ignore": "true",
+          ref: popupRef,
+          style: {
+            position: "fixed",
+            insetInlineEnd: popupPosition ? "auto" : 20,
+            bottom: popupPosition ? "auto" : 20,
+            left: popupPosition?.left,
+            top: popupPosition?.top,
+            width: WEB_POPUP_WIDTH,
+            maxWidth: "calc(100vw - 32px)",
+            maxHeight: "min(65vh, 520px)",
+            zIndex: 9999,
+            display: "flex",
+            flexDirection: "column",
+            borderRadius: 24,
+            padding: 16,
+            paddingTop: 8,
+            background: "linear-gradient(180deg, rgba(28, 30, 50, 0.97) 0%, rgba(20, 22, 38, 0.97) 100%)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            boxShadow: "0 24px 60px rgba(0, 0, 0, 0.46), 0 2px 10px rgba(0,0,0,0.3)",
+            backdropFilter: "blur(16px)",
+            color: "#fff",
+            animation: "tw-panel-in 0.22s ease-out"
+          },
+          children: [
+            /* @__PURE__ */ jsx(
+              WebAgentOverlay,
+              {
+                visible: isLoading && !pendingPrompt && !!statusText && statusText !== "Thinking..." && statusText !== "Working on it\u2026",
+                statusText,
+                onCancel: isLoading ? () => cancel({
+                  source: "overlay"
+                }) : void 0
+              }
+            ),
+            /* @__PURE__ */ jsx(
+              "div",
+              {
+                style: {
+                  width: "100%",
+                  height: 30,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginBottom: 8,
+                  cursor: "grab",
+                  touchAction: "none"
+                },
+                onPointerDown: handlePopupPointerDown,
+                children: /* @__PURE__ */ jsx(
+                  "div",
+                  {
+                    style: {
+                      width: 40,
+                      height: 5,
+                      borderRadius: 4,
+                      background: "rgba(255,255,255,0.3)"
+                    }
+                  }
+                )
+              }
+            ),
+            /* @__PURE__ */ jsx(
+              "button",
+              {
+                type: "button",
+                onClick: minimizePopup,
+                "aria-label": "Minimize AI chat",
+                style: {
+                  position: "absolute",
+                  insetInlineEnd: 0,
+                  top: 0,
+                  padding: 12,
+                  border: "none",
+                  background: "transparent",
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontSize: 18,
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  zIndex: 2
+                },
+                children: "\u2212"
+              }
+            ),
+            !showHistory ? /* @__PURE__ */ jsxs(
+              "div",
+              {
+                style: {
+                  position: "absolute",
+                  top: 12,
+                  insetInlineStart: 16,
+                  zIndex: 3,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8
+                },
+                children: [
+                  /* @__PURE__ */ jsx(
+                    "button",
+                    {
+                      type: "button",
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        setShowHistory(true);
+                        setMode("text");
+                      },
+                      title: "View conversation history",
+                      style: {
+                        width: 24,
+                        height: 24,
+                        borderRadius: 999,
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 0
+                      },
+                      children: /* @__PURE__ */ jsx(WebHistoryIcon, { size: 18, color: "rgba(255,255,255,0.55)" })
+                    }
+                  ),
+                  conversationHistory.length > 0 ? /* @__PURE__ */ jsx(
+                    "div",
+                    {
+                      style: {
+                        position: "absolute",
+                        insetInlineStart: 14,
+                        top: -8,
+                        minWidth: 18,
+                        height: 18,
+                        borderRadius: 999,
+                        background: "#0D9373",
+                        color: "#fff",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "0 5px",
+                        fontSize: 10,
+                        fontWeight: 700
+                      },
+                      children: conversationHistory.length > 9 ? "9+" : conversationHistory.length
+                    }
+                  ) : null,
+                  /* @__PURE__ */ jsx(
+                    "button",
+                    {
+                      type: "button",
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        clearMessages();
+                        setShowQuickActions(false);
+                        setMode("text");
+                      },
+                      title: "Start new conversation",
+                      style: {
+                        width: 24,
+                        height: 24,
+                        borderRadius: 999,
+                        border: "none",
+                        background: "rgba(255,255,255,0.08)",
+                        color: "#fff",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 0
+                      },
+                      children: /* @__PURE__ */ jsx(WebNewChatIcon, { size: 16, color: "rgba(255,255,255,0.78)" })
+                    }
+                  )
+                ]
+              }
+            ) : null,
+            visibleModeCount === 1 && !showHistory ? /* @__PURE__ */ jsxs(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  marginTop: 0,
+                  marginBottom: 12,
+                  minHeight: 46,
+                  borderRadius: 12,
+                  background: "rgba(255,255,255,0.08)",
+                  padding: "0 56px",
+                  cursor: "grab",
+                  touchAction: "none"
+                },
+                onPointerDown: handlePopupPointerDown,
+                children: [
+                  /* @__PURE__ */ jsx(
+                    "div",
+                    {
+                      style: {
+                        width: 24,
+                        height: 24,
+                        borderRadius: 999,
+                        background: accent === "#0D9373" ? "linear-gradient(145deg, #11A582 0%, #0B7D63 100%)" : accent,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flex: "0 0 auto"
+                      },
+                      children: /* @__PURE__ */ jsx(WebAIBadge, { size: 13 })
+                    }
+                  ),
+                  /* @__PURE__ */ jsx(
+                    "span",
+                    {
+                      style: {
+                        color: "#fff",
+                        fontSize: 14,
+                        fontWeight: 700,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap"
+                      },
+                      children: resolvedHeaderTitle
+                    }
+                  )
+                ]
+              }
+            ) : null,
+            visibleModeCount > 1 && !showHistory ? /* @__PURE__ */ jsxs(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  flexDirection: "row",
+                  marginTop: 0,
+                  marginBottom: 12,
+                  borderRadius: 12,
+                  background: "rgba(255,255,255,0.08)",
+                  padding: 3,
+                  cursor: "grab",
+                  touchAction: "none",
+                  minHeight: 46
+                },
+                onPointerDown: handlePopupPointerDown,
+                children: [
+                  /* @__PURE__ */ jsx(
+                    "button",
+                    {
+                      type: "button",
+                      onClick: () => {
+                        setShowHistory(false);
+                        setShowQuickActions(false);
+                        setMode("text");
+                      },
+                      style: {
+                        flex: 1,
+                        border: "none",
+                        background: mode === "text" && !showHistory ? accentTint : "transparent",
+                        color: mode === "text" && !showHistory ? "#fff" : "rgba(255,255,255,0.5)",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                        cursor: "pointer"
+                      },
+                      children: "Chat"
+                    }
+                  ),
+                  showVoiceTab ? /* @__PURE__ */ jsx(
+                    "button",
+                    {
+                      type: "button",
+                      onClick: () => {
+                        void enterVoiceMode();
+                      },
+                      style: {
+                        flex: 1,
+                        border: "none",
+                        background: mode === "voice" ? accentTint : "transparent",
+                        color: mode === "voice" ? "#fff" : "rgba(255,255,255,0.5)",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                        cursor: "pointer"
+                      },
+                      children: "Voice"
+                    }
+                  ) : null,
+                  tickets.length > 0 ? /* @__PURE__ */ jsxs(
+                    "button",
+                    {
+                      type: "button",
+                      onClick: () => {
+                        setShowHistory(false);
+                        setMode("human");
+                      },
+                      style: {
+                        flex: 1,
+                        border: "none",
+                        background: mode === "human" ? accentTint : "transparent",
+                        color: mode === "human" ? "#fff" : "rgba(255,255,255,0.5)",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                        cursor: "pointer"
+                      },
+                      children: [
+                        "Human",
+                        totalUnread > 0 ? /* @__PURE__ */ jsx(
+                          "span",
+                          {
+                            style: {
+                              marginInlineStart: 3,
+                              minWidth: 14,
+                              height: 14,
+                              borderRadius: 999,
+                              background: "#FF3B30",
+                              color: "#fff",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: "0 3px",
+                              fontSize: 8,
+                              fontWeight: 700
+                            },
+                            children: totalUnread > 99 ? "99+" : totalUnread
+                          }
+                        ) : null
+                      ]
+                    }
+                  ) : null
+                ]
+              }
+            ) : null,
+            mode === "text" ? showHistory ? renderHistoryPanel() : quickActionsEnabled && showQuickActions ? /* @__PURE__ */ jsx(
+              QuickActionsPanelWeb,
+              {
+                config: quickActionsConfig,
+                currentScreen: pathname || routerAdapter?.getCurrentScreenName?.() || "/",
+                accent,
+                onChatWithAI: handleQuickActionsChatWithAI
+              }
+            ) : renderChatMessages() : mode === "voice" ? renderVoiceMode() : renderHumanMode(),
+            mode === "text" && !showHistory && !(quickActionsEnabled && showQuickActions) ? renderConsentCard() : null,
+            mode === "text" && !showHistory && !consentRequest && !(quickActionsEnabled && showQuickActions) ? /* @__PURE__ */ jsxs(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  paddingTop: 0,
+                  marginTop: messages.length > 0 || pendingPrompt ? 12 : 0,
+                  minWidth: 0
+                },
+                children: [
+                  pendingImages.length > 0 ? /* @__PURE__ */ jsx(
+                    "div",
+                    {
+                      style: {
+                        display: "flex",
+                        gap: 8,
+                        flexWrap: "wrap",
+                        paddingInlineStart: 4
+                      },
+                      children: pendingImages.map((img, idx) => /* @__PURE__ */ jsxs(
+                        "div",
+                        {
+                          style: {
+                            position: "relative",
+                            width: 56,
+                            height: 56
+                          },
+                          children: [
+                            /* @__PURE__ */ jsx(
+                              "img",
+                              {
+                                src: `data:${img.mimeType};base64,${img.base64}`,
+                                alt: "pending",
+                                style: {
+                                  width: 56,
+                                  height: 56,
+                                  borderRadius: 8,
+                                  objectFit: "cover"
+                                }
+                              }
+                            ),
+                            /* @__PURE__ */ jsx(
+                              "button",
+                              {
+                                type: "button",
+                                onClick: () => setPendingImages((prev) => prev.filter((_, i) => i !== idx)),
+                                "aria-label": "Remove image",
+                                style: {
+                                  position: "absolute",
+                                  top: -6,
+                                  insetInlineEnd: -6,
+                                  width: 20,
+                                  height: 20,
+                                  borderRadius: 10,
+                                  border: "none",
+                                  background: "rgba(220,53,69,0.9)",
+                                  color: "#fff",
+                                  fontSize: 14,
+                                  fontWeight: 700,
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: 0
+                                },
+                                children: "\xD7"
+                              }
+                            )
+                          ]
+                        },
+                        `pending-img-${idx}`
+                      ))
+                    }
+                  ) : null,
+                  /* @__PURE__ */ jsxs(
+                    "div",
+                    {
+                      style: {
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        minWidth: 0
+                      },
+                      children: [
+                        /* @__PURE__ */ jsx(
+                          "input",
+                          {
+                            ref: fileInputRef,
+                            type: "file",
+                            accept: "image/*",
+                            multiple: true,
+                            style: {
+                              display: "none"
+                            },
+                            onChange: async (event) => {
+                              const files = event?.target?.files;
+                              if (!files) return;
+                              for (let i = 0; i < files.length; i++) {
+                                const file = files[i];
+                                if (!file.type.startsWith("image/")) continue;
+                                const reader = new FileReader();
+                                reader.onload = async (e) => {
+                                  const dataUrl = e.target?.result;
+                                  if (typeof dataUrl !== "string") return;
+                                  const rawBase64 = dataUrl.split(",")[1] || "";
+                                  const img = new Image();
+                                  img.onload = () => {
+                                    const MAX_DIM = 1024;
+                                    let w = img.width, h = img.height;
+                                    if (w > MAX_DIM || h > MAX_DIM) {
+                                      const scale = MAX_DIM / Math.max(w, h);
+                                      w = Math.round(w * scale);
+                                      h = Math.round(h * scale);
+                                    }
+                                    const canvas = document.createElement("canvas");
+                                    canvas.width = w;
+                                    canvas.height = h;
+                                    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+                                    const compressed = canvas.toDataURL("image/jpeg", 0.3).split(",")[1] || "";
+                                    setPendingImages((prev) => [
+                                      ...prev,
+                                      {
+                                        base64: compressed,
+                                        mimeType: "image/jpeg"
+                                      }
+                                    ]);
+                                  };
+                                  img.src = `data:${file.type};base64,${rawBase64}`;
+                                };
+                                reader.readAsDataURL(file);
+                              }
+                              if (fileInputRef.current) fileInputRef.current.value = "";
+                            }
+                          }
+                        ),
+                        /* @__PURE__ */ jsx(
+                          "button",
+                          {
+                            type: "button",
+                            onClick: () => fileInputRef.current?.click(),
+                            "aria-label": "Attach image",
+                            style: {
+                              width: 44,
+                              height: 44,
+                              borderRadius: 999,
+                              border: "none",
+                              background: "rgba(255,255,255,0.15)",
+                              color: "#fff",
+                              cursor: "pointer",
+                              flexShrink: 0,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: 0
+                            },
+                            children: /* @__PURE__ */ jsx(
+                              "svg",
+                              {
+                                width: 18,
+                                height: 18,
+                                viewBox: "0 0 24 24",
+                                fill: "none",
+                                stroke: "currentColor",
+                                strokeWidth: 2,
+                                strokeLinecap: "round",
+                                strokeLinejoin: "round",
+                                children: /* @__PURE__ */ jsx("path", { d: "M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" })
+                              }
+                            )
+                          }
+                        ),
+                        /* @__PURE__ */ jsx(
+                          "textarea",
+                          {
+                            ref: composerInputRef,
+                            dir: "auto",
+                            value: input,
+                            placeholder: inputPlaceholder,
+                            onChange: (event) => setInput(event.target.value),
+                            onInput: (event) => autoGrowTextarea(event.currentTarget),
+                            onKeyDown: (event) => {
+                              if (event.key !== "Enter" || event.shiftKey) return;
+                              event.preventDefault();
+                              const el = event.currentTarget;
+                              if (pendingPrompt) {
+                                const pending = pendingPrompt;
+                                const answer = input.trim();
+                                if (!answer) return;
+                                appendUserMessage(answer);
+                                setInput("");
+                                autoGrowTextarea(el, true);
+                                setPendingPrompt(null);
+                                pending.resolve(answer);
+                                return;
+                              }
+                              if (pendingImages.length > 0) {
+                                void send(input, pendingImages);
+                                setPendingImages([]);
+                              } else {
+                                void send(input);
+                              }
+                              autoGrowTextarea(el, true);
+                            },
+                            style: {
+                              flex: 1,
+                              minWidth: 0,
+                              borderRadius: 24,
+                              border: "1px solid rgba(255,255,255,0.08)",
+                              background: "rgba(255,255,255,0.08)",
+                              color: "#fff",
+                              padding: "13px 18px",
+                              outline: "none",
+                              boxShadow: "none",
+                              fontSize: 15,
+                              fontFamily: "inherit",
+                              fontWeight: 400,
+                              minHeight: 48,
+                              maxHeight: 140,
+                              lineHeight: 1.35,
+                              resize: "none",
+                              overflowY: "auto"
+                            }
+                          }
+                        ),
+                        isLoading && pendingImages.length === 0 ? /* @__PURE__ */ jsx(
+                          "button",
+                          {
+                            type: "button",
+                            onClick: () => cancel({
+                              source: "composer"
+                            }),
+                            "aria-label": "Stop AI request",
+                            style: {
+                              width: 44,
+                              height: 44,
+                              borderRadius: 999,
+                              border: "1px solid rgba(255,255,255,0.14)",
+                              background: "rgba(255,255,255,0.1)",
+                              color: "#fff",
+                              cursor: "pointer",
+                              flexShrink: 0,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: 0
+                            },
+                            children: /* @__PURE__ */ jsx(WebStopIcon, { size: 18, color: "#fff" })
+                          }
+                        ) : null,
+                        /* @__PURE__ */ jsx(
+                          "button",
+                          {
+                            type: "button",
+                            disabled: pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0,
+                            "aria-label": "Send message",
+                            onClick: () => {
+                              if (pendingPrompt) {
+                                const pending = pendingPrompt;
+                                const answer = input.trim();
+                                if (!answer) return;
+                                appendUserMessage(answer);
+                                setInput("");
+                                autoGrowTextarea(composerInputRef.current, true);
+                                setPendingPrompt(null);
+                                pending.resolve(answer);
+                                return;
+                              }
+                              if (pendingImages.length > 0) {
+                                void send(input, pendingImages);
+                                setPendingImages([]);
+                              } else {
+                                void send(input);
+                              }
+                              autoGrowTextarea(composerInputRef.current, true);
+                            },
+                            style: {
+                              width: 44,
+                              height: 44,
+                              borderRadius: 999,
+                              border: "none",
+                              background: accent,
+                              color: "#fff",
+                              fontSize: 13,
+                              fontWeight: 800,
+                              lineHeight: 1,
+                              cursor: (pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0) ? "default" : "pointer",
+                              opacity: (pendingPrompt ? !input.trim() : isLoading && pendingImages.length === 0 || !input.trim() && pendingImages.length === 0) ? 0.5 : 1,
+                              flexShrink: 0,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: 0
+                            },
+                            children: /* @__PURE__ */ jsx(WebSendArrowIcon, { size: 18, color: "#fff" })
+                          }
+                        )
+                      ]
+                    }
+                  )
+                ]
+              }
+            ) : null
+          ]
+        }
+      ) : /* @__PURE__ */ jsxs(
+        "div",
+        {
+          "data-mobileai-ignore": "true",
+          style: {
+            position: "fixed",
+            insetInlineEnd: popupPosition ? "auto" : 20,
+            bottom: popupPosition ? "auto" : 20,
+            left: popupPosition?.left,
+            top: popupPosition?.top,
+            zIndex: 9999
+          },
+          children: [
+            discoveryVisible && !renderMinimized && !isLoading && !showProactive ? /* @__PURE__ */ jsxs(
+              "div",
+              {
+                className: "tw-discovery",
+                "data-mobileai-ignore": "true",
+                role: "button",
+                tabIndex: 0,
+                onClick: dismissDiscoveryTooltip,
+                onKeyDown: (event) => {
+                  if (event.key === "Enter" || event.key === " ") dismissDiscoveryTooltip();
+                },
+                style: {
+                  position: "absolute",
+                  bottom: WEB_LAUNCHER_SIZE + 12,
+                  ...closedPreviewPlacement,
+                  width: 220,
+                  maxWidth: 260,
+                  borderRadius: 16,
+                  padding: "10px 14px",
+                  background: accent === "#0D9373" ? "#1a1a2e" : accent,
+                  color: "#fff",
+                  boxShadow: "0 8px 22px rgba(0,0,0,0.3)",
+                  cursor: "pointer",
+                  transformOrigin: "bottom right",
+                  animation: "tw-discovery-in 0.32s cubic-bezier(0.18, 0.9, 0.32, 1.25)"
+                },
+                children: [
+                  /* @__PURE__ */ jsx(
+                    "span",
+                    {
+                      style: {
+                        fontSize: 13,
+                        lineHeight: "19px",
+                        fontWeight: 500,
+                        color: "#fff"
+                      },
+                      children: discoveryTooltipMessage || DISCOVERY_TOOLTIP_DEFAULT_MESSAGE
+                    }
+                  ),
+                  /* @__PURE__ */ jsx(
+                    "span",
+                    {
+                      "aria-hidden": "true",
+                      style: {
+                        position: "absolute",
+                        bottom: -8,
+                        right: 22,
+                        width: 0,
+                        height: 0,
+                        borderLeft: "8px solid transparent",
+                        borderRight: "8px solid transparent",
+                        borderTop: `8px solid ${accent === "#0D9373" ? "#1a1a2e" : accent}`
+                      }
+                    }
+                  )
+                ]
+              }
+            ) : null,
+            renderMinimized ? /* @__PURE__ */ jsxs(
+              "button",
+              {
+                type: "button",
+                onClick: () => setForceExpandDuringRun(true),
+                "aria-label": "Expand AI chat",
+                style: {
+                  position: "absolute",
+                  bottom: WEB_LAUNCHER_SIZE + 12,
+                  ...closedPreviewPlacement,
+                  width: 230,
+                  minHeight: 50,
+                  border: "none",
+                  borderRadius: 18,
+                  background: "rgba(20, 24, 38, 0.96)",
+                  backdropFilter: "blur(12px)",
+                  color: "#fff",
+                  boxShadow: "0 14px 34px rgba(0,0,0,0.34)",
+                  padding: "12px 14px",
+                  cursor: "pointer",
+                  textAlign: "start",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  animation: "tw-pop-in 0.18s ease-out"
+                },
+                children: [
+                  /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: accent }),
+                  /* @__PURE__ */ jsx(
+                    "span",
+                    {
+                      style: {
+                        fontSize: 13,
+                        fontWeight: 600,
+                        lineHeight: 1.35,
+                        color: "rgba(255,255,255,0.92)",
+                        flex: 1,
+                        overflow: "hidden",
+                        display: "-webkit-box",
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: "vertical"
+                      },
+                      children: minimizedPillText
+                    }
+                  )
+                ]
+              }
+            ) : null,
+            showProactive && proactiveStage === "badge" ? /* @__PURE__ */ jsxs(
+              "div",
+              {
+                "data-mobileai-ignore": "true",
+                style: {
+                  position: "absolute",
+                  bottom: WEB_LAUNCHER_SIZE + 12,
+                  ...closedPreviewPlacement,
+                  maxWidth: 244,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "#fff",
+                  color: "#0F172A",
+                  borderRadius: 16,
+                  padding: "11px 12px 11px 15px",
+                  boxShadow: "0 16px 36px rgba(0,0,0,0.20)",
+                  animation: "tw-pop-in 0.24s cubic-bezier(0.18, 0.9, 0.32, 1.25)"
+                },
+                children: [
+                  /* @__PURE__ */ jsx(
+                    "button",
+                    {
+                      type: "button",
+                      onClick: () => {
+                        dismissProactive();
+                        openFromLauncher();
+                      },
+                      style: {
+                        border: "none",
+                        background: "transparent",
+                        color: "inherit",
+                        font: "inherit",
+                        fontSize: 14,
+                        fontWeight: 600,
+                        lineHeight: 1.35,
+                        textAlign: "start",
+                        cursor: "pointer",
+                        padding: 0,
+                        flex: 1
+                      },
+                      children: proactiveText || "Need help with this screen?"
+                    }
+                  ),
+                  /* @__PURE__ */ jsx(
+                    "button",
+                    {
+                      type: "button",
+                      onClick: dismissProactive,
+                      "aria-label": "Dismiss",
+                      style: {
+                        flexShrink: 0,
+                        width: 22,
+                        height: 22,
+                        borderRadius: 999,
+                        border: "none",
+                        background: "rgba(15,23,42,0.06)",
+                        color: "#64748B",
+                        fontSize: 15,
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 0
+                      },
+                      children: "\xD7"
+                    }
+                  )
+                ]
+              }
+            ) : null,
+            showProactive && proactiveStage === "pulse" ? /* @__PURE__ */ jsx(
+              "span",
+              {
+                className: "tw-pulse-ring",
+                "aria-hidden": "true",
+                style: {
+                  position: "absolute",
+                  right: 0,
+                  bottom: 0,
+                  width: WEB_LAUNCHER_SIZE,
+                  height: WEB_LAUNCHER_SIZE,
+                  borderRadius: 999,
+                  background: "rgba(13, 147, 115, 0.5)",
+                  pointerEvents: "none"
+                }
+              }
+            ) : null,
+            isLoading ? /* @__PURE__ */ jsxs(
+              "div",
+              {
+                "data-mobileai-ignore": "true",
+                style: {
+                  position: "absolute",
+                  bottom: WEB_LAUNCHER_SIZE + 12,
+                  ...closedPreviewPlacement,
+                  width: 204,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  background: "rgba(20, 24, 38, 0.96)",
+                  backdropFilter: "blur(12px)",
+                  color: "#fff",
+                  borderRadius: 18,
+                  padding: "12px 15px",
+                  boxShadow: "0 14px 34px rgba(0,0,0,0.32)",
+                  animation: "tw-pop-in 0.2s ease-out"
+                },
+                children: [
+                  /* @__PURE__ */ jsx(WebLoadingDots, { size: 18, color: accent }),
+                  /* @__PURE__ */ jsx(
+                    "span",
+                    {
+                      style: {
+                        fontSize: 13,
+                        fontWeight: 600,
+                        lineHeight: 1.3,
+                        color: "rgba(255,255,255,0.92)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap"
+                      },
+                      children: statusText || "Thinking\u2026"
+                    }
+                  )
+                ]
+              }
+            ) : localUnread > 0 && messages.length > 0 ? /* @__PURE__ */ jsxs(
+              "button",
+              {
+                type: "button",
+                onClick: openFromLauncher,
+                style: {
+                  position: "absolute",
+                  bottom: WEB_LAUNCHER_SIZE + 12,
+                  ...closedPreviewPlacement,
+                  width: 250,
+                  border: "none",
+                  borderRadius: 18,
+                  background: "#fff",
+                  color: "#0F172A",
+                  boxShadow: "0 16px 38px rgba(15, 23, 42, 0.18)",
+                  padding: 14,
+                  cursor: "pointer",
+                  textAlign: "start",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 7,
+                  animation: "tw-pop-in 0.22s cubic-bezier(0.18, 0.9, 0.32, 1.2)"
+                },
+                children: [
+                  /* @__PURE__ */ jsxs(
+                    "div",
+                    {
+                      style: {
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 7
+                      },
+                      children: [
+                        /* @__PURE__ */ jsx(
+                          "span",
+                          {
+                            style: {
+                              width: 20,
+                              height: 20,
+                              borderRadius: 999,
+                              background: "linear-gradient(145deg, #11A582, #0B7D63)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0
+                            },
+                            children: /* @__PURE__ */ jsx(WebAIBadge, { size: 12 })
+                          }
+                        ),
+                        /* @__PURE__ */ jsx(
+                          "span",
+                          {
+                            style: {
+                              fontSize: 11,
+                              fontWeight: 700,
+                              letterSpacing: "0.04em",
+                              textTransform: "uppercase",
+                              color: "#0D9373"
+                            },
+                            children: "Twomilia"
+                          }
+                        )
+                      ]
+                    }
+                  ),
+                  /* @__PURE__ */ jsx(
+                    "span",
+                    {
+                      style: {
+                        fontSize: 13.5,
+                        fontWeight: 500,
+                        lineHeight: 1.4,
+                        color: "#1E293B",
+                        overflow: "hidden",
+                        display: "-webkit-box",
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: "vertical"
+                      },
+                      children: latestClosedPreview
+                    }
+                  )
+                ]
+              }
+            ) : null,
+            /* @__PURE__ */ jsxs(
+              "button",
+              {
+                type: "button",
+                className: "tw-fab",
+                onClick: (event) => {
+                  dismissProactive();
+                  if (renderMinimized) {
+                    setForceExpandDuringRun(true);
+                  } else {
+                    openFromLauncher(event);
+                  }
+                },
+                onPointerDown: handleLauncherPointerDown,
+                "aria-label": displayUnread > 0 ? `Open AI chat - ${displayUnread} unread messages` : "Open AI chat",
+                style: {
+                  width: WEB_LAUNCHER_SIZE,
+                  height: WEB_LAUNCHER_SIZE,
+                  borderRadius: 999,
+                  border: "none",
+                  background: accent === "#0D9373" ? "linear-gradient(145deg, #11A582 0%, #0D9373 55%, #0B7D63 100%)" : accent,
+                  color: "#fff",
+                  boxShadow: "0 10px 26px rgba(11, 125, 99, 0.42), 0 2px 6px rgba(0,0,0,0.18)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  position: "relative"
+                },
+                children: [
+                  isLoading ? /* @__PURE__ */ jsx(WebLoadingDots, { size: 28, color: "#fff" }) : /* @__PURE__ */ jsx(WebAIBadge, { size: 28 }),
+                  displayUnread > 0 ? /* @__PURE__ */ jsxs(
+                    "span",
+                    {
+                      "aria-hidden": "true",
+                      style: {
+                        position: "absolute",
+                        top: -3,
+                        insetInlineEnd: -3,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center"
+                      },
+                      children: [
+                        /* @__PURE__ */ jsx(
+                          "span",
+                          {
+                            style: {
+                              position: "absolute",
+                              inset: 0,
+                              borderRadius: 999,
+                              background: "#FF3B47",
+                              animation: "tw-ping 1.9s cubic-bezier(0, 0, 0.2, 1) 2"
+                            }
+                          }
+                        ),
+                        /* @__PURE__ */ jsx(
+                          "span",
+                          {
+                            style: {
+                              position: "relative",
+                              minWidth: 18,
+                              height: 18,
+                              borderRadius: 999,
+                              background: "#FF3B47",
+                              color: "#fff",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: "0 5px",
+                              fontSize: 10.5,
+                              fontWeight: 700,
+                              lineHeight: 1,
+                              fontVariantNumeric: "tabular-nums",
+                              letterSpacing: "0.01em",
+                              boxShadow: "0 1px 4px rgba(15, 23, 42, 0.28)",
+                              outline: "1.5px solid rgba(255,255,255,0.95)",
+                              animation: "tw-badge-pop 0.3s cubic-bezier(0.18, 0.9, 0.32, 1.4)"
+                            },
+                            children: displayUnread > 99 ? "99+" : displayUnread
+                          }
+                        )
+                      ]
+                    }
+                  ) : null
+                ]
+              }
+            )
+          ]
+        }
+      ) : null
+    ] })
   ] }) }) });
 }
 export {

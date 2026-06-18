@@ -26,6 +26,10 @@ if (typeof window !== 'undefined') {
       proxyHeaders: ds.authToken ? { Authorization: 'Bearer ' + ds.authToken } : undefined,
       useServerRuntime: !!ds.serverUrl,
       serverUrl: ds.serverUrl,
+      // RTL: data-direction="rtl|ltr|auto" or data-rtl="true|false". Omitted ⇒
+      // the widget auto-detects from the host document's dir/lang.
+      direction: ds.direction,
+      rtl: ds.rtl === 'true' ? true : ds.rtl === 'false' ? false : undefined,
     });
   }
 }

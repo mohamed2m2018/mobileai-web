@@ -11,6 +11,14 @@ export interface AIAgentProps extends Omit<AgentConfig, 'platformAdapter' | 'rou
     showChat?: boolean;
     defaultOpen?: boolean;
     inputPlaceholder?: string;
+    /**
+     * Text direction for the chat widget chrome (launcher, panel, bubbles).
+     * `'auto'` (default) infers it from the host document's `dir` attribute,
+     * computed direction, or language. Use `'rtl'`/`'ltr'` to force a value.
+     */
+    direction?: 'ltr' | 'rtl' | 'auto';
+    /** Convenience boolean alias for `direction`. `true` ⇒ rtl, `false` ⇒ ltr. */
+    rtl?: boolean;
     theme?: RichUIThemeOverride;
     surfaceThemes?: Partial<Record<'chat' | 'zone' | 'support', RichUIThemeOverride>>;
     blockActionHandlers?: Record<string, BlockActionHandler>;

@@ -171,7 +171,7 @@ function WebTypingBubble() {
         alignItems: 'center',
         gap: 5,
         borderRadius: 18,
-        borderBottomLeftRadius: 5,
+        borderEndStartRadius: 5,
         padding: '14px 15px',
         background: 'rgba(255,255,255,0.07)',
         border: '1px solid rgba(255,255,255,0.08)',
@@ -242,7 +242,7 @@ function WebAgentOverlay({ visible, statusText, onCancel }) {
             onClick={onCancel}
             aria-label="Cancel AI request"
             style={{
-              marginLeft: 2,
+              marginInlineStart: 2,
               width: 22,
               height: 22,
               borderRadius: 999,
@@ -454,6 +454,8 @@ function WebSendArrowIcon({ size = 18, color = '#fff' }) {
       viewBox: '0 0 24 24',
       fill: 'none',
       'aria-hidden': true,
+      // Directional glyph: mirror under RTL so it points toward the text's end.
+      className: 'tw-send-arrow',
     },
     React.createElement('polygon', {
       points: '8,6 18,12 8,18',
@@ -739,6 +741,45 @@ function historyToSupportMessages(ticketId, history) {
 function getBrowserLanguage() {
   const raw = typeof navigator !== 'undefined' && navigator.language ? navigator.language : 'en';
   return raw.split('-')[0] || 'en';
+}
+// Base language subtags that render right-to-left. Used only as the last fallback
+// when the host page hasn't declared a direction explicitly.
+const RTL_LANGUAGES = new Set(['ar', 'arc', 'ckb', 'dv', 'fa', 'ha', 'he', 'khw', 'ks', 'nqo', 'ps', 'sd', 'ug', 'ur', 'yi']);
+// Infer the host document's text direction: an explicit `dir` attribute wins,
+// then the computed `direction`, then the declared language. Browser-only — SSR
+// resolves to 'ltr' and the client re-resolves on mount.
+function detectDocumentDirection() {
+  if (typeof document === 'undefined') return 'ltr';
+  try {
+    const attr = (
+      document.documentElement?.getAttribute('dir') ||
+      document.body?.getAttribute('dir') ||
+      ''
+    ).toLowerCase();
+    if (attr === 'rtl' || attr === 'ltr') return attr;
+    const computed =
+      typeof window !== 'undefined' && window.getComputedStyle
+        ? window.getComputedStyle(document.documentElement).direction
+        : '';
+    if (computed === 'rtl') return 'rtl';
+    const lang = (
+      document.documentElement?.lang ||
+      (typeof navigator !== 'undefined' ? navigator.language : '') ||
+      ''
+    ).toLowerCase();
+    if (RTL_LANGUAGES.has(lang.split('-')[0])) return 'rtl';
+  } catch {
+    /* fall through to ltr */
+  }
+  return 'ltr';
+}
+// Resolve the widget's direction from the explicit props, falling back to host
+// detection. `rtl` is a boolean convenience alias for `direction`.
+function resolveWidgetDirection(direction, rtl) {
+  if (rtl === true) return 'rtl';
+  if (direction === 'rtl' || direction === 'ltr') return direction;
+  if (rtl === false) return 'ltr';
+  return detectDocumentDirection();
 }
 function describeMicrophonePermissionError(error) {
   const name = typeof error?.name === 'string' ? error.name : '';
@@ -1255,12 +1296,18 @@ export function AIAgent({
   enableWebSearch = false,
   showDiscoveryTooltip = true,
   discoveryTooltipMessage,
+  direction = 'auto',
+  rtl,
 }) {
   // U1 — single accent source for the widget's own chrome (FAB, send/approve
   // buttons, user bubbles, active tab, loading dots). Mirrors RN, which threads
   // theme.primaryColor / accentColor (AgentChatBar.tsx). #0D9373 stays as the
   // fallback only.
   const accent = accentColor || theme?.primaryColor || '#0D9373';
+  // Widget text direction. Drives the `dir` on the chrome wrapper so the browser
+  // flips bidi text, flexbox alignment, and CSS logical properties; the few
+  // physical anchors below are authored as logical insets so they flip too.
+  const resolvedDirection = useMemo(() => resolveWidgetDirection(direction, rtl), [direction, rtl]);
   // Translucent accent tint for soft surfaces (active tab, user voice bubble).
   const accentTint = useMemo(() => hexToRgba(accent, 0.22), [accent]);
   // Title for the single-mode header bar (shown when there are no Chat/Voice
@@ -3451,7 +3498,7 @@ export function AIAgent({
         gap: 8,
         maxHeight: 'calc(min(65vh, 520px) - 178px)',
         flexShrink: 1,
-        paddingRight: 4,
+        paddingInlineEnd: 4,
       }}
     >
       {!supportModeEnabled && messages.length === 0 && !isLoading && !pendingPrompt ? (
@@ -3568,6 +3615,7 @@ export function AIAgent({
         return (
           <div
             className="mobileai-web-chat-bubble"
+            dir="auto"
             style={{
               alignSelf: isUser ? 'flex-end' : 'flex-start',
               maxWidth: '85%',
@@ -3579,8 +3627,8 @@ export function AIAgent({
               border: isUser ? 'none' : '1px solid rgba(255,255,255,0.08)',
               boxShadow: isUser ? `0 4px 14px ${hexToRgba(accent, 0.32)}` : 'none',
               color: '#fff',
-              borderBottomRightRadius: isUser ? 5 : 18,
-              borderBottomLeftRadius: isUser ? 18 : 5,
+              borderEndEndRadius: isUser ? 5 : 18,
+              borderEndStartRadius: isUser ? 18 : 5,
               marginBottom: 8,
               overflowWrap: 'anywhere',
               wordBreak: 'break-word',
@@ -3761,7 +3809,7 @@ export function AIAgent({
             display: 'flex',
             flexDirection: 'column',
             gap: 8,
-            paddingRight: 4,
+            paddingInlineEnd: 4,
           }}
         >
           {conversationHistory.map((conversation) => (
@@ -3795,7 +3843,7 @@ export function AIAgent({
                   background: 'transparent',
                   padding: '12px 48px 12px 14px',
                   color: '#fff',
-                  textAlign: 'left',
+                  textAlign: 'start',
                   cursor: 'pointer',
                 }}
               >
@@ -3872,7 +3920,7 @@ export function AIAgent({
                 aria-label="Delete conversation"
                 style={{
                   position: 'absolute',
-                  right: 12,
+                  insetInlineEnd: 12,
                   top: 12,
                   width: 30,
                   height: 30,
@@ -4106,7 +4154,7 @@ export function AIAgent({
               display: 'flex',
               flexDirection: 'column',
               gap: 10,
-              paddingRight: 4,
+              paddingInlineEnd: 4,
             }}
           >
             {voiceTranscript.length === 0 ? (
@@ -4163,7 +4211,7 @@ export function AIAgent({
             display: 'flex',
             flexDirection: 'column',
             gap: 10,
-            paddingRight: 4,
+            paddingInlineEnd: 4,
           }}
         >
           {tickets.length === 0 ? (
@@ -4188,7 +4236,7 @@ export function AIAgent({
                   background: 'rgba(255,255,255,0.06)',
                   borderRadius: 18,
                   padding: '14px 16px',
-                  textAlign: 'left',
+                  textAlign: 'start',
                   color: '#fff',
                   cursor: 'pointer',
                 }}
@@ -4290,7 +4338,7 @@ export function AIAgent({
             display: 'flex',
             flexDirection: 'column',
             gap: 10,
-            paddingRight: 4,
+            paddingInlineEnd: 4,
           }}
         >
           {/* U5 — human chat polish: date separators (Today/Yesterday), agent
@@ -4415,7 +4463,7 @@ export function AIAgent({
                   alignItems: 'center',
                   gap: 5,
                   borderRadius: 18,
-                  borderBottomLeftRadius: 5,
+                  borderEndStartRadius: 5,
                   padding: '12px 14px',
                   background: 'rgba(255,255,255,0.08)',
                 }}
@@ -4463,6 +4511,7 @@ export function AIAgent({
           >
             <textarea
               ref={supportInputRef}
+              dir="auto"
               value={supportInput}
               placeholder="Message the human agent…"
               onChange={(event) => setSupportInput(event.target.value)}
@@ -4605,7 +4654,15 @@ export function AIAgent({
             @media (prefers-reduced-motion: reduce) {
               .tw-fab, .tw-pulse-ring, .tw-typing-dot, .tw-discovery { animation: none !important; transition: none !important; }
             }
+            /* Mirror the directional send glyph under RTL (points toward text end). */
+            [dir="rtl"] .tw-send-arrow { transform: scaleX(-1); }
           `}</style>
+          {/* RTL/LTR boundary: `dir` cascades direction to the fixed/absolute
+              widget chrome below (popup, launcher, overlays) so the browser flips
+              bidi text, flexbox alignment, and CSS logical insets. `display:
+              contents` keeps the wrapper boxless, and it deliberately excludes the
+              host-app children above so their direction is untouched. */}
+          <div data-twomilia-dir={resolvedDirection} dir={resolvedDirection} style={{ display: 'contents' }}>
           {guide ? (
             <div
               data-mobileai-ignore="true"
@@ -4890,7 +4947,7 @@ export function AIAgent({
                 ref={popupRef}
                 style={{
                   position: 'fixed',
-                  right: popupPosition ? 'auto' : 20,
+                  insetInlineEnd: popupPosition ? 'auto' : 20,
                   bottom: popupPosition ? 'auto' : 20,
                   left: popupPosition?.left,
                   top: popupPosition?.top,
@@ -4957,7 +5014,7 @@ export function AIAgent({
                   aria-label="Minimize AI chat"
                   style={{
                     position: 'absolute',
-                    right: 0,
+                    insetInlineEnd: 0,
                     top: 0,
                     padding: 12,
                     border: 'none',
@@ -4977,7 +5034,7 @@ export function AIAgent({
                     style={{
                       position: 'absolute',
                       top: 12,
-                      left: 16,
+                      insetInlineStart: 16,
                       zIndex: 3,
                       display: 'flex',
                       alignItems: 'center',
@@ -5011,7 +5068,7 @@ export function AIAgent({
                       <div
                         style={{
                           position: 'absolute',
-                          left: 14,
+                          insetInlineStart: 14,
                           top: -8,
                           minWidth: 18,
                           height: 18,
@@ -5186,7 +5243,7 @@ export function AIAgent({
                         {totalUnread > 0 ? (
                           <span
                             style={{
-                              marginLeft: 3,
+                              marginInlineStart: 3,
                               minWidth: 14,
                               height: 14,
                               borderRadius: 999,
@@ -5246,7 +5303,7 @@ export function AIAgent({
                           display: 'flex',
                           gap: 8,
                           flexWrap: 'wrap',
-                          paddingLeft: 4,
+                          paddingInlineStart: 4,
                         }}
                       >
                         {pendingImages.map((img, idx) => (
@@ -5275,7 +5332,7 @@ export function AIAgent({
                               style={{
                                 position: 'absolute',
                                 top: -6,
-                                right: -6,
+                                insetInlineEnd: -6,
                                 width: 20,
                                 height: 20,
                                 borderRadius: 10,
@@ -5389,6 +5446,7 @@ export function AIAgent({
                       </button>
                       <textarea
                         ref={composerInputRef}
+                        dir="auto"
                         value={input}
                         placeholder={inputPlaceholder}
                         onChange={(event) => setInput(event.target.value)}
@@ -5540,7 +5598,7 @@ export function AIAgent({
                 data-mobileai-ignore="true"
                 style={{
                   position: 'fixed',
-                  right: popupPosition ? 'auto' : 20,
+                  insetInlineEnd: popupPosition ? 'auto' : 20,
                   bottom: popupPosition ? 'auto' : 20,
                   left: popupPosition?.left,
                   top: popupPosition?.top,
@@ -5617,7 +5675,7 @@ export function AIAgent({
                       boxShadow: '0 14px 34px rgba(0,0,0,0.34)',
                       padding: '12px 14px',
                       cursor: 'pointer',
-                      textAlign: 'left',
+                      textAlign: 'start',
                       display: 'flex',
                       alignItems: 'center',
                       gap: 10,
@@ -5675,7 +5733,7 @@ export function AIAgent({
                         fontSize: 14,
                         fontWeight: 600,
                         lineHeight: 1.35,
-                        textAlign: 'left',
+                        textAlign: 'start',
                         cursor: 'pointer',
                         padding: 0,
                         flex: 1,
@@ -5776,7 +5834,7 @@ export function AIAgent({
                       boxShadow: '0 16px 38px rgba(15, 23, 42, 0.18)',
                       padding: 14,
                       cursor: 'pointer',
-                      textAlign: 'left',
+                      textAlign: 'start',
                       display: 'flex',
                       flexDirection: 'column',
                       gap: 7,
@@ -5870,7 +5928,7 @@ export function AIAgent({
                       style={{
                         position: 'absolute',
                         top: -3,
-                        right: -3,
+                        insetInlineEnd: -3,
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -5915,6 +5973,7 @@ export function AIAgent({
               </div>
             )
           ) : null}
+          </div>
         </AgentContext.Provider>
       </ActionBridgeProvider>
     </RichUIProvider>
