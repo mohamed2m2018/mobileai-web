@@ -1689,7 +1689,7 @@ export function AIAgent({
     },
     [],
   );
-  const appendUserMessage = useCallback((text) => {
+  const appendUserMessage = useCallback((text, opts) => {
     const trimmed = text.trim();
     if (!trimmed) return null;
     const userMessage = createAIMessage({
@@ -1697,6 +1697,7 @@ export function AIAgent({
       role: 'user',
       content: trimmed,
       timestamp: Date.now(),
+      promptKind: opts?.promptKind,
     });
     setMessages((prev) => [...prev, userMessage]);
     return userMessage;
@@ -1706,7 +1707,9 @@ export function AIAgent({
       const pending = pendingPrompt;
       if (!pending || pending.kind !== 'approval') return;
       if (visibleReply) {
-        appendUserMessage(visibleReply);
+        // Tag the Allow/Don't-allow reply as an approval-handshake turn so it is
+        // excluded from engagement/ROI metrics on the backend.
+        appendUserMessage(visibleReply, { promptKind: 'approval' });
       }
       // Remember a granted approval so it survives an MPA reload+resume.
       if (token === APPROVAL_GRANTED_TOKEN) {
@@ -2439,6 +2442,32 @@ export function AIAgent({
           if (acting) setMinimized(true);
         },
         onTokenUsage,
+        onInlineMessage: (text) => {
+          const trimmed = (text || '').trim();
+          if (!trimmed) return;
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (
+              last &&
+              last.role === 'assistant' &&
+              String(last.previewText || '').trim() === trimmed
+            ) {
+              return prev;
+            }
+            return [
+              ...prev,
+              createAIMessage({
+                id: `assistant-inline-${Date.now()}-${Math.random()}`,
+                role: 'assistant',
+                content: trimmed,
+                previewText: trimmed,
+                timestamp: Date.now(),
+              }),
+            ];
+          });
+          setLocalUnread(0);
+          setIsOpen(true);
+        },
         onAskUser: (request) =>
           new Promise((resolve) => {
             const normalized =
@@ -2686,7 +2715,21 @@ export function AIAgent({
           result,
           previewText: result.previewText,
         });
-        setMessages((prev) => [...prev, assistantMessage]);
+        // Skip if this exact text was already mirrored mid-loop (the scroll-loop
+        // convergence reuses the last finding as its reply) — avoids a duplicate.
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          const next = String(assistantMessage.previewText || '').trim();
+          if (
+            last &&
+            last.role === 'assistant' &&
+            next &&
+            String(last.previewText || '').trim() === next
+          ) {
+            return prev;
+          }
+          return [...prev, assistantMessage];
+        });
         setLastResult(result);
         options?.onResult?.(result);
         telemetryRef.current?.track('agent_trace', {
@@ -2760,7 +2803,19 @@ export function AIAgent({
           result,
           previewText: result.previewText,
         });
-        setMessages((prev) => [...prev, assistantMessage]);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          const next = String(assistantMessage.previewText || '').trim();
+          if (
+            last &&
+            last.role === 'assistant' &&
+            next &&
+            String(last.previewText || '').trim() === next
+          ) {
+            return prev;
+          }
+          return [...prev, assistantMessage];
+        });
         setLastResult(result);
       } catch (error) {
         logger.warn('AIAgent', `Resume failed: ${error?.message || error}`);

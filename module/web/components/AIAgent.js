@@ -1561,14 +1561,15 @@ function AIAgent({
     },
     []
   );
-  const appendUserMessage = useCallback((text) => {
+  const appendUserMessage = useCallback((text, opts) => {
     const trimmed = text.trim();
     if (!trimmed) return null;
     const userMessage = createAIMessage({
       id: `user-${Date.now()}`,
       role: "user",
       content: trimmed,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      promptKind: opts?.promptKind
     });
     setMessages((prev) => [...prev, userMessage]);
     return userMessage;
@@ -1578,7 +1579,7 @@ function AIAgent({
       const pending = pendingPrompt;
       if (!pending || pending.kind !== "approval") return;
       if (visibleReply) {
-        appendUserMessage(visibleReply);
+        appendUserMessage(visibleReply, { promptKind: "approval" });
       }
       if (token === APPROVAL_GRANTED_TOKEN) {
         workflowApprovedRef.current = true;
@@ -2251,6 +2252,28 @@ function AIAgent({
         if (acting) setMinimized(true);
       },
       onTokenUsage,
+      onInlineMessage: (text) => {
+        const trimmed = (text || "").trim();
+        if (!trimmed) return;
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === "assistant" && String(last.previewText || "").trim() === trimmed) {
+            return prev;
+          }
+          return [
+            ...prev,
+            createAIMessage({
+              id: `assistant-inline-${Date.now()}-${Math.random()}`,
+              role: "assistant",
+              content: trimmed,
+              previewText: trimmed,
+              timestamp: Date.now()
+            })
+          ];
+        });
+        setLocalUnread(0);
+        setIsOpen(true);
+      },
       onAskUser: (request) => new Promise((resolve) => {
         const normalized = typeof request === "string" ? { question: request, kind: "freeform" } : request;
         const question = normalized.question;
@@ -2467,7 +2490,14 @@ function AIAgent({
           result,
           previewText: result.previewText
         });
-        setMessages((prev) => [...prev, assistantMessage]);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          const next = String(assistantMessage.previewText || "").trim();
+          if (last && last.role === "assistant" && next && String(last.previewText || "").trim() === next) {
+            return prev;
+          }
+          return [...prev, assistantMessage];
+        });
         setLastResult(result);
         options?.onResult?.(result);
         telemetryRef.current?.track("agent_trace", {
@@ -2525,7 +2555,14 @@ function AIAgent({
           result,
           previewText: result.previewText
         });
-        setMessages((prev) => [...prev, assistantMessage]);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          const next = String(assistantMessage.previewText || "").trim();
+          if (last && last.role === "assistant" && next && String(last.previewText || "").trim() === next) {
+            return prev;
+          }
+          return [...prev, assistantMessage];
+        });
         setLastResult(result);
       } catch (error) {
         logger.warn("AIAgent", `Resume failed: ${error?.message || error}`);

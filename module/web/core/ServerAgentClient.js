@@ -192,6 +192,12 @@ export class ServerAgentClient {
         // "Scrolling down…", "Writing response…"); the client only renders it.
         this.callbacks.onStatusUpdate?.(msg.label || '');
         break;
+      case 'inline_message':
+        // A mid-loop finding (guide_user action="verify"). Unlike 'status', this
+        // is appended to the chat thread so on-screen conclusions also appear in
+        // the conversation, not only as a transient overlay.
+        this.callbacks.onInlineMessage?.(msg.text || '');
+        break;
       case 'done':
         this._handleDone(msg);
         break;
