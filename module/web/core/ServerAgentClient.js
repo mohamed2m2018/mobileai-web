@@ -73,6 +73,9 @@ export class ServerAgentClient {
             type: 'start',
             userMessage,
             chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
+            // Carried across an MPA reload+resume: a workflow approval the user
+            // already granted, so the resumed server session doesn't re-prompt.
+            workflowApproved: config?.workflowApproved === true,
             screenState: {
               screenName: snapshot.screenName,
               availableScreens: snapshot.availableScreens,

@@ -1221,6 +1221,7 @@ function AIAgent({
   const isLoadingRef = useRef(false);
   const activeGoalRef = useRef(null);
   const didResumeRef = useRef(false);
+  const workflowApprovedRef = useRef(false);
   const [statusText, setStatusText] = useState("");
   const [lastResult, setLastResult] = useState(null);
   const [input, setInput] = useState("");
@@ -1503,6 +1504,9 @@ function AIAgent({
       if (!pending || pending.kind !== "approval") return;
       if (visibleReply) {
         appendUserMessage(visibleReply);
+      }
+      if (token === APPROVAL_GRANTED_TOKEN) {
+        workflowApprovedRef.current = true;
       }
       setPendingPrompt(null);
       pending.resolve(token);
@@ -2316,6 +2320,7 @@ function AIAgent({
       isLoadingRef.current = true;
       activeGoalRef.current = trimmed || displayText;
       clearResumeTask(persistenceKey);
+      workflowApprovedRef.current = false;
       setStatusText("Thinking...");
       setLocalUnread(0);
       setIsOpen(true);
@@ -2352,16 +2357,22 @@ function AIAgent({
     [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, serverClient, serverConfig]
   );
   const resumeTask = useCallback(
-    async (goal) => {
+    async (goal, options) => {
       if (!goal || isLoadingRef.current) return;
       setIsOpen(true);
       setIsLoading(true);
       isLoadingRef.current = true;
       activeGoalRef.current = goal;
+      workflowApprovedRef.current = options?.workflowApproved === true;
       setStatusText("Resuming\u2026");
       try {
         const resumeGoal = `[Resuming after a page navigation] Original request: "${goal}". The page just reloaded, so part of this task may already be complete. First inspect the CURRENT page and the conversation above to see what is already done, then perform ONLY the remaining steps. If the request is already fully satisfied, briefly confirm that to the user and stop \u2014 do not repeat actions that are already done.`;
-        const rawResult = await serverClientRef.current.execute(resumeGoal, toUserHistory(messagesRef.current), void 0, serverConfig);
+        const rawResult = await serverClientRef.current.execute(
+          resumeGoal,
+          toUserHistory(messagesRef.current),
+          void 0,
+          { ...serverConfig, workflowApproved: workflowApprovedRef.current }
+        );
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2395,7 +2406,10 @@ function AIAgent({
       saveResumeTask(persistenceKey, {
         goal: activeGoalRef.current,
         count: count + 1,
-        ts: Date.now()
+        ts: Date.now(),
+        // Carry a granted approval across the reload so the resumed run doesn't
+        // re-ask for the same action the user already allowed.
+        workflowApproved: workflowApprovedRef.current === true
       });
     };
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -2411,7 +2425,7 @@ function AIAgent({
     }
     didResumeRef.current = true;
     const timer = setTimeout(() => {
-      void resumeTask(record.goal);
+      void resumeTask(record.goal, { workflowApproved: record.workflowApproved });
     }, 900);
     return () => clearTimeout(timer);
   }, [persistenceKey, resumeTask]);

@@ -966,6 +966,13 @@ export class WebPlatformAdapter {
       return `✅ Navigated to "${href}"${href !== screen ? ` for "${screen}"` : ''}`;
     }
     if (href && typeof window !== 'undefined') {
+      // Already on this exact URL → do NOT reload. A full reload here aborts the
+      // server run and triggers a resume; if the model then re-picks the current
+      // page (common on MPAs), that becomes a navigate→reload→resume loop. Treat
+      // navigating to the current page as a no-op so the agent reads it instead.
+      if (this._isSameDocument(href)) {
+        return `✅ Already on "${href}" — staying here.`;
+      }
       // No SPA router adapter → this is a real navigation. pushState only rewrites
       // the URL bar WITHOUT loading the page, which silently breaks multi-page sites
       // (content never changes) and skips the beforeunload resume-save. location.assign
@@ -980,6 +987,17 @@ export class WebPlatformAdapter {
       return `✅ Navigated to "${screen}"`;
     }
     return `❌ Cannot navigate to "${screen}" on web without a router adapter or absolute path.`;
+  }
+  // True when href resolves to the page we're already on (same origin + path +
+  // query + hash, ignoring trailing-slash and percent-encoding differences).
+  _isSameDocument(href) {
+    try {
+      const norm = (u) =>
+        u.origin + decodeURIComponent(u.pathname).replace(/\/+$/, '') + u.search + u.hash;
+      return norm(new URL(href, window.location.href)) === norm(new URL(window.location.href));
+    } catch {
+      return false;
+    }
   }
   resolveNavigationHref(screen, params) {
     const target = typeof screen === 'string' ? screen.trim() : '';

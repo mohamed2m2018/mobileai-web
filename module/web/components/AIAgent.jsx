@@ -1278,6 +1278,10 @@ export function AIAgent({
   const isLoadingRef = useRef(false);
   const activeGoalRef = useRef(null);
   const didResumeRef = useRef(false);
+  // Tracks whether the user granted a workflow-covering approval in the current
+  // task, so it can be carried across an MPA reload+resume (each resume is a fresh
+  // server session that otherwise re-asks "May I tap ...?" for the same action).
+  const workflowApprovedRef = useRef(false);
   const [statusText, setStatusText] = useState('');
   const [lastResult, setLastResult] = useState(null);
   const [input, setInput] = useState('');
@@ -1594,6 +1598,10 @@ export function AIAgent({
       if (!pending || pending.kind !== 'approval') return;
       if (visibleReply) {
         appendUserMessage(visibleReply);
+      }
+      // Remember a granted approval so it survives an MPA reload+resume.
+      if (token === APPROVAL_GRANTED_TOKEN) {
+        workflowApprovedRef.current = true;
       }
       setPendingPrompt(null);
       pending.resolve(token);
@@ -2479,8 +2487,10 @@ export function AIAgent({
       setIsLoading(true);
       isLoadingRef.current = true;
       activeGoalRef.current = trimmed || displayText;
-      // A fresh user goal supersedes any pending resume from a prior navigation.
+      // A fresh user goal supersedes any pending resume from a prior navigation,
+      // and re-gates approvals (the prior task's "Allow" must not carry over).
       clearResumeTask(persistenceKey);
+      workflowApprovedRef.current = false;
       setStatusText('Thinking...');
       setLocalUnread(0);
       setIsOpen(true);
@@ -2523,12 +2533,15 @@ export function AIAgent({
   // continuing the task with the restored conversation as context. No new user
   // message is appended — the original goal already lives in the restored history.
   const resumeTask = useCallback(
-    async (goal) => {
+    async (goal, options) => {
       if (!goal || isLoadingRef.current) return;
       setIsOpen(true);
       setIsLoading(true);
       isLoadingRef.current = true;
       activeGoalRef.current = goal;
+      // Restore the carried approval so this resumed run doesn't re-ask, and so it
+      // carries again if this run also reloads.
+      workflowApprovedRef.current = options?.workflowApproved === true;
       setStatusText('Resuming…');
       try {
         // Frame the resume as a CONTINUATION so the agent re-checks state and
@@ -2540,7 +2553,12 @@ export function AIAgent({
           `First inspect the CURRENT page and the conversation above to see what is already done, ` +
           `then perform ONLY the remaining steps. If the request is already fully satisfied, ` +
           `briefly confirm that to the user and stop — do not repeat actions that are already done.`;
-        const rawResult = await serverClientRef.current.execute(resumeGoal, toUserHistory(messagesRef.current), undefined, serverConfig);
+        const rawResult = await serverClientRef.current.execute(
+          resumeGoal,
+          toUserHistory(messagesRef.current),
+          undefined,
+          { ...serverConfig, workflowApproved: workflowApprovedRef.current },
+        );
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2577,6 +2595,9 @@ export function AIAgent({
         goal: activeGoalRef.current,
         count: count + 1,
         ts: Date.now(),
+        // Carry a granted approval across the reload so the resumed run doesn't
+        // re-ask for the same action the user already allowed.
+        workflowApproved: workflowApprovedRef.current === true,
       });
     };
     window.addEventListener('beforeunload', onBeforeUnload);
@@ -2593,7 +2614,7 @@ export function AIAgent({
     }
     didResumeRef.current = true;
     const timer = setTimeout(() => {
-      void resumeTask(record.goal);
+      void resumeTask(record.goal, { workflowApproved: record.workflowApproved });
     }, 900);
     return () => clearTimeout(timer);
   }, [persistenceKey, resumeTask]);
