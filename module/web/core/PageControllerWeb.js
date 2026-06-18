@@ -104,6 +104,34 @@ function getClientRectsSafe(element) {
     return [];
   }
 }
+// An element's own box can be zero-area while it visually renders — a classic
+// float-collapse (an <a> whose floated children leave the parent 0-height with no
+// clearfix), display:contents, or an inline wrapper. The control is still there and
+// clickable, so fall back to the union of its visible direct children's rects.
+// Without this, isVisible/isTopElement drop a button the user can plainly see.
+function getEffectiveBoundingRect(element) {
+  if (!element || typeof element.getBoundingClientRect !== 'function') {
+    return { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
+  }
+  const own = element.getBoundingClientRect();
+  if (own.width > 0 && own.height > 0) return own;
+  let union = null;
+  const children = element.children ? Array.from(element.children) : [];
+  for (const child of children) {
+    if (typeof child.getBoundingClientRect !== 'function') continue;
+    const r = child.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) continue;
+    union = union
+      ? { top: Math.min(union.top, r.top), left: Math.min(union.left, r.left), bottom: Math.max(union.bottom, r.bottom), right: Math.max(union.right, r.right) }
+      : { top: r.top, left: r.left, bottom: r.bottom, right: r.right };
+  }
+  if (!union) return own;
+  return {
+    top: union.top, left: union.left, bottom: union.bottom, right: union.right,
+    width: union.right - union.left, height: union.bottom - union.top,
+    x: union.left, y: union.top,
+  };
+}
 function getViewportMode(config) {
   return config.viewportMode || 'full';
 }
@@ -127,10 +155,10 @@ function isFormControl(element) {
 }
 function isVisible(element, win, config = DEFAULT_CONFIG) {
   if (!win) return false;
-  const rects = getClientRectsSafe(element);
-  if (rects.length === 0) return false;
-  const hasGeometry = rects.some(rect => rect.width > 0 && rect.height > 0);
-  if (!hasGeometry) return false;
+  // Use the effective rect so a collapsed-box element with visible children
+  // (float-collapse, display:contents) is not wrongly treated as invisible.
+  const effectiveRect = getEffectiveBoundingRect(element);
+  if (effectiveRect.width <= 0 || effectiveRect.height <= 0) return false;
   if (!win.getComputedStyle) return true;
   const style = win.getComputedStyle(element);
   if (!style) return true;
@@ -145,7 +173,7 @@ function isVisible(element, win, config = DEFAULT_CONFIG) {
     return false;
   }
   if (modeRequiresViewport(config)) {
-    return rects.some(rect => rectIntersectsViewport(rect, win, config));
+    return rectIntersectsViewport(effectiveRect, win, config);
   }
   return true;
 }
@@ -154,7 +182,7 @@ function modeRequiresViewport(config) {
 }
 function isTopElement(element, win, config = DEFAULT_CONFIG) {
   if (!win || typeof element.getBoundingClientRect !== 'function') return true;
-  const rect = element.getBoundingClientRect();
+  const rect = getEffectiveBoundingRect(element);
   if (rect.width <= 0 || rect.height <= 0) return false;
   if (!rectIntersectsViewport(rect, win, {
     ...config,
