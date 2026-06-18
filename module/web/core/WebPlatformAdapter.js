@@ -595,9 +595,28 @@ export class WebPlatformAdapter {
       bubbles: true
     }));
   }
+  // Mirror the dehydrator's effective-rect logic: a control whose own box is
+  // zero-area (float-collapse, display:contents, inline wrapper) still renders via
+  // its children, so highlight where it actually appears instead of skipping it.
+  _effectiveRect(node) {
+    const own = node.getBoundingClientRect();
+    if (own && own.width > 0 && own.height > 0) return own;
+    let union = null;
+    const children = node.children ? Array.from(node.children) : [];
+    for (const child of children) {
+      if (typeof child.getBoundingClientRect !== 'function') continue;
+      const r = child.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      union = union
+        ? { left: Math.min(union.left, r.left), top: Math.min(union.top, r.top), right: Math.max(union.right, r.right), bottom: Math.max(union.bottom, r.bottom) }
+        : { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    }
+    if (!union) return own;
+    return { left: union.left, top: union.top, right: union.right, bottom: union.bottom, width: union.right - union.left, height: union.bottom - union.top };
+  }
   getViewportRect(node) {
     if (!node || typeof node.getBoundingClientRect !== 'function') return null;
-    const rect = node.getBoundingClientRect();
+    const rect = this._effectiveRect(node);
     if (!rect || rect.width <= 0 || rect.height <= 0) return null;
     let offsetX = 0;
     let offsetY = 0;
