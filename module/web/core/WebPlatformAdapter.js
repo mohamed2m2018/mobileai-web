@@ -966,8 +966,13 @@ export class WebPlatformAdapter {
       return `✅ Navigated to "${href}"${href !== screen ? ` for "${screen}"` : ''}`;
     }
     if (href && typeof window !== 'undefined') {
-      window.history.pushState({}, '', href);
-      window.dispatchEvent(new PopStateEvent('popstate'));
+      // No SPA router adapter → this is a real navigation. pushState only rewrites
+      // the URL bar WITHOUT loading the page, which silently breaks multi-page sites
+      // (content never changes) and skips the beforeunload resume-save. location.assign
+      // does a full document load for a different path, and an in-page scroll for a
+      // pure #fragment — both correct, and a full load fires beforeunload so the agent
+      // can resume the task on the next page.
+      window.location.assign(href);
       return `✅ Navigated to "${href}"${href !== screen ? ` for "${screen}"` : ''}`;
     }
     if (this.options.router?.navigate) {
