@@ -17,6 +17,7 @@ import {
 } from "../../services/ConversationService.js";
 import { VoiceService } from "../../services/VoiceService.js";
 import { initDeviceId } from "../../services/telemetry/device.js";
+import { TelemetryService, bindTelemetryService } from "../../services/telemetry/index.js";
 import { AgentContext } from "../../hooks/useAction.js";
 import { RichUIProvider } from "../../components/rich-content/RichUIContext.js";
 import { CSATSurvey } from "../../support/CSATSurvey.js";
@@ -1317,6 +1318,7 @@ function AIAgent({
   const userHasSpokenRef = useRef(false);
   const screenPollIntervalRef = useRef(null);
   const conversationIdRef = useRef(persistedState?.conversationId || null);
+  const telemetryRef = useRef(null);
   const seenMessageCountRef = useRef(messages.length);
   const syncedMessageCountRef = useRef(Array.isArray(persistedState?.messages) ? persistedState.messages.length : 0);
   const remoteConversationHydratedRef = useRef(false);
@@ -1505,6 +1507,40 @@ function AIAgent({
       cancelled = true;
     };
   }, []);
+  useEffect(() => {
+    if (typeof window === "undefined") return void 0;
+    if (!analyticsKey && !proxyUrl) return void 0;
+    const telemetry = new TelemetryService({
+      analyticsKey,
+      analyticsProxyUrl: proxyUrl,
+      analyticsProxyHeaders: proxyHeaders,
+      debug
+    });
+    telemetryRef.current = telemetry;
+    bindTelemetryService(telemetry);
+    try {
+      telemetry.setScreen(pathname || window.location?.pathname || "/");
+    } catch {
+    }
+    void telemetry.start();
+    return () => {
+      try {
+        void telemetry.stop();
+      } catch {
+      }
+      if (telemetryRef.current === telemetry) telemetryRef.current = null;
+      bindTelemetryService(null);
+    };
+  }, [analyticsKey, proxyUrl, debug]);
+  useEffect(() => {
+    if (!telemetryRef.current) return;
+    try {
+      telemetryRef.current.setScreen(
+        pathname || (typeof window !== "undefined" ? window.location?.pathname : "") || "/"
+      );
+    } catch {
+    }
+  }, [pathname]);
   const availableModes = useMemo(() => {
     const nextModes = ["text"];
     if (showVoiceTab) nextModes.push("voice");
@@ -2219,6 +2255,12 @@ function AIAgent({
         const normalized = typeof request === "string" ? { question: request, kind: "freeform" } : request;
         const question = normalized.question;
         const kind = normalized.kind || "freeform";
+        telemetryRef.current?.track("agent_trace", {
+          stage: kind === "approval" ? "approval_prompt_rendered" : "ask_user_prompt_rendered",
+          action: question,
+          kind,
+          conversationId: conversationIdRef.current || localConversationKeyRef.current
+        });
         const promptMessage = createAIMessage({
           id: `assistant-ask-${Date.now()}`,
           role: "assistant",
@@ -2408,6 +2450,12 @@ function AIAgent({
         `\u{1F4E8} Sending message in ${mode} mode: "${displayText}"${hasImages ? ` with ${userImages.length} image(s)` : ""}`
       );
       const history = messagesRef.current.concat(userMessage);
+      telemetryRef.current?.track("agent_trace", {
+        stage: "query",
+        query: trimmed || displayText,
+        mode,
+        conversationId: conversationIdRef.current || localConversationKeyRef.current
+      });
       try {
         const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, serverConfig);
         const result = normalizeExecutionResult(rawResult);
@@ -2422,8 +2470,24 @@ function AIAgent({
         setMessages((prev) => [...prev, assistantMessage]);
         setLastResult(result);
         options?.onResult?.(result);
+        telemetryRef.current?.track("agent_trace", {
+          stage: "result",
+          query: trimmed || displayText,
+          action: result.previewText || markdownToPlainText(String(result.message || "")).slice(0, 120),
+          success: result.success !== false,
+          mode,
+          conversationId: conversationIdRef.current || localConversationKeyRef.current
+        });
       } catch (err) {
         logger.warn("AIAgent", `Send did not complete: ${err?.message || err}`);
+        telemetryRef.current?.track("agent_trace", {
+          stage: "result",
+          query: trimmed || displayText,
+          success: false,
+          error: err?.message || String(err),
+          mode,
+          conversationId: conversationIdRef.current || localConversationKeyRef.current
+        });
       } finally {
         requestStartedAtRef.current = 0;
         setIsLoading(false);
