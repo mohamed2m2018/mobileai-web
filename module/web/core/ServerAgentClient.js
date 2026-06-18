@@ -150,6 +150,26 @@ export class ServerAgentClient {
         ws.onclose = (event) => {
           if (this._ws !== ws) return; // a terminal handler already settled + cleaned up
           if (this._aborted || !this._resolve) { this._cleanup(); return; }
+          // Terminal auth-gate closes — reconnecting can't help, so DON'T loop
+          // "Reconnecting…". Resolve with a friendly assistant message instead.
+          //   4429 → out of credits / at capacity ("all agents busy")
+          //   4401/4403 → bad key / forbidden (config issue)
+          if (event.code === 4429 || event.code === 4401 || event.code === 4403) {
+            const text = event.code === 4429
+              ? "All our agents are busy right now. We'll get back to you shortly — please try again in a little while."
+              : "I can't reach the assistant right now. Please try again later.";
+            logger.warn('ServerAgentClient', `WS closed (code ${event.code}, ${event.reason || 'no reason'}) — not reconnecting; surfacing message`);
+            this.callbacks.onStatusUpdate?.('');
+            this.callbacks.onActingOnPage?.(false);
+            const resolve = this._resolve;
+            this._resolve = null;
+            this._reject = null;
+            if (resolve) {
+              resolve({ success: false, message: text, previewText: text, reply: text });
+            }
+            this._cleanup();
+            return;
+          }
           // Unexpected close before any terminal message → reconnect (bounded).
           if (attempt < MAX_RECONNECTS) {
             this._ws = null;
