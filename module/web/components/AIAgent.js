@@ -1734,6 +1734,7 @@ function AIAgent({
         }
         setGuide({
           rect: payload.targetRect,
+          node: payload.targetNode || null,
           message: payload.message,
           action: payload.action || null
         });
@@ -1752,6 +1753,41 @@ function AIAgent({
     }),
     [captureScreenshot, confirmSelectors, ignoreSelectors, pathname, routerAdapter, scanRoot]
   );
+  const guideNode = guide?.node || null;
+  useEffect(() => {
+    if (!guideNode) return void 0;
+    const view = guideNode.ownerDocument?.defaultView || (typeof window !== "undefined" ? window : null);
+    if (!view) return void 0;
+    let rafId = 0;
+    const sync = () => {
+      rafId = 0;
+      const next = platformAdapter.getViewportRect(guideNode);
+      if (!next) return;
+      setGuide((prev) => {
+        if (!prev || prev.node !== guideNode) return prev;
+        const r = prev.rect;
+        if (r && Math.abs(r.left - next.left) < 0.5 && Math.abs(r.top - next.top) < 0.5 && Math.abs(r.width - next.width) < 0.5 && Math.abs(r.height - next.height) < 0.5) {
+          return prev;
+        }
+        return { ...prev, rect: next };
+      });
+    };
+    const schedule = () => {
+      if (rafId) return;
+      rafId = view.requestAnimationFrame ? view.requestAnimationFrame(sync) : setTimeout(sync, 16);
+    };
+    view.addEventListener("scroll", schedule, true);
+    view.addEventListener("resize", schedule);
+    schedule();
+    return () => {
+      view.removeEventListener("scroll", schedule, true);
+      view.removeEventListener("resize", schedule);
+      if (rafId) {
+        if (view.cancelAnimationFrame) view.cancelAnimationFrame(rafId);
+        else clearTimeout(rafId);
+      }
+    };
+  }, [guideNode, platformAdapter]);
   const appendIncomingSupportReply = useCallback((ticketId, reply) => {
     const timestamp = Date.now();
     const assistantMessage = toSupportMessage(ticketId, "assistant", reply, timestamp);
@@ -4411,7 +4447,7 @@ ${screenContext}`;
                 border: "2px solid #0D9373",
                 background: guide.action ? "rgba(124, 104, 245, 0.14)" : "transparent",
                 boxShadow: guide.action ? "0 0 0 4px rgba(124, 104, 245, 0.22), 0 10px 30px rgba(124, 104, 245, 0.32)" : "0 0 0 9999px rgba(10, 12, 18, 0.24)",
-                transition: "left 0.12s ease, top 0.12s ease, width 0.12s ease, height 0.12s ease"
+                transition: "width 0.12s ease, height 0.12s ease"
               }
             }
           ),

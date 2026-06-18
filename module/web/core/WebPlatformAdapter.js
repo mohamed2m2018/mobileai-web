@@ -627,6 +627,7 @@ export class WebPlatformAdapter {
     }
     this.options.onGuide({
       targetRect: rect,
+      targetNode: node,
       message: '',
       action,
       autoRemoveAfterMs: durationMs + 400
@@ -878,6 +879,7 @@ export class WebPlatformAdapter {
     if (!rect) return `❌ Element [${resolvedIndex}] has no visible layout.`;
     this.options.onGuide?.({
       targetRect: rect,
+      targetNode: node,
       message: label,
       action,
       autoRemoveAfterMs

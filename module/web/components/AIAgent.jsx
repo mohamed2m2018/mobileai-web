@@ -1854,6 +1854,7 @@ export function AIAgent({
           }
           setGuide({
             rect: payload.targetRect,
+            node: payload.targetNode || null,
             message: payload.message,
             action: payload.action || null,
           });
@@ -1875,6 +1876,52 @@ export function AIAgent({
       }),
     [captureScreenshot, confirmSelectors, ignoreSelectors, pathname, routerAdapter, scanRoot],
   );
+  // Keep the highlight glued to its target while it is visible. The rect is captured
+  // once when the guide is shown; without this, scrolling (page or any nested scroll
+  // container) or a resize leaves the fixed-position border behind at stale viewport
+  // coords. We re-read the live node's rect on scroll/resize, coalesced via rAF.
+  const guideNode = guide?.node || null;
+  useEffect(() => {
+    if (!guideNode) return undefined;
+    const view = guideNode.ownerDocument?.defaultView || (typeof window !== 'undefined' ? window : null);
+    if (!view) return undefined;
+    let rafId = 0;
+    const sync = () => {
+      rafId = 0;
+      const next = platformAdapter.getViewportRect(guideNode);
+      if (!next) return; // node detached / no layout — keep last known rect
+      setGuide((prev) => {
+        if (!prev || prev.node !== guideNode) return prev;
+        const r = prev.rect;
+        if (
+          r &&
+          Math.abs(r.left - next.left) < 0.5 &&
+          Math.abs(r.top - next.top) < 0.5 &&
+          Math.abs(r.width - next.width) < 0.5 &&
+          Math.abs(r.height - next.height) < 0.5
+        ) {
+          return prev;
+        }
+        return { ...prev, rect: next };
+      });
+    };
+    const schedule = () => {
+      if (rafId) return;
+      rafId = view.requestAnimationFrame ? view.requestAnimationFrame(sync) : setTimeout(sync, 16);
+    };
+    // capture:true so scrolls inside any nested scroll container reach us (scroll does not bubble).
+    view.addEventListener('scroll', schedule, true);
+    view.addEventListener('resize', schedule);
+    schedule(); // reconcile once in case the captured rect was already stale
+    return () => {
+      view.removeEventListener('scroll', schedule, true);
+      view.removeEventListener('resize', schedule);
+      if (rafId) {
+        if (view.cancelAnimationFrame) view.cancelAnimationFrame(rafId);
+        else clearTimeout(rafId);
+      }
+    };
+  }, [guideNode, platformAdapter]);
   const appendIncomingSupportReply = useCallback((ticketId, reply) => {
     const timestamp = Date.now();
     const assistantMessage = toSupportMessage(ticketId, 'assistant', reply, timestamp);
@@ -4528,7 +4575,7 @@ export function AIAgent({
                   boxShadow: guide.action
                     ? '0 0 0 4px rgba(124, 104, 245, 0.22), 0 10px 30px rgba(124, 104, 245, 0.32)'
                     : '0 0 0 9999px rgba(10, 12, 18, 0.24)',
-                  transition: 'left 0.12s ease, top 0.12s ease, width 0.12s ease, height 0.12s ease',
+                  transition: 'width 0.12s ease, height 0.12s ease',
                 }}
               />
               {guide.action ? (
