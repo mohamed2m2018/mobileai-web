@@ -51,91 +51,121 @@ export class ServerAgentClient {
   async execute(userMessage, chatHistory, userImages, config) {
     this._supersedePrevious();
     this._aborted = false;
-    const snapshot = this.adapter.getScreenSnapshot();
-    let screenshot;
-    if (config?.enableScreenshots) {
-      screenshot = await this.adapter.captureScreenshot();
-    }
 
     const wsUrl = `${this.serverUrl}?key=${encodeURIComponent(this.analyticsKey)}`;
+    // Auto-reconnect on an UNEXPECTED close — the socket died before a terminal
+    // `done`/`error` (server restart/deploy, network drop, idle timeout). A
+    // server-sent `error` (deterministic failure) runs _handleError first, which
+    // nulls _resolve and _ws, so its later close is ignored here — we never
+    // crash-loop a request the server rejects. Bounded + backoff avoids storms.
+    const MAX_RECONNECTS = 2;
 
     return new Promise((resolve, reject) => {
       this._resolve = resolve;
       this._reject = reject;
 
-      const ws = new WebSocket(wsUrl);
-      this._ws = ws;
-
-      ws.onopen = () => {
-        if (this._ws !== ws) return;
-        try {
-          const startMsg = {
-            type: 'start',
-            userMessage,
-            chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
-            // Carried across an MPA reload+resume: a workflow approval the user
-            // already granted, so the resumed server session doesn't re-prompt.
-            workflowApproved: config?.workflowApproved === true,
-            screenState: {
-              screenName: snapshot.screenName,
-              availableScreens: snapshot.availableScreens,
-              elementsText: snapshot.elementsText,
-              elements: snapshot.elements.map(e => ({
-                index: e.index,
-                type: e.type,
-                label: e.label,
-                requiresConfirmation: e.requiresConfirmation,
-                zoneId: e.zoneId,
-                props: this._safeProps(e.props),
-              })),
-            },
-            screenshot,
-            userImages,
-            config: {
-              interactionMode: config?.interactionMode || 'copilot',
-              language: config?.language,
-              maxSteps: config?.maxSteps,
-              enableScreenshots: config?.enableScreenshots,
-              enableKnowledge: config?.enableKnowledge,
-              enableWebSearch: config?.enableWebSearch,
-              customTools: config?.customTools,
-              screenMap: config?.screenMap,
-              intentManifest: config?.intentManifest,
-              supportStyle: config?.supportStyle,
-            },
-          };
-          ws.send(JSON.stringify(startMsg));
-        } catch (err) {
-          logger.error('ServerAgentClient', `Failed to send start message: ${err?.message}`);
-          reject(err);
-          this._cleanup();
-        }
-      };
-
-      ws.onmessage = (event) => {
-        if (this._ws !== ws || this._aborted) return;
-        try {
-          const msg = JSON.parse(event.data);
-          this._handleServerMessage(msg);
-        } catch (err) {
-          logger.warn('ServerAgentClient', `Bad message: ${err?.message}`);
-        }
-      };
-
-      ws.onerror = (err) => {
-        if (this._ws !== ws) return;
-        logger.error('ServerAgentClient', `WS error: ${err?.message || 'unknown'}`);
-        reject(new Error('WebSocket connection failed'));
+      const fail = (err) => {
+        this._resolve = null;
+        this._reject = null;
+        reject(err);
         this._cleanup();
       };
 
-      ws.onclose = (event) => {
-        if (this._ws !== ws) return;
-        if (!this._aborted && this._resolve) {
-          reject(new Error(`Connection closed unexpectedly (code: ${event.code})`));
+      const openConnection = async (attempt) => {
+        if (this._aborted || !this._resolve) return;
+        // Re-capture the screen each attempt — the page may have changed since
+        // the drop (a reconnect restarts the run from the current state).
+        const snapshot = this.adapter.getScreenSnapshot();
+        let screenshot;
+        if (config?.enableScreenshots) {
+          try { screenshot = await this.adapter.captureScreenshot(); } catch { /* ignore */ }
         }
-        this._cleanup();
+        if (this._aborted || !this._resolve) return;
+
+        const ws = new WebSocket(wsUrl);
+        this._ws = ws;
+
+        ws.onopen = () => {
+          if (this._ws !== ws) return;
+          try {
+            const startMsg = {
+              type: 'start',
+              userMessage,
+              chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
+              // Carried across an MPA reload+resume: a workflow approval the user
+              // already granted, so the resumed server session doesn't re-prompt.
+              workflowApproved: config?.workflowApproved === true,
+              screenState: {
+                screenName: snapshot.screenName,
+                availableScreens: snapshot.availableScreens,
+                elementsText: snapshot.elementsText,
+                elements: snapshot.elements.map(e => ({
+                  index: e.index,
+                  type: e.type,
+                  label: e.label,
+                  requiresConfirmation: e.requiresConfirmation,
+                  zoneId: e.zoneId,
+                  props: this._safeProps(e.props),
+                })),
+              },
+              screenshot,
+              userImages,
+              config: {
+                interactionMode: config?.interactionMode || 'copilot',
+                language: config?.language,
+                maxSteps: config?.maxSteps,
+                enableScreenshots: config?.enableScreenshots,
+                enableKnowledge: config?.enableKnowledge,
+                enableWebSearch: config?.enableWebSearch,
+                customTools: config?.customTools,
+                screenMap: config?.screenMap,
+                intentManifest: config?.intentManifest,
+                supportStyle: config?.supportStyle,
+              },
+            };
+            ws.send(JSON.stringify(startMsg));
+          } catch (err) {
+            logger.error('ServerAgentClient', `Failed to send start message: ${err?.message}`);
+            fail(err);
+          }
+        };
+
+        ws.onmessage = (event) => {
+          if (this._ws !== ws || this._aborted) return;
+          try {
+            const msg = JSON.parse(event.data);
+            this._handleServerMessage(msg);
+          } catch (err) {
+            logger.warn('ServerAgentClient', `Bad message: ${err?.message}`);
+          }
+        };
+
+        ws.onerror = (err) => {
+          if (this._ws !== ws) return;
+          // Log only — the browser always fires onclose next, where the
+          // reconnect-or-reject decision is made.
+          logger.warn('ServerAgentClient', `WS error: ${err?.message || 'unknown'}`);
+        };
+
+        ws.onclose = (event) => {
+          if (this._ws !== ws) return; // a terminal handler already settled + cleaned up
+          if (this._aborted || !this._resolve) { this._cleanup(); return; }
+          // Unexpected close before any terminal message → reconnect (bounded).
+          if (attempt < MAX_RECONNECTS) {
+            this._ws = null;
+            const delay = 400 * Math.pow(2, attempt) + Math.floor(Math.random() * 300);
+            logger.warn('ServerAgentClient', `WS closed (code ${event.code}) mid-run — reconnecting ${attempt + 1}/${MAX_RECONNECTS} in ${delay}ms`);
+            this.callbacks.onStatusUpdate?.('Reconnecting…');
+            setTimeout(() => {
+              if (!this._aborted && this._resolve) openConnection(attempt + 1);
+            }, delay);
+            return;
+          }
+          fail(new Error(`Connection closed unexpectedly (code: ${event.code})`));
+        };
       };
+
+      openConnection(0);
     });
   }
 
