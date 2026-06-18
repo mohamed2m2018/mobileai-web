@@ -240,6 +240,13 @@ function getAssociatedLabelText(element, doc) {
 function getInputLabel(element) {
   const associatedLabel = getAssociatedLabelText(element, element.ownerDocument);
   if (associatedLabel) return associatedLabel;
+  // For button-like inputs the `value` IS the visible button text — prefer it over
+  // the form-field `name`, which is often a framework id (e.g. ctl00$Body$btnBuy).
+  const inputType = (element.getAttribute('type') || element.type || '').toLowerCase();
+  if (inputType === 'submit' || inputType === 'button' || inputType === 'reset') {
+    const value = typeof element.value === 'string' ? element.value.trim() : '';
+    if (value) return value;
+  }
   const fallback = 'placeholder' in element && typeof element.placeholder === 'string' ? element.placeholder.trim() : '';
   if (fallback) return fallback;
   if (isSelectElement(element)) {
@@ -348,6 +355,11 @@ function isWeakLabel(label, element) {
   if (text.toLowerCase() === tag) return true;
   if (text === 'Link' || text === 'Button' || text === 'Tab' || text === 'Menu item') return true;
   if (/^(javascript:|mailto:|tel:|#|https?:\/\/|\/)/i.test(text)) return true;
+  // Framework-generated control identifiers are not human labels — e.g. ASP.NET
+  // names ("ctl00$Body$btnBuy") or __doPostBack/__VIEWSTATE-style tokens. A real
+  // label virtually never contains a `$` or a `__` run, so treat those as weak and
+  // let the nearby/context fallback name the control instead of the raw id.
+  if (text.includes('$') || text.includes('__')) return true;
   return false;
 }
 // Last-resort label for an unlabeled control: climb a few ancestors and borrow
@@ -372,6 +384,27 @@ function deriveContextLabel(element, win) {
     current = current.parentElement;
   }
   return '';
+}
+// Final clean fallback for a control with no text/value/aria/context: humanize the
+// last segment of its framework name/id. "ctl00$Body$btnBuy" -> "Buy",
+// "ctl00$SearchControl2$lbtn_Search" -> "Search". Strips a leading control-type
+// prefix (btn/lbtn/txt/…) — a generic naming convention, not site-specific — so the
+// agent and user see a real word instead of "ctl00$Body$btnBuy".
+const CONTROL_NAME_PREFIXES = new Set(['btn', 'lbtn', 'lnk', 'lbl', 'txt', 'ddl', 'chk', 'rdo', 'hf', 'img', 'ph', 'pnl', 'rpt', 'gv', 'dl', 'fv', 'ctl', 'cb', 'rb']);
+function humanizeControlName(element) {
+  const raw = (element.getAttribute && (element.getAttribute('name') || element.id)) || '';
+  if (!raw) return '';
+  // Last $-segment, then last _/:/. token (drops ASP.NET container path + the
+  // common type prefix when separated by an underscore).
+  let seg = raw.split('$').pop().split(/[:.]/).pop();
+  seg = seg.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  let words = seg.split(/[\s_-]+/).filter(Boolean);
+  if (words.length > 1 && CONTROL_NAME_PREFIXES.has(words[0].toLowerCase())) {
+    words = words.slice(1);
+  }
+  const out = words.join(' ').trim();
+  if (!out || /^[0-9]+$/.test(out) || out.length < 2) return '';
+  return out.charAt(0).toUpperCase() + out.slice(1);
 }
 function getRouteHref(element, win) {
   if (!isAnchorElement(element)) return '';
@@ -1068,6 +1101,7 @@ export class PageControllerWeb {
         ? (metadata.nearbyText.find((text) => text && !isWeakLabel(text, element))
             || deriveContextLabel(element, win)
             || metadata.parentSectionLabel
+            || humanizeControlName(element)
             || ownLabel)
         : ownLabel;
       const interactive = {
