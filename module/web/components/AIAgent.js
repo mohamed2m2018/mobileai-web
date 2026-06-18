@@ -504,7 +504,11 @@ function loadPersistedChatState(storageKey) {
     return {
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       conversationId: typeof parsed.conversationId === "string" ? parsed.conversationId : null,
-      isOpen: parsed.isOpen === true
+      isOpen: parsed.isOpen === true,
+      // Stable local id for grouping an anonymous (no server conversationId)
+      // conversation in the history list. Persisted so it survives MPA reloads
+      // instead of being regenerated each mount (which fragments history).
+      localConversationKey: typeof parsed.localConversationKey === "string" ? parsed.localConversationKey : null
     };
   } catch {
     return null;
@@ -1231,7 +1235,11 @@ function AIAgent({
   const supportInputRef = useRef(null);
   const [isOpen, setIsOpen] = useState(persistedState?.isOpen ?? defaultOpen);
   const [popupPosition, setPopupPosition] = useState(null);
-  const [localConversationKey, setLocalConversationKey] = useState(() => `local-${Date.now()}`);
+  const [localConversationKey, setLocalConversationKey] = useState(
+    () => persistedState?.localConversationKey || `local-${Date.now()}`
+  );
+  const localConversationKeyRef = useRef(localConversationKey);
+  const isOpenRef = useRef(persistedState?.isOpen ?? defaultOpen);
   const [pendingPrompt, setPendingPrompt] = useState(null);
   const [consentRequest, setConsentRequest] = useState(null);
   const [guide, setGuide] = useState(null);
@@ -1444,6 +1452,12 @@ function AIAgent({
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
+  useEffect(() => {
+    localConversationKeyRef.current = localConversationKey;
+  }, [localConversationKey]);
   useEffect(() => {
     selectedTicketIdRef.current = selectedTicketId;
   }, [selectedTicketId]);
@@ -1665,6 +1679,7 @@ function AIAgent({
     persistChatState(persistenceKey, {
       conversationId,
       isOpen,
+      localConversationKey,
       messages: messages.map((message) => ({
         id: message.id,
         role: message.role,
@@ -1674,13 +1689,16 @@ function AIAgent({
         promptKind: message.promptKind
       }))
     });
-  }, [conversationId, isOpen, messages, persistenceKey]);
+  }, [conversationId, isOpen, localConversationKey, messages, persistenceKey]);
   useEffect(() => {
     const activeConversationId = conversationId || localConversationKey;
     if (!messages.length || !activeConversationId) return;
     setConversationHistory((prev) => {
       const nextEntry = buildConversationSummary(activeConversationId, messages);
-      const next = [nextEntry, ...prev.filter((entry) => entry.id !== activeConversationId)].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 20);
+      const next = [
+        nextEntry,
+        ...prev.filter((entry) => entry.id !== activeConversationId && entry.id !== localConversationKey)
+      ].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 20);
       persistConversationHistory(persistenceKey, next);
       return next;
     });
@@ -2432,9 +2450,25 @@ function AIAgent({
     },
     [persistenceKey, serverClient, serverConfig]
   );
+  const flushChatState = useCallback(() => {
+    persistChatState(persistenceKey, {
+      conversationId: conversationIdRef.current,
+      isOpen: isOpenRef.current,
+      localConversationKey: localConversationKeyRef.current,
+      messages: (messagesRef.current || []).map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        previewText: message.previewText,
+        timestamp: message.timestamp,
+        promptKind: message.promptKind
+      }))
+    });
+  }, [persistenceKey]);
   useEffect(() => {
     if (typeof window === "undefined") return void 0;
-    const onBeforeUnload = () => {
+    const onPageHide = () => {
+      flushChatState();
       if (!isLoadingRef.current || !activeGoalRef.current) return;
       const prev = loadResumeTask(persistenceKey);
       const count = prev ? prev.count : 0;
@@ -2448,9 +2482,13 @@ function AIAgent({
         workflowApproved: workflowApprovedRef.current === true
       });
     };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [persistenceKey]);
+    window.addEventListener("beforeunload", onPageHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("beforeunload", onPageHide);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [persistenceKey, flushChatState]);
   useEffect(() => {
     if (didResumeRef.current) return void 0;
     const record = loadResumeTask(persistenceKey);

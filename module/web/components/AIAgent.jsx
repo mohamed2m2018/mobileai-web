@@ -503,6 +503,11 @@ function loadPersistedChatState(storageKey) {
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       conversationId: typeof parsed.conversationId === 'string' ? parsed.conversationId : null,
       isOpen: parsed.isOpen === true,
+      // Stable local id for grouping an anonymous (no server conversationId)
+      // conversation in the history list. Persisted so it survives MPA reloads
+      // instead of being regenerated each mount (which fragments history).
+      localConversationKey:
+        typeof parsed.localConversationKey === 'string' ? parsed.localConversationKey : null,
     };
   } catch {
     return null;
@@ -1291,7 +1296,11 @@ export function AIAgent({
   const supportInputRef = useRef(null);
   const [isOpen, setIsOpen] = useState(persistedState?.isOpen ?? defaultOpen);
   const [popupPosition, setPopupPosition] = useState(null);
-  const [localConversationKey, setLocalConversationKey] = useState(() => `local-${Date.now()}`);
+  const [localConversationKey, setLocalConversationKey] = useState(
+    () => persistedState?.localConversationKey || `local-${Date.now()}`,
+  );
+  const localConversationKeyRef = useRef(localConversationKey);
+  const isOpenRef = useRef(persistedState?.isOpen ?? defaultOpen);
   const [pendingPrompt, setPendingPrompt] = useState(null);
   // U2 — styled in-panel AI consent (replaces window.confirm). Holds the pending
   // promise resolver so the Allow / Don't-Allow buttons settle the same promise
@@ -1533,6 +1542,12 @@ export function AIAgent({
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
+  useEffect(() => {
+    localConversationKeyRef.current = localConversationKey;
+  }, [localConversationKey]);
   useEffect(() => {
     selectedTicketIdRef.current = selectedTicketId;
   }, [selectedTicketId]);
@@ -1777,6 +1792,7 @@ export function AIAgent({
     persistChatState(persistenceKey, {
       conversationId,
       isOpen,
+      localConversationKey,
       messages: messages.map((message) => ({
         id: message.id,
         role: message.role,
@@ -1786,13 +1802,20 @@ export function AIAgent({
         promptKind: message.promptKind,
       })),
     });
-  }, [conversationId, isOpen, messages, persistenceKey]);
+  }, [conversationId, isOpen, localConversationKey, messages, persistenceKey]);
   useEffect(() => {
     const activeConversationId = conversationId || localConversationKey;
     if (!messages.length || !activeConversationId) return;
     setConversationHistory((prev) => {
       const nextEntry = buildConversationSummary(activeConversationId, messages);
-      const next = [nextEntry, ...prev.filter((entry) => entry.id !== activeConversationId)]
+      // Drop the prior entry for this conversation AND the pre-server local stub:
+      // a conversation starts keyed by localConversationKey (anonymous), then
+      // re-keys to the server conversationId once it's assigned mid-run. Filtering
+      // both ids merges the stub into the server entry instead of orphaning it.
+      const next = [
+        nextEntry,
+        ...prev.filter((entry) => entry.id !== activeConversationId && entry.id !== localConversationKey),
+      ]
         .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
         .slice(0, 20);
       persistConversationHistory(persistenceKey, next);
@@ -2629,11 +2652,36 @@ export function AIAgent({
     },
     [persistenceKey, serverClient, serverConfig],
   );
-  // Before a full reload during an active run (the agent navigated on an MPA),
-  // stash the goal so the next page can resume it. Capped to avoid nav loops.
+  // Before any full reload (e.g. an MPA navigation — agent-driven OR a user
+  // clicking a normal link), flush the live thread to sessionStorage
+  // synchronously. The persist effect above runs *after* React commits, so a
+  // navigation that fires mid-render (the agent's navigate tool calls
+  // window.location.assign while a turn is still awaiting) could otherwise land
+  // on the next page before the latest messages were written — leaving an empty
+  // thread that renders the "How can I help?" greeting. Reading from refs makes
+  // the flush independent of React's async commit cycle.
+  const flushChatState = useCallback(() => {
+    persistChatState(persistenceKey, {
+      conversationId: conversationIdRef.current,
+      isOpen: isOpenRef.current,
+      localConversationKey: localConversationKeyRef.current,
+      messages: (messagesRef.current || []).map((message) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        previewText: message.previewText,
+        timestamp: message.timestamp,
+        promptKind: message.promptKind,
+      })),
+    });
+  }, [persistenceKey]);
+  // Stash the active goal too, so a reload during an active run (the agent
+  // navigated on an MPA) can resume it. Capped to avoid nav loops.
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
-    const onBeforeUnload = () => {
+    const onPageHide = () => {
+      // Always flush the thread first — survives both agent-driven and manual nav.
+      flushChatState();
       if (!isLoadingRef.current || !activeGoalRef.current) return;
       const prev = loadResumeTask(persistenceKey);
       const count = prev ? prev.count : 0;
@@ -2647,9 +2695,15 @@ export function AIAgent({
         workflowApproved: workflowApprovedRef.current === true,
       });
     };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [persistenceKey]);
+    window.addEventListener('beforeunload', onPageHide);
+    // pagehide also fires on bfcache eviction / mobile tab switches where
+    // beforeunload may not — belt-and-suspenders for the flush.
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('beforeunload', onPageHide);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [persistenceKey, flushChatState]);
   // On a fresh page load, resume a stashed task once (if fresh + under the cap).
   useEffect(() => {
     if (didResumeRef.current) return undefined;
