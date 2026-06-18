@@ -153,6 +153,12 @@ export class ServerAgentClient {
       case 'capture_screenshot':
         await this._handleScreenshotRequest();
         break;
+      case 'status':
+        // Live per-step progress for the thinking overlay. The server runs the
+        // agent loop, so it drives the overlay text ("Looking at your screen…",
+        // "Scrolling down…", "Writing response…"); the client only renders it.
+        this.callbacks.onStatusUpdate?.(msg.label || '');
+        break;
       case 'done':
         this._handleDone(msg);
         break;
@@ -165,7 +171,9 @@ export class ServerAgentClient {
   async _handleAction(msg) {
     const { toolName, args, reasoning, requestScreenshot } = msg;
 
-    this.callbacks.onStatusUpdate?.(`${toolName}...`);
+    // Note: the overlay label is set by the preceding 'status' message (which the
+    // server sends just before this action). Don't overwrite it with a raw
+    // "toolName..." here — that regressed the friendly "thinking" labels.
     this.callbacks.onActingOnPage?.(true);
 
     if (reasoning?.plan) {
