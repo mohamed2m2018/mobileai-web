@@ -309,6 +309,42 @@ function getElementLabel(element, doc) {
 function getElementName(element, doc) {
   return normalizeText(getLabelFromAria(element, doc) || element.getAttribute('title') || '');
 }
+// A label is "weak" when it carries no human meaning: empty, a bare tag/role,
+// the generic getElementLabel fallbacks, or a raw href used as a last resort
+// (javascript: action, #anchor, mailto/tel, or a bare URL/path). Such controls
+// — common as icon-only or empty <a> buy-buttons — need a nearby-text fallback.
+function isWeakLabel(label, element) {
+  const text = typeof label === 'string' ? label.trim() : '';
+  if (!text) return true;
+  const tag = element.tagName ? element.tagName.toLowerCase() : '';
+  if (text.toLowerCase() === tag) return true;
+  if (text === 'Link' || text === 'Button' || text === 'Tab' || text === 'Menu item') return true;
+  if (/^(javascript:|mailto:|tel:|#|https?:\/\/|\/)/i.test(text)) return true;
+  return false;
+}
+// Last-resort label for an unlabeled control: climb a few ancestors and borrow
+// the nearest concise descriptive text (e.g. a product card's title/price that
+// wraps an icon-only buy button). Skips text inside OTHER nested interactives so
+// we describe THIS control's context, not a sibling button.
+function deriveContextLabel(element, win) {
+  let current = element.parentElement;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    // Include nested-link text (the card title is often a link) but rely on
+    // collectTextSnippets' visibility filter. We stop at the first ancestor that
+    // yields any text — the tightest wrapper — so we describe THIS item, not the
+    // whole list. The truncate caps run-on containers.
+    const snippets = collectTextSnippets(current, win, {
+      minLength: 3,
+      maxItems: 4,
+      skipNestedInteractive: false,
+      stopAtInteractiveBoundary: false
+    });
+    const text = normalizeText(snippets.join(' '));
+    if (text) return truncateText(text, 120);
+    current = current.parentElement;
+  }
+  return '';
+}
 function getRouteHref(element, win) {
   if (!isAnchorElement(element)) return '';
   const rawHref = element.getAttribute('href') || '';
@@ -995,10 +1031,21 @@ export class PageControllerWeb {
         parentSectionLabel: getNearestSectionLabel(element, element.ownerDocument),
         topLayer
       };
+      const ownLabel = getElementLabel(element, element.ownerDocument);
+      // When an element has no usable own-label, derive one from the visible text
+      // in/around it (already computed for metadata). Sites ship icon-only or empty
+      // <a> buy-buttons whose meaning lives in adjacent text — surface it so the
+      // agent can name the control instead of receiving a blank or a raw href.
+      const label = isWeakLabel(ownLabel, element)
+        ? (metadata.nearbyText.find((text) => text && !isWeakLabel(text, element))
+            || deriveContextLabel(element, win)
+            || metadata.parentSectionLabel
+            || ownLabel)
+        : ownLabel;
       const interactive = {
         index: this.interactives.length,
         type: interactiveType,
-        label: getElementLabel(element, element.ownerDocument),
+        label,
         aiPriority: element.getAttribute('data-twomilia-priority') || element.getAttribute('data-ai-priority') || undefined,
         zoneId: getZoneId(element),
         fiberNode: element,
