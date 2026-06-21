@@ -274,7 +274,12 @@ export class ServerAgentClient {
       output = await this._withTimeout(
         Promise.resolve().then(() => this.adapter.executeAction(intent)),
         ACTION_TIMEOUT_MS,
-        `⌛ ${toolName} timed out after ${ACTION_TIMEOUT_MS}ms`,
+        // A timeout means "didn't confirm in time" — NOT "didn't happen". Tell the
+        // agent to verify against the fresh screen below and retry only if needed, so
+        // it recovers the step without blindly re-firing a mutation (double-submit).
+        `⌛ ${toolName} did not confirm within ${Math.round(ACTION_TIMEOUT_MS / 1000)}s. ` +
+          `It may or may not have taken effect — check the CURRENT screen below; if the ` +
+          `intended change is not visible, retry the same action, otherwise continue.`,
       );
       if (output == null) output = `✅ ${toolName} executed`;
     } catch (err) {
