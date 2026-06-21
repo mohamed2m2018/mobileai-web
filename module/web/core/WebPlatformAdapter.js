@@ -84,13 +84,13 @@ function findScrollableTarget(node, win) {
   return null;
 }
 // True when the node is part of the agent's own UI (the chat widget), which is
-// marked with data-mobileai-ignore. Used to keep page scrolls from targeting
+// marked with data-ai-ignore. Used to keep page scrolls from targeting
 // the widget's scrollable chat panel — when the widget has focus its container
 // would otherwise hijack a "scroll the page" request (e.g. on an article page).
 function isInsideAgentUI(node) {
   let current = isHTMLElementLike(node) ? node : null;
   while (current) {
-    if (current.getAttribute?.('data-mobileai-ignore') != null) return true;
+    if (current.getAttribute?.('data-ai-ignore') != null) return true;
     current = current.parentElement;
   }
   return false;
@@ -1030,7 +1030,7 @@ export class WebPlatformAdapter {
     const queryRoot = isDocumentNode(root) ? root : root || doc;
     let best = null;
     collectRouteAnchors(queryRoot).forEach(anchor => {
-      if (!isHTMLElementLike(anchor) || anchor.closest?.('[data-mobileai-ignore="true"]')) return;
+      if (!isHTMLElementLike(anchor) || anchor.closest?.('[data-ai-ignore="true"]')) return;
       const href = normalizeHref(anchor.getAttribute('href') || '', anchor.ownerDocument?.defaultView || win);
       if (!href) return;
       const score = routeMatchScore(target, anchor, href);

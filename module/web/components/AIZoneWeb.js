@@ -7,7 +7,7 @@ const AIZoneWebStateContext = /* @__PURE__ */ React.createContext({
   simplified: false
 });
 function hideLowPriorityChildren(zoneElement) {
-  const hidden = Array.from(zoneElement.querySelectorAll('[data-twomilia-priority="low"], [data-ai-priority="low"]'));
+  const hidden = Array.from(zoneElement.querySelectorAll('[data-ai-priority="low"]'));
   hidden.forEach((node) => {
     if (!node.dataset.mobileaiOriginalDisplay) {
       node.dataset.mobileaiOriginalDisplay = node.style.display || "";

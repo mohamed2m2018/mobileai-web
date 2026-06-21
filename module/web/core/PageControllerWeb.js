@@ -74,9 +74,10 @@ function isIFrameElement(node) {
 function isShadowRootNode(node) {
   return !!node && typeof node === 'object' && 'host' in node && typeof node.querySelectorAll === 'function';
 }
-// data-twomilia-ignore is canonical; data-mobileai-ignore kept for back-compat.
-// Hosts can also pass `ignoreSelectors` to init() to hide regions WITHOUT markup.
-const BASE_IGNORE_SELECTOR = '[data-twomilia-ignore="true"], [data-mobileai-ignore="true"]';
+// data-ai-ignore is the single canonical attribute (mirrors data-ai-confirm /
+// data-ai-priority). Hosts can also pass `ignoreSelectors` to init() to hide
+// regions WITHOUT markup.
+const BASE_IGNORE_SELECTOR = '[data-ai-ignore="true"]';
 let configuredIgnoreSelector = '';
 function setConfiguredIgnoreSelector(selectors) {
   configuredIgnoreSelector = Array.isArray(selectors) && selectors.length ? selectors.join(', ') : '';
@@ -91,10 +92,10 @@ function isIgnoredByAgent(element) {
 }
 function isIgnoredHitTarget(target) {
   // The agent's own widget (the mount host [data-mobileai-root] and any
-  // [data-mobileai-ignore] overlay) floats over the page. It must NOT count as
+  // [data-ai-ignore] overlay) floats over the page. It must NOT count as
   // occlusion in the top-element check, otherwise the agent goes blind to any
   // element sitting behind its own panel (e.g. login fields under the chat).
-  return !!target && typeof target.closest === 'function' && !!target.closest('[data-twomilia-ignore="true"], [data-mobileai-ignore="true"], [data-mobileai-root]');
+  return !!target && typeof target.closest === 'function' && !!target.closest('[data-ai-ignore="true"], [data-mobileai-root]');
 }
 function getClientRectsSafe(element) {
   try {
@@ -950,7 +951,7 @@ function buildProps(element, metadata) {
     domNode: element,
     role: element.getAttribute('role') || element.tagName.toLowerCase(),
     disabled: element.disabled === true,
-    aiPriority: element.getAttribute('data-twomilia-priority') || element.getAttribute('data-ai-priority') || undefined,
+    aiPriority: element.getAttribute('data-ai-priority') || undefined,
     selector: buildElementSelector(element),
     nearbyText: metadata.nearbyText.join(' | ') || undefined,
     parentSectionLabel: metadata.parentSectionLabel || undefined,
@@ -998,7 +999,7 @@ function buildScrollableElement(element, index, doc) {
       clientHeight: element.clientHeight,
       scrollWidth: element.scrollWidth,
       clientWidth: element.clientWidth,
-      aiPriority: element.getAttribute('data-twomilia-priority') || element.getAttribute('data-ai-priority') || undefined,
+      aiPriority: element.getAttribute('data-ai-priority') || undefined,
       selector: buildElementSelector(element),
       scrollable: true,
       scrollData
@@ -1108,12 +1109,11 @@ export class PageControllerWeb {
         index: this.interactives.length,
         type: interactiveType,
         label,
-        aiPriority: element.getAttribute('data-twomilia-priority') || element.getAttribute('data-ai-priority') || undefined,
+        aiPriority: element.getAttribute('data-ai-priority') || undefined,
         zoneId: getZoneId(element),
         fiberNode: element,
         props: buildProps(element, metadata),
         requiresConfirmation:
-          element.getAttribute('data-twomilia-confirm') === 'true' ||
           element.getAttribute('data-ai-confirm') === 'true' ||
           (Array.isArray(this.config.confirmSelectors) &&
             this.config.confirmSelectors.some((sel) => {
