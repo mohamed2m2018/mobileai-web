@@ -10,6 +10,22 @@ const STEP_TIMEOUT_MS = 60000;
 // the client reconnect-loops a fresh Step 0 forever. Kept under STEP_TIMEOUT_MS.
 const ACTION_TIMEOUT_MS = 15000;
 
+// A reconnect re-sends `start`, which spins up a FRESH server session at Step 0 — it
+// has no memory of the actions already taken this run. Replaying the raw goal would
+// restart the task blind and risk redoing non-idempotent steps. Frame it as a
+// continuation instead: the conversation rides along in chatHistory and the live page
+// reflects completed work, so the agent re-checks current state and finishes only
+// what's left. Mirrors the MPA-reload resume framing for a smooth recovery.
+function frameAsResumedGoal(goal) {
+  return (
+    `[Resuming after a brief connection drop] Original request: "${goal}". ` +
+    `Some steps may already be complete. First inspect the CURRENT page and the ` +
+    `conversation above to see what is already done, then perform ONLY the remaining ` +
+    `steps. If the request is already fully satisfied, briefly confirm that and stop — ` +
+    `do not repeat actions that are already done.`
+  );
+}
+
 export class ServerAgentClient {
   constructor(proxyUrl, analyticsKey, platformAdapter, callbacks) {
     this.serverUrl = ServerAgentClient._deriveAgentUrl(proxyUrl);
@@ -96,7 +112,10 @@ export class ServerAgentClient {
           try {
             const startMsg = {
               type: 'start',
-              userMessage,
+              // On a reconnect (attempt > 0) resume as a continuation so a mid-run
+              // drop picks the task back up smoothly instead of restarting it blind.
+              userMessage: attempt > 0 ? frameAsResumedGoal(userMessage) : userMessage,
+              resumed: attempt > 0,
               chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
               // Carried across an MPA reload+resume: a workflow approval the user
               // already granted, so the resumed server session doesn't re-prompt.
