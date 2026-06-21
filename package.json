@@ -1,7 +1,7 @@
 {
-  "name": "@twomilia/web",
+  "name": "@twomilia/web-runtime",
   "version": "0.9.58",
-  "description": "React web SDK for Twomilia Cloud with DOM-first actions, rich chat content, and support escalation.",
+  "description": "Twomilia web agent runtime — the source built into the CDN bundle (twomilia.js). App developers install the thin loader @twomilia/web (or a framework wrapper) instead.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mohamed2m2018/mobileai-web.git"

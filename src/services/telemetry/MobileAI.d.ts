@@ -2,7 +2,7 @@
  * Twomilia — Public static API for consumer event tracking.
  *
  * Usage:
- *   import { MobileAI } from '@twomilia/web';
+ *   import { MobileAI } from '@twomilia/web-runtime';
  *   MobileAI.track('purchase_complete', { total: 29.99 });
  *
  * The TelemetryService instance is injected by the <AIAgent> component.
