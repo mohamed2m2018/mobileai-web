@@ -1216,7 +1216,12 @@ export class PageControllerWeb {
           }
         }
         if (node.semanticKind === 'metric-card') return;
-      } else if (node.kind === 'text' && node.text.length >= 48) {
+        // Short text the user can actually SEE (prices like "36000 ج.م", ratings,
+        // counts, brief labels) must reach the agent — dropping everything under 48
+        // chars made it blind to on-screen prices. Keep the high threshold only for
+        // OFF-screen text, where short snippets are mostly noise; in the viewport,
+        // emit anything non-trivial. MAX_STRUCTURE_LINES still bounds the total.
+      } else if (node.kind === 'text' && node.text.length >= (nodeInViewport ? 2 : 48)) {
         const line = `${'  '.repeat(Math.max(0, depth))}- Text: ${truncateText(node.text, 160)}`;
         if (nodeInViewport && viewportStructureLines.length < MAX_STRUCTURE_LINES) {
           viewportStructureLines.push(line);
