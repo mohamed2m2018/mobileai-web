@@ -183,8 +183,16 @@ function getDocumentFromRoot(root) {
 }
 function waitForScrollSettle(win) {
   return new Promise(resolve => {
+    // requestAnimationFrame is PAUSED while the document is hidden/backgrounded, so a
+    // bare double-rAF here can never resolve when the agent runs in an inactive tab —
+    // the scroll action then hangs forever and the whole step stalls. Race the rAF
+    // against a setTimeout fallback (timers still fire, just throttled when hidden) so
+    // this always settles: ~32ms when visible, ≤~1s when hidden. Never infinite.
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; resolve(); } };
     const schedule = win?.requestAnimationFrame ? callback => win.requestAnimationFrame(callback) : callback => setTimeout(callback, 16);
-    schedule(() => schedule(resolve));
+    schedule(() => schedule(finish));
+    setTimeout(finish, 250);
   });
 }
 function parsePropsArg(rawProps) {
@@ -654,8 +662,14 @@ export class WebPlatformAdapter {
     // Give the ring a frame to paint before the action mutates/navigates the DOM.
     const view = this.getView(node);
     await new Promise(resolve => {
+      // Same hidden-tab hazard as waitForScrollSettle: if rAF is paused, the inner
+      // setTimeout is never scheduled and this await hangs the action forever. Race a
+      // fallback timer so the highlight delay always elapses and the action proceeds.
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(); } };
       const raf = view?.requestAnimationFrame ? callback => view.requestAnimationFrame(callback) : callback => setTimeout(callback, 16);
-      raf(() => setTimeout(resolve, 340));
+      raf(() => setTimeout(finish, 340));
+      setTimeout(finish, 800);
     });
   }
   async tap(index) {

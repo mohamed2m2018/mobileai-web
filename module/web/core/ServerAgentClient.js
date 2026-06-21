@@ -3,6 +3,12 @@
 import { logger } from "../../utils/logger.js";
 
 const STEP_TIMEOUT_MS = 60000;
+// Hard cap on a single client-side action (execute + snapshot). The server blocks in
+// waitForClient (60s) on the action_result we owe it; if an executor hangs — e.g. a
+// scroll whose requestAnimationFrame settle never fires in a backgrounded tab — we
+// must still answer well before the server gives up, or the run dies at this step and
+// the client reconnect-loops a fresh Step 0 forever. Kept under STEP_TIMEOUT_MS.
+const ACTION_TIMEOUT_MS = 15000;
 
 export class ServerAgentClient {
   constructor(proxyUrl, analyticsKey, platformAdapter, callbacks) {
@@ -239,19 +245,39 @@ export class ServerAgentClient {
       logger.info('ServerAgentClient', `Plan: ${reasoning.plan}`);
     }
 
+    // Invariant: the server dispatched ONE action and is blocked waiting for ONE
+    // action_result. We must always send exactly one, within ACTION_TIMEOUT_MS, even
+    // if the executor hangs or throws — otherwise the run stalls at this step and the
+    // client reconnect-loops Step 0 (the "stuck/pending" bug). Bound every await.
     let output;
     try {
       const intent = this._buildIntent(toolName, args);
-      output = await this.adapter.executeAction(intent);
+      output = await this._withTimeout(
+        Promise.resolve().then(() => this.adapter.executeAction(intent)),
+        ACTION_TIMEOUT_MS,
+        `⌛ ${toolName} timed out after ${ACTION_TIMEOUT_MS}ms`,
+      );
       if (output == null) output = `✅ ${toolName} executed`;
     } catch (err) {
       output = `❌ ${toolName} failed: ${err?.message || 'unknown error'}`;
     }
 
-    const freshSnapshot = this.adapter.getScreenSnapshot();
+    let freshSnapshot;
+    try {
+      freshSnapshot = this.adapter.getScreenSnapshot();
+    } catch (err) {
+      logger.warn('ServerAgentClient', `getScreenSnapshot failed: ${err?.message}`);
+      freshSnapshot = { screenName: '', availableScreens: [], elementsText: '', elements: [] };
+    }
     let screenshot;
     if (requestScreenshot) {
-      screenshot = await this.adapter.captureScreenshot();
+      try {
+        screenshot = await this._withTimeout(
+          Promise.resolve().then(() => this.adapter.captureScreenshot()),
+          ACTION_TIMEOUT_MS,
+          null,
+        );
+      } catch { /* screenshot is best-effort — never block the result on it */ }
     }
 
     this._send({
@@ -334,19 +360,25 @@ export class ServerAgentClient {
   async _handleRenderBlock(msg) {
     let output;
     try {
-      output = await this.adapter.executeAction({
-        type: 'render_block',
-        zoneId: msg.zoneId,
-        blockType: msg.blockType,
-        props: msg.props,
-        lifecycle: msg.lifecycle,
-      });
+      output = await this._withTimeout(
+        Promise.resolve().then(() => this.adapter.executeAction({
+          type: 'render_block',
+          zoneId: msg.zoneId,
+          blockType: msg.blockType,
+          props: msg.props,
+          lifecycle: msg.lifecycle,
+        })),
+        ACTION_TIMEOUT_MS,
+        '⌛ render_block timed out',
+      );
       if (output == null) output = '✅ Block rendered';
     } catch (err) {
       output = `❌ render_block failed: ${err?.message}`;
     }
 
-    const freshSnapshot = this.adapter.getScreenSnapshot();
+    let freshSnapshot;
+    try { freshSnapshot = this.adapter.getScreenSnapshot(); }
+    catch { freshSnapshot = { screenName: '', availableScreens: [], elementsText: '', elements: [] }; }
     this._send({
       type: 'action_result',
       output: String(output),
@@ -367,8 +399,17 @@ export class ServerAgentClient {
   }
 
   async _handleScreenshotRequest() {
-    const screenshot = await this.adapter.captureScreenshot();
-    const freshSnapshot = this.adapter.getScreenSnapshot();
+    let screenshot;
+    try {
+      screenshot = await this._withTimeout(
+        Promise.resolve().then(() => this.adapter.captureScreenshot()),
+        ACTION_TIMEOUT_MS,
+        null,
+      );
+    } catch { /* best-effort — still answer the server below */ }
+    let freshSnapshot;
+    try { freshSnapshot = this.adapter.getScreenSnapshot(); }
+    catch { freshSnapshot = { screenName: '', availableScreens: [], elementsText: '', elements: [] }; }
     this._send({
       type: 'action_result',
       output: '✅ Screenshot captured',
@@ -475,6 +516,23 @@ export class ServerAgentClient {
       out.scrollData = { up: +sd.up || 0, down: +sd.down || 0, left: +sd.left || 0, right: +sd.right || 0 };
     }
     return out;
+  }
+
+  // Resolve with `timeoutValue` if `promise` doesn't settle within `ms`. Used to keep a
+  // hung action executor from stalling the agent step (and the server's waitForClient).
+  _withTimeout(promise, ms, timeoutValue) {
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        resolve(timeoutValue);
+      }, ms);
+      promise.then(
+        (value) => { if (!done) { done = true; clearTimeout(timer); resolve(value); } },
+        (err) => { if (!done) { done = true; clearTimeout(timer); reject(err); } },
+      );
+    });
   }
 
   _send(msg) {
