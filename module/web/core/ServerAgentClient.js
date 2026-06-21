@@ -116,6 +116,8 @@ export class ServerAgentClient {
               // drop picks the task back up smoothly instead of restarting it blind.
               userMessage: attempt > 0 ? frameAsResumedGoal(userMessage) : userMessage,
               resumed: attempt > 0,
+              // Group the run's server-emitted analytics events under this conversation.
+              conversationId: config?.conversationId,
               chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
               // Carried across an MPA reload+resume: a workflow approval the user
               // already granted, so the resumed server session doesn't re-prompt.

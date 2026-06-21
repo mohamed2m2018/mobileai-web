@@ -2778,7 +2778,7 @@ export function AIAgent({
         conversationId: conversationIdRef.current || localConversationKeyRef.current,
       });
       try {
-        const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, serverConfig);
+        const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, { ...serverConfig, conversationId: conversationIdRef.current || localConversationKeyRef.current });
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2865,7 +2865,7 @@ export function AIAgent({
           resumeGoal,
           toUserHistory(messagesRef.current),
           undefined,
-          { ...serverConfig, workflowApproved: workflowApprovedRef.current },
+          { ...serverConfig, workflowApproved: workflowApprovedRef.current, conversationId: conversationIdRef.current || localConversationKeyRef.current },
         );
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
