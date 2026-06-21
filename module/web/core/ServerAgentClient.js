@@ -271,6 +271,7 @@ export class ServerAgentClient {
     let output;
     try {
       const intent = this._buildIntent(toolName, args);
+      this._trace('exec_start', toolName);
       output = await this._withTimeout(
         Promise.resolve().then(() => this.adapter.executeAction(intent)),
         ACTION_TIMEOUT_MS,
@@ -282,14 +283,19 @@ export class ServerAgentClient {
           `intended change is not visible, retry the same action, otherwise continue.`,
       );
       if (output == null) output = `✅ ${toolName} executed`;
+      this._trace('exec_done', toolName);
     } catch (err) {
       output = `❌ ${toolName} failed: ${err?.message || 'unknown error'}`;
+      this._trace('exec_error', toolName);
     }
 
+    this._trace('snap_start', toolName);
     let freshSnapshot;
     try {
       freshSnapshot = this.adapter.getScreenSnapshot();
+      this._trace('snap_done', toolName);
     } catch (err) {
+      this._trace('snap_error', toolName);
       logger.warn('ServerAgentClient', `getScreenSnapshot failed: ${err?.message}`);
       freshSnapshot = { screenName: '', availableScreens: [], elementsText: '', elements: [] };
     }
@@ -304,6 +310,7 @@ export class ServerAgentClient {
       } catch { /* screenshot is best-effort — never block the result on it */ }
     }
 
+    this._trace('sending', toolName);
     this._send({
       type: 'action_result',
       output: String(output),
@@ -557,6 +564,18 @@ export class ServerAgentClient {
         (err) => { if (!done) { done = true; clearTimeout(timer); reject(err); } },
       );
     });
+  }
+
+  // Diagnostic breadcrumb sent to the server before/after each phase of an action.
+  // If the JS thread sync-blocks mid-phase, the trace before the block reaches the
+  // server but the one after never does — so the server log pinpoints exactly which
+  // phase froze, immune to tab throttling that wrecks client-side timing.
+  _trace(phase, tool) {
+    try {
+      if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+        this._ws.send(JSON.stringify({ type: 'trace', phase, tool }));
+      }
+    } catch { /* ignore */ }
   }
 
   _send(msg) {
