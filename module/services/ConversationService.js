@@ -24,7 +24,10 @@ function toPayload(msgs) {
     role: m.role,
     content: richContentToPlainText(m.content, m.previewText),
     previewText: m.previewText,
-    timestamp: m.timestamp
+    timestamp: m.timestamp,
+    // "chat" = genuine turn | "approval" = action-approval handshake; backend
+    // excludes "approval" from engagement/ROI metrics.
+    kind: m.promptKind === 'approval' ? 'approval' : 'chat'
   }));
 }
 
