@@ -297,14 +297,30 @@ export class WebPlatformAdapter {
     };
   }
   getScreenSnapshot() {
-    const controller = new PageControllerWeb(this.options.getRoot(), {
-      ignoreSelectors: this.options.ignoreSelectors,
-      confirmSelectors: this.options.confirmSelectors,
-    });
-    const snapshot = controller.buildScreenSnapshot(this.getCurrentScreenName(), this.getAvailableScreens());
-    this.lastController = controller;
-    this.lastSnapshot = snapshot;
-    return snapshot;
+    // Reading the page must NEVER throw out of here. Right after a mutating action
+    // (e.g. changing a <select> that makes a framework inject/detach dependent
+    // fields), the DOM can be mid-rewrite and traversal can hit a detached node or a
+    // bad rect. A throw used to bubble up and leave the agent step with no result at
+    // all — the run stalled. Fall back to the last good snapshot so the agent keeps
+    // real screen context and the step always completes.
+    try {
+      const controller = new PageControllerWeb(this.options.getRoot(), {
+        ignoreSelectors: this.options.ignoreSelectors,
+        confirmSelectors: this.options.confirmSelectors,
+      });
+      const snapshot = controller.buildScreenSnapshot(this.getCurrentScreenName(), this.getAvailableScreens());
+      this.lastController = controller;
+      this.lastSnapshot = snapshot;
+      return snapshot;
+    } catch (err) {
+      logger.warn('WebPlatformAdapter', `getScreenSnapshot failed, reusing last snapshot: ${err?.message}`);
+      return this.lastSnapshot || {
+        screenName: this.getCurrentScreenName(),
+        availableScreens: this.getAvailableScreens(),
+        elementsText: '',
+        elements: [],
+      };
+    }
   }
   async captureScreenshot() {
     if (!this.options.captureScreenshot) return undefined;
