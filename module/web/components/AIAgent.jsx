@@ -2549,12 +2549,8 @@ export function AIAgent({
                 : request;
             const question = normalized.question;
             const kind = normalized.kind || 'freeform';
-            telemetryRef.current?.track('agent_trace', {
-              stage: kind === 'approval' ? 'approval_prompt_rendered' : 'ask_user_prompt_rendered',
-              action: question,
-              kind,
-              conversationId: conversationIdRef.current || localConversationKeyRef.current,
-            });
+            // approval/ask_user trace is emitted server-side now (single owner — the
+            // server sends the ask_user frame and records the trace there).
             const promptMessage = createAIMessage({
               id: `assistant-ask-${Date.now()}`,
               role: 'assistant',
@@ -2771,12 +2767,9 @@ export function AIAgent({
         `📨 Sending message in ${mode} mode: "${displayText}"${hasImages ? ` with ${userImages.length} image(s)` : ''}`,
       );
       const history = messagesRef.current.concat(userMessage);
-      telemetryRef.current?.track('agent_trace', {
-        stage: 'query',
-        query: trimmed || displayText,
-        mode,
-        conversationId: conversationIdRef.current || localConversationKeyRef.current,
-      });
+      // agent_trace is emitted SERVER-side now (the server runs the loop). The web SDK
+      // is always server-runtime, so emitting it here too would double-count once the
+      // client telemetry reaches the backend (CORS fixed). Server is the single owner.
       try {
         const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, { ...serverConfig, conversationId: conversationIdRef.current || localConversationKeyRef.current });
         const result = normalizeExecutionResult(rawResult);
@@ -2805,26 +2798,12 @@ export function AIAgent({
         });
         setLastResult(result);
         options?.onResult?.(result);
-        telemetryRef.current?.track('agent_trace', {
-          stage: 'result',
-          query: trimmed || displayText,
-          action: result.previewText || markdownToPlainText(String(result.message || '')).slice(0, 120),
-          success: result.success !== false,
-          mode,
-          conversationId: conversationIdRef.current || localConversationKeyRef.current,
-        });
+        // agent_trace 'result' is emitted server-side (single owner — see above).
       } catch (err) {
         // A newer request superseded this one (or the socket failed). Unwind quietly —
         // the superseding request renders its own reply; don't surface a broken bubble.
         logger.warn('AIAgent', `Send did not complete: ${err?.message || err}`);
-        telemetryRef.current?.track('agent_trace', {
-          stage: 'result',
-          query: trimmed || displayText,
-          success: false,
-          error: err?.message || String(err),
-          mode,
-          conversationId: conversationIdRef.current || localConversationKeyRef.current,
-        });
+        // agent_trace failure is emitted server-side (single owner — see above).
       } finally {
         requestStartedAtRef.current = 0;
         setIsLoading(false);

@@ -2345,12 +2345,6 @@ function AIAgent({
         const normalized = typeof request === "string" ? { question: request, kind: "freeform" } : request;
         const question = normalized.question;
         const kind = normalized.kind || "freeform";
-        telemetryRef.current?.track("agent_trace", {
-          stage: kind === "approval" ? "approval_prompt_rendered" : "ask_user_prompt_rendered",
-          action: question,
-          kind,
-          conversationId: conversationIdRef.current || localConversationKeyRef.current
-        });
         const promptMessage = createAIMessage({
           id: `assistant-ask-${Date.now()}`,
           role: "assistant",
@@ -2540,12 +2534,6 @@ function AIAgent({
         `\u{1F4E8} Sending message in ${mode} mode: "${displayText}"${hasImages ? ` with ${userImages.length} image(s)` : ""}`
       );
       const history = messagesRef.current.concat(userMessage);
-      telemetryRef.current?.track("agent_trace", {
-        stage: "query",
-        query: trimmed || displayText,
-        mode,
-        conversationId: conversationIdRef.current || localConversationKeyRef.current
-      });
       try {
         const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, { ...serverConfig, conversationId: conversationIdRef.current || localConversationKeyRef.current });
         const result = normalizeExecutionResult(rawResult);
@@ -2567,24 +2555,8 @@ function AIAgent({
         });
         setLastResult(result);
         options?.onResult?.(result);
-        telemetryRef.current?.track("agent_trace", {
-          stage: "result",
-          query: trimmed || displayText,
-          action: result.previewText || markdownToPlainText(String(result.message || "")).slice(0, 120),
-          success: result.success !== false,
-          mode,
-          conversationId: conversationIdRef.current || localConversationKeyRef.current
-        });
       } catch (err) {
         logger.warn("AIAgent", `Send did not complete: ${err?.message || err}`);
-        telemetryRef.current?.track("agent_trace", {
-          stage: "result",
-          query: trimmed || displayText,
-          success: false,
-          error: err?.message || String(err),
-          mode,
-          conversationId: conversationIdRef.current || localConversationKeyRef.current
-        });
       } finally {
         requestStartedAtRef.current = 0;
         setIsLoading(false);
