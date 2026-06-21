@@ -324,7 +324,7 @@ export class ServerAgentClient {
           label: e.label,
           requiresConfirmation: e.requiresConfirmation,
           zoneId: e.zoneId,
-          props: e.props || {},
+          props: this._safeProps(e.props),
         })),
       },
       screenshot,
@@ -382,7 +382,7 @@ export class ServerAgentClient {
           label: e.label,
           requiresConfirmation: e.requiresConfirmation,
           zoneId: e.zoneId,
-          props: e.props || {},
+          props: this._safeProps(e.props),
         })),
       },
     });
@@ -423,7 +423,7 @@ export class ServerAgentClient {
           label: e.label,
           requiresConfirmation: e.requiresConfirmation,
           zoneId: e.zoneId,
-          props: e.props || {},
+          props: this._safeProps(e.props),
         })),
       },
     });
@@ -454,7 +454,7 @@ export class ServerAgentClient {
           label: e.label,
           requiresConfirmation: e.requiresConfirmation,
           zoneId: e.zoneId,
-          props: e.props || {},
+          props: this._safeProps(e.props),
         })),
       },
       screenshot,
@@ -580,7 +580,23 @@ export class ServerAgentClient {
 
   _send(msg) {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      this._ws.send(JSON.stringify(msg));
+      // Defensive: JSON.stringify throws on a circular value (raw DOM-bound element
+      // props on framework-heavy pages). That used to silently drop the message — the
+      // server then waited out the full step. Props are sanitized via _safeProps now,
+      // but guard the serialize so a stray non-serializable field can never again make
+      // a whole action_result vanish; send a degraded result instead of nothing.
+      let payload;
+      try {
+        payload = JSON.stringify(msg);
+      } catch (err) {
+        logger.error('ServerAgentClient', `message not serializable (${err?.message}); sending degraded`);
+        payload = JSON.stringify({
+          type: msg.type,
+          output: typeof msg.output === 'string' ? msg.output : '⚠️ result not serializable',
+          screenState: { screenName: '', availableScreens: [], elementsText: '', elements: [] },
+        });
+      }
+      this._ws.send(payload);
     }
   }
 
