@@ -1,0 +1,51 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/><title>Northwind — Account</title></head>
+<body>
+<main id="app"></main>
+<script>
+  // SPA account area with tabs + an order param route (/account/orders/:id).
+  var ORDERS = [
+    { id: 5001, total: '$178' },
+    { id: 5002, total: '$89' },
+  ];
+  function tabs() {
+    return '<button data-push="/account">Profile</button>' +
+      '<button data-push="/account/orders">Orders</button>' +
+      '<button data-push="/account/settings">Settings</button>' +
+      '<button data-href="/sm-login.html">Sign out</button>';
+  }
+  function render() {
+    var p = location.pathname;
+    var el = document.getElementById('app');
+    var head = '<h1>Account</h1>' + tabs();
+    if (/\/account\/orders\/\d+/.test(p)) {
+      var id = p.split('/')[3];
+      el.innerHTML = head + '<h2>Order #' + id + '</h2><div class="card"><div class="muted">Delivered</div></div>' +
+        '<button data-push="/account/orders">Back to orders</button>';
+    } else if (p.indexOf('/account/orders') === 0) {
+      el.innerHTML = head + '<h2>Your orders</h2>' + ORDERS.map(function (o) {
+        return '<div class="card"><strong>Order #' + o.id + '</strong><div class="muted">' + o.total + '</div>' +
+          '<button data-push="/account/orders/' + o.id + '">View order ' + o.id + '</button></div>';
+      }).join('');
+    } else if (p.indexOf('/account/settings') === 0) {
+      el.innerHTML = head + '<h2>Settings</h2><input placeholder="Display name"/><button>Save</button>';
+    } else {
+      el.innerHTML = head + '<h2>Profile</h2><p class="muted">Signed in as demo@northwind.test</p>';
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var push = e.target.closest('[data-push]');
+    if (push) { window.smPush(push.getAttribute('data-push'), render); return; }
+    var href = e.target.closest('[data-href]');
+    if (href) { location.href = href.getAttribute('data-href'); }
+  });
+  window.addEventListener('popstate', render);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', render); else render();
+</script>
+<script>window.process={env:{NEXT_PUBLIC_MOBILEAI_BASE_URL:'http://localhost:3001'}};</script>
+<script src="/sm-common.js?v=2"></script>
+<script src="/twomilia.js?v=2"
+  data-proxy-url="http://localhost:3001/api/v1/hosted-proxy/text"
+  data-analytics-key="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"
+  data-auth-token="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"></script>
+</body></html>

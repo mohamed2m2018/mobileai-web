@@ -5,6 +5,7 @@ export { init } from "./init.js";
 export { AIZoneWeb, AIZoneWebStateContext } from "./components/AIZoneWeb.js";
 export { RichContentRendererWeb } from "./components/RichContentRendererWeb.js";
 export { WebPlatformAdapter } from "./core/WebPlatformAdapter.js";
+export { ScreenMapRecorder } from "./core/ScreenMapRecorder.js";
 export { ProductCardWeb, FactCardWeb, ActionCardWeb, ComparisonCardWeb, FormCardWeb, webBlockDefinitions } from "./blocks.js";
 export { useAction, useData, useAI } from "../hooks/useAction.js";
 export { RichUIProvider } from "../components/rich-content/RichUIContext.js";

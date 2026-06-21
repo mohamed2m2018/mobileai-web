@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/><title>Northwind — Search</title></head>
+<body>
+<main>
+  <h1>Search</h1>
+  <input placeholder="Search products…"/>
+  <button>Search</button>
+  <h2>Results</h2>
+  <div class="grid">
+    <div class="card"><strong>Wireless Headphones</strong><a href="/sm-shop.html">View</a></div>
+    <div class="card"><strong>Running Shoes</strong><a href="/sm-shop.html">View</a></div>
+    <div class="card"><strong>Coffee Grinder</strong><a href="/sm-shop.html">View</a></div>
+  </div>
+  <a href="/sm-shop.html">Browse all products</a>
+</main>
+<script>window.process={env:{NEXT_PUBLIC_MOBILEAI_BASE_URL:'http://localhost:3001'}};</script>
+<script src="/sm-common.js?v=2"></script>
+<script src="/twomilia.js?v=2"
+  data-proxy-url="http://localhost:3001/api/v1/hosted-proxy/text"
+  data-analytics-key="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"
+  data-auth-token="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"></script>
+</body></html>

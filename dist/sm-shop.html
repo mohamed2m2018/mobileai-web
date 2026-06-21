@@ -1,0 +1,59 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/><title>Northwind — Shop</title></head>
+<body>
+<main id="app"></main>
+<script>
+  // SPA store. Clicking a category/product pushState()s a clean route
+  // (/shop/electronics, /product/101) which the recorder normalizes (:id).
+  var PRODUCTS = [
+    { id: 101, name: 'Wireless Headphones', cat: 'electronics' },
+    { id: 102, name: 'Running Shoes', cat: 'clothing' },
+    { id: 103, name: 'Coffee Grinder', cat: 'home' },
+    { id: 104, name: 'Desk Lamp', cat: 'home' },
+  ];
+  function tabs() {
+    return '<h2>Categories</h2>' +
+      '<button data-push="/shop">All</button>' +
+      '<button data-push="/shop/electronics">Electronics</button>' +
+      '<button data-push="/shop/clothing">Clothing</button>' +
+      '<button data-push="/shop/home">Home Goods</button>';
+  }
+  function grid(cat) {
+    var items = PRODUCTS.filter(function (p) { return !cat || p.cat === cat; });
+    return '<h2>Products</h2><div class="grid">' + items.map(function (p) {
+      return '<div class="card"><strong>' + p.name + '</strong><div class="muted">$' + (50 + p.id) + '</div>' +
+        '<button data-push="/product/' + p.id + '">View ' + p.name + '</button></div>';
+    }).join('') + '</div>';
+  }
+  function render() {
+    var p = location.pathname;
+    var el = document.getElementById('app');
+    if (p.indexOf('/product/') === 0) {
+      var id = p.split('/')[2];
+      var prod = PRODUCTS.find(function (x) { return String(x.id) === id; }) || { name: 'Product ' + id };
+      el.innerHTML = '<h1>' + prod.name + '</h1><p class="muted">Product detail for #' + id + '.</p>' +
+        '<button data-href="/sm-cart.html">Add to cart</button>' +
+        '<button data-push="/shop">Back to shop</button>';
+    } else if (p.indexOf('/shop/') === 0 && ['electronics', 'clothing', 'home'].indexOf(p.split('/')[2]) >= 0) {
+      var cat = p.split('/')[2];
+      el.innerHTML = '<h1>' + cat.charAt(0).toUpperCase() + cat.slice(1) + '</h1>' + tabs() + grid(cat);
+    } else {
+      el.innerHTML = '<h1>Shop</h1>' + tabs() + grid(null);
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var push = e.target.closest('[data-push]');
+    if (push) { window.smPush(push.getAttribute('data-push'), render); return; }
+    var href = e.target.closest('[data-href]');
+    if (href) { location.href = href.getAttribute('data-href'); }
+  });
+  window.addEventListener('popstate', render);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', render); else render();
+</script>
+<script>window.process={env:{NEXT_PUBLIC_MOBILEAI_BASE_URL:'http://localhost:3001'}};</script>
+<script src="/sm-common.js?v=2"></script>
+<script src="/twomilia.js?v=2"
+  data-proxy-url="http://localhost:3001/api/v1/hosted-proxy/text"
+  data-analytics-key="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"
+  data-auth-token="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"></script>
+</body></html>

@@ -1,0 +1,47 @@
+{
+  "name": "@twomilia/vue",
+  "version": "0.1.0",
+  "description": "Thin Vue 3 wrapper for the Twomilia web agent — useTwomilia() composable and a Vue plugin.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "twomilia",
+    "vue",
+    "vue3",
+    "nuxt",
+    "ai",
+    "agent",
+    "chatbot",
+    "copilot"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@twomilia/web": "^0.1.0"
+  },
+  "peerDependencies": {
+    "vue": "^3.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vue": "^3.4.0"
+  }
+}

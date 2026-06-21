@@ -1,0 +1,14 @@
+# Twomilia — Shopify theme app extension.
+#
+# Ships the Twomilia AI agent as an *app embed* (an app-embed block in blocks/).
+# Merchants enable it from Theme editor → App embeds → Twomilia, with no theme
+# code changes. The block injects twomilia.js from the CDN and calls Twomilia.init.
+#
+# Docs: https://shopify.dev/docs/apps/build/online-store/theme-app-extensions
+
+api_version = "2024-10"
+
+[[extensions]]
+type = "theme"
+name = "twomilia"
+handle = "twomilia"

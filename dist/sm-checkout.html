@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/><title>Northwind — Checkout: Shipping</title></head>
+<body>
+<main>
+  <h1>Checkout — Shipping</h1>
+  <p class="muted">Step 1 of 3</p>
+  <input placeholder="Full name"/>
+  <input placeholder="Address"/>
+  <input placeholder="City"/>
+  <select><option>Standard</option><option>Express</option></select>
+  <div>
+    <a href="/sm-checkout-payment.html">Continue to payment</a>
+    <a href="/sm-cart.html">Back to cart</a>
+  </div>
+</main>
+<script>window.process={env:{NEXT_PUBLIC_MOBILEAI_BASE_URL:'http://localhost:3001'}};</script>
+<script src="/sm-common.js?v=2"></script>
+<script src="/twomilia.js?v=2"
+  data-proxy-url="http://localhost:3001/api/v1/hosted-proxy/text"
+  data-analytics-key="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"
+  data-auth-token="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"></script>
+</body></html>

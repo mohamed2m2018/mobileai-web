@@ -1,0 +1,48 @@
+{
+  "name": "@twomilia/react",
+  "version": "0.1.0",
+  "description": "Thin React wrapper for the Twomilia web agent — a useTwomilia() hook and a <Twomilia /> component.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "twomilia",
+    "react",
+    "ai",
+    "agent",
+    "copilot",
+    "support",
+    "chat",
+    "widget"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@twomilia/web": "^0.1.0"
+  },
+  "peerDependencies": {
+    "react": ">=17.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "react": "^18.2.0",
+    "typescript": "^5.4.0"
+  }
+}

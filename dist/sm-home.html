@@ -1,0 +1,25 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/><title>Northwind — Home</title></head>
+<body>
+<main>
+  <h1>Welcome to Northwind</h1>
+  <p class="muted">Demo storefront for the screen-map recorder (mixed multi-page + single-page nav, param routes, a 4-step checkout).</p>
+  <h2>Get started</h2>
+  <a href="/sm-shop.html">Shop now</a>
+  <a href="/sm-shop.html">Today&apos;s deals</a>
+  <a href="/sm-account.html">Track my order</a>
+  <a href="/sm-help.html">Get help</a>
+  <h2>Featured</h2>
+  <div class="grid">
+    <div class="card"><strong>Wireless Headphones</strong><div class="muted">$129</div><a href="/sm-shop.html">View in shop</a></div>
+    <div class="card"><strong>Running Shoes</strong><div class="muted">$89</div><a href="/sm-shop.html">View in shop</a></div>
+    <div class="card"><strong>Coffee Grinder</strong><div class="muted">$49</div><a href="/sm-shop.html">View in shop</a></div>
+  </div>
+</main>
+<script>window.process={env:{NEXT_PUBLIC_MOBILEAI_BASE_URL:'http://localhost:3001'}};</script>
+<script src="/sm-common.js?v=2"></script>
+<script src="/twomilia.js?v=2"
+  data-proxy-url="http://localhost:3001/api/v1/hosted-proxy/text"
+  data-analytics-key="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"
+  data-auth-token="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"></script>
+</body></html>

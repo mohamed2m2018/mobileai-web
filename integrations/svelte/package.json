@@ -1,0 +1,46 @@
+{
+  "name": "@twomilia/svelte",
+  "version": "0.1.0",
+  "description": "Thin Svelte / SvelteKit wrapper for the Twomilia web agent. Drop in <Twomilia config={...} /> and the shadow-DOM chat widget mounts itself.",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "svelte": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "svelte": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "twomilia",
+    "svelte",
+    "sveltekit",
+    "ai-agent",
+    "chat-widget",
+    "support"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "svelte-package -o dist",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "svelte": "^4.0.0 || ^5.0.0"
+  },
+  "dependencies": {
+    "@twomilia/web": "^0.1.0"
+  },
+  "devDependencies": {
+    "@sveltejs/package": "^2.3.0",
+    "svelte": "^5.0.0",
+    "typescript": "^5.4.0"
+  }
+}

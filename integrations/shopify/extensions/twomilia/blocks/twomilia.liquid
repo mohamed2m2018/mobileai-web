@@ -1,0 +1,111 @@
+{%- comment -%}
+  Twomilia — thin app-embed loader for the Twomilia web agent.
+
+  This block does NOT render any UI. The agent injects its own shadow-DOM chat
+  widget overlay. All this block does is load twomilia.js (once, like Stripe.js —
+  the runtime stays on the CDN) and call Twomilia.init with your settings.
+
+  Because this is an *app embed* block, it only renders when a merchant enables it
+  in the theme editor under: Theme editor → App embeds → Twomilia. As an extra
+  guard we also no-op until an Analytics Key is filled in.
+{%- endcomment -%}
+
+{%- liquid
+  assign tw_key = block.settings.analytics_key | default: '' | strip
+-%}
+
+{%- if tw_key != blank -%}
+  <script
+    src="https://twomilia.com/twomilia.js"
+    data-twomilia-loader
+    async
+    defer
+  ></script>
+
+  <script>
+    (function () {
+      // Config assembled from the app-embed block settings.
+      var config = {
+        analyticsKey: {{ tw_key | json }},
+        knowledgeBase: {{ block.settings.knowledge_base | json }},
+        accentColor: {{ block.settings.accent_color | json }}
+      };
+
+      // ---------------------------------------------------------------
+      // OPTIONAL: register customTools here, e.g.
+      //
+      //   config.customTools = {
+      //     trackOrder: {
+      //       name: 'trackOrder',
+      //       description: 'Look up the status of an order by its number.',
+      //       parameters: { orderNumber: 'string' },
+      //       execute: function (args) {
+      //         return fetch('/apps/your-app/track?order=' + encodeURIComponent(args.orderNumber))
+      //           .then(function (r) { return r.json(); })
+      //           .then(function (data) { return { success: true, message: data.status }; });
+      //       }
+      //     }
+      //   };
+      //
+      // See shopify/README.md for the recommended snippet-based pattern that
+      // keeps your tool code out of this generated block.
+      // ---------------------------------------------------------------
+      if (window.TwomiliaCustomTools) {
+        config.customTools = window.TwomiliaCustomTools;
+      }
+
+      var inited = false;
+
+      function mount() {
+        if (inited) return;
+        if (!window.Twomilia || typeof window.Twomilia.init !== 'function') return;
+        inited = true;
+        window.Twomilia.init(config);
+      }
+
+      // The script may already be cached/loaded by the time this runs, or it may
+      // still be in flight — handle both. Idempotent: Twomilia.init only mounts once.
+      if (window.Twomilia && typeof window.Twomilia.init === 'function') {
+        mount();
+      } else {
+        var s = document.querySelector('script[data-twomilia-loader]');
+        if (s) {
+          s.addEventListener('load', mount);
+        }
+      }
+    })();
+  </script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Twomilia",
+  "target": "head",
+  "settings": [
+    {
+      "type": "paragraph",
+      "content": "Adds the Twomilia AI agent to your storefront. The widget renders its own chat overlay — nothing appears in your theme layout. Paste your Analytics Key from Dashboard → Setup & API Keys to activate it."
+    },
+    {
+      "type": "text",
+      "id": "analytics_key",
+      "label": "Analytics Key",
+      "info": "Publishable key (twomilia_pub_…) from Dashboard → Setup & API Keys. Required."
+    },
+    {
+      "type": "checkbox",
+      "id": "knowledge_base",
+      "label": "Use knowledge base",
+      "info": "Ground answers in your dashboard knowledge (Settings → AI Knowledge).",
+      "default": false
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent color",
+      "info": "Primary color for the chat widget. Leave unset to use the Twomilia default.",
+      "default": "#4f46e5"
+    }
+  ]
+}
+{% endschema %}

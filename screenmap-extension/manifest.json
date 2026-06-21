@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Twomilia Screen-Map Recorder",
+  "version": "1.0.0",
+  "description": "Record your website's screens + navigation flow to train your Twomilia AI agent. No code install on your site.",
+  "permissions": ["storage", "activeTab", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Twomilia Recorder",
+    "default_icon": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" }
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/><title>Northwind — Help</title></head>
+<body>
+<main id="app"></main>
+<script>
+  // SPA help center — topic routes /help/billing, /help/shipping, /help/returns.
+  var TOPICS = { billing: 'Billing & payments', shipping: 'Shipping & delivery', returns: 'Returns & refunds' };
+  function menu() {
+    return '<button data-push="/help/billing">Billing</button>' +
+      '<button data-push="/help/shipping">Shipping</button>' +
+      '<button data-push="/help/returns">Returns</button>';
+  }
+  function render() {
+    var p = location.pathname;
+    var el = document.getElementById('app');
+    var key = p.indexOf('/help/') === 0 ? p.split('/')[2] : null;
+    if (key && TOPICS[key]) {
+      el.innerHTML = '<h1>' + TOPICS[key] + '</h1><p class="muted">Help article about ' + key + '.</p>' +
+        menu() + '<div><button data-href="/sm-account.html">Contact support</button>' +
+        '<button data-href="/sm-home.html">Back to home</button></div>';
+    } else {
+      el.innerHTML = '<h1>Help Center</h1><p class="muted">Pick a topic:</p>' + menu() +
+        '<div><button data-href="/sm-home.html">Back to home</button></div>';
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var push = e.target.closest('[data-push]');
+    if (push) { window.smPush(push.getAttribute('data-push'), render); return; }
+    var href = e.target.closest('[data-href]');
+    if (href) { location.href = href.getAttribute('data-href'); }
+  });
+  window.addEventListener('popstate', render);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', render); else render();
+</script>
+<script>window.process={env:{NEXT_PUBLIC_MOBILEAI_BASE_URL:'http://localhost:3001'}};</script>
+<script src="/sm-common.js?v=2"></script>
+<script src="/twomilia.js?v=2"
+  data-proxy-url="http://localhost:3001/api/v1/hosted-proxy/text"
+  data-analytics-key="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"
+  data-auth-token="twomilia_pub_4474a6ce95a7ec53d287439c5dff1ce85e6b6b31"></script>
+</body></html>

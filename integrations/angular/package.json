@@ -1,0 +1,47 @@
+{
+  "name": "@twomilia/angular",
+  "version": "0.1.0",
+  "description": "Thin Angular wrapper for the Twomilia web agent — injectable service + provideTwomilia() helper. The agent renders its own shadow-DOM chat widget; this just loads it.",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "module": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "keywords": [
+    "twomilia",
+    "angular",
+    "ai-agent",
+    "chatbot",
+    "copilot",
+    "support"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@angular/core": ">=16.0.0",
+    "@angular/common": ">=16.0.0"
+  },
+  "dependencies": {
+    "@twomilia/web": "^0.1.0"
+  },
+  "devDependencies": {
+    "@angular/common": "^17.0.0",
+    "@angular/core": "^17.0.0",
+    "typescript": "^5.4.0"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  }
+}
