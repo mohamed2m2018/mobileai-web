@@ -28,6 +28,7 @@ import { ENDPOINTS } from "../../config/endpoints.js";
 import { float32ToInt16Base64, base64ToFloat32 } from "../../utils/audioUtils.js";
 import { logger } from "../../utils/logger.js";
 import { WebPlatformAdapter } from "../core/WebPlatformAdapter.js";
+import { ScreenMapRecorder } from "../core/ScreenMapRecorder.js";
 import { ServerAgentClient } from "../core/ServerAgentClient.js";
 import { webBlockDefinitions } from "../blocks.js";
 import { RichContentRendererWeb } from "./RichContentRendererWeb.js";
@@ -1771,7 +1772,7 @@ function AIAgent({
     if (!isOpen || !target) return;
     const timer = setTimeout(() => {
       target.scrollTop = target.scrollHeight;
-    }, 30);
+    }, 80);
     return () => clearTimeout(timer);
   }, [
     isLoading,
@@ -1833,6 +1834,72 @@ function AIAgent({
     }),
     [captureScreenshot, confirmSelectors, ignoreSelectors, pathname, routerAdapter, scanRoot]
   );
+  useEffect(() => {
+    if (typeof window === "undefined") return void 0;
+    const SOURCE = "twomilia-screenmap";
+    const STORE_TOKEN = "twm_screenmap_token";
+    const STORE_ORIGIN = "twm_screenmap_origin";
+    let token = null;
+    let dashboardOrigin = null;
+    try {
+      const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+      const params = new URLSearchParams(hash);
+      token = params.get("twm_rec");
+      dashboardOrigin = params.get("twm_origin");
+      if (token) {
+        window.sessionStorage.setItem(STORE_TOKEN, token);
+        if (dashboardOrigin) window.sessionStorage.setItem(STORE_ORIGIN, dashboardOrigin);
+      } else {
+        token = window.sessionStorage.getItem(STORE_TOKEN);
+        dashboardOrigin = window.sessionStorage.getItem(STORE_ORIGIN);
+      }
+    } catch {
+    }
+    if (!token || !dashboardOrigin) return void 0;
+    const post = (type, extra) => {
+      try {
+        if (window.opener) window.opener.postMessage({ source: SOURCE, token, type, ...extra }, dashboardOrigin);
+      } catch {
+      }
+    };
+    const clearToken = () => {
+      try {
+        window.sessionStorage.removeItem(STORE_TOKEN);
+        window.sessionStorage.removeItem(STORE_ORIGIN);
+      } catch {
+      }
+    };
+    const recorder = new ScreenMapRecorder({
+      adapter: platformAdapter,
+      sessionId: token,
+      onUpdate: (map) => post("MAP_UPDATE", { map }),
+      // Fired by the banner's "Finish & save" button.
+      onDone: () => {
+        post("DONE", { map: recorder.getMap() });
+        clearToken();
+      }
+    });
+    recorder.start();
+    const onMessage = (event) => {
+      if (event.origin !== dashboardOrigin) return;
+      const data = event.data;
+      if (!data || data.source !== SOURCE || data.token !== token) return;
+      if (data.type === "START") {
+        recorder.start();
+      } else if (data.type === "STOP") {
+        post("DONE", { map: recorder.getMap() });
+        recorder.clearSession();
+        recorder.stop();
+        clearToken();
+      }
+    };
+    window.addEventListener("message", onMessage);
+    post("READY");
+    return () => {
+      window.removeEventListener("message", onMessage);
+      recorder.stop();
+    };
+  }, [platformAdapter]);
   const guideNode = guide?.node || null;
   useEffect(() => {
     if (!guideNode) return void 0;
@@ -2465,7 +2532,7 @@ function AIAgent({
       activeGoalRef.current = trimmed || displayText;
       clearResumeTask(persistenceKey);
       workflowApprovedRef.current = false;
-      setStatusText("Thinking...");
+      setStatusText("Looking at your screen...");
       setLocalUnread(0);
       setIsOpen(true);
       logger.info(
@@ -3163,7 +3230,7 @@ ${screenContext}`;
   const minimizedPillText = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const message = messages[i];
-      if (message?.role === "assistant") {
+      if (message?.role === "assistant" && !message.promptKind) {
         const text = message.previewText || richContentToPlainText(message.content) || "";
         if (text) return text;
       }
@@ -3172,7 +3239,7 @@ ${screenContext}`;
   }, [messages, statusText]);
   const showProactive = !isOpen && !renderMinimized && proactiveStage !== "hidden" && !proactiveDismissedRef.current;
   const latestClosedPreview = useMemo(() => {
-    const latestAssistantMessage = [...messages].reverse().find((message) => message.role !== "user");
+    const latestAssistantMessage = [...messages].reverse().find((message) => message.role !== "user" && !message.promptKind);
     if (!latestAssistantMessage) return "New message";
     const content = latestAssistantMessage.previewText || latestAssistantMessage.content;
     const preview = Array.isArray(content) ? richContentToPlainText(content, "") : markdownToPlainText(String(content || "")).trim();
@@ -4595,7 +4662,7 @@ ${screenContext}`;
       guide ? /* @__PURE__ */ jsxs(
         "div",
         {
-          "data-mobileai-ignore": "true",
+          "data-ai-ignore": "true",
           style: {
             position: "fixed",
             inset: 0,
@@ -4684,7 +4751,7 @@ ${screenContext}`;
       voicePermissionIssue ? /* @__PURE__ */ jsx(
         "div",
         {
-          "data-mobileai-ignore": "true",
+          "data-ai-ignore": "true",
           style: {
             position: "fixed",
             inset: 0,
@@ -4879,7 +4946,7 @@ ${screenContext}`;
       csatPrompt && supportMode?.csat ? /* @__PURE__ */ jsx(
         "div",
         {
-          "data-mobileai-ignore": "true",
+          "data-ai-ignore": "true",
           style: {
             position: "fixed",
             inset: 0,
@@ -4908,7 +4975,7 @@ ${screenContext}`;
       showChat ? isOpen && !renderMinimized ? /* @__PURE__ */ jsxs(
         "div",
         {
-          "data-mobileai-ignore": "true",
+          "data-ai-ignore": "true",
           ref: popupRef,
           style: {
             position: "fixed",
@@ -4936,7 +5003,7 @@ ${screenContext}`;
             /* @__PURE__ */ jsx(
               WebAgentOverlay,
               {
-                visible: isLoading && !pendingPrompt && !!statusText && statusText !== "Thinking..." && statusText !== "Working on it\u2026",
+                visible: isLoading && !pendingPrompt && !!statusText,
                 statusText,
                 onCancel: isLoading ? () => cancel({
                   source: "overlay"
@@ -5562,7 +5629,7 @@ ${screenContext}`;
       ) : /* @__PURE__ */ jsxs(
         "div",
         {
-          "data-mobileai-ignore": "true",
+          "data-ai-ignore": "true",
           style: {
             position: "fixed",
             insetInlineEnd: popupPosition ? "auto" : 20,
@@ -5576,7 +5643,7 @@ ${screenContext}`;
               "div",
               {
                 className: "tw-discovery",
-                "data-mobileai-ignore": "true",
+                "data-ai-ignore": "true",
                 role: "button",
                 tabIndex: 0,
                 onClick: dismissDiscoveryTooltip,
@@ -5681,7 +5748,7 @@ ${screenContext}`;
             showProactive && proactiveStage === "badge" ? /* @__PURE__ */ jsxs(
               "div",
               {
-                "data-mobileai-ignore": "true",
+                "data-ai-ignore": "true",
                 style: {
                   position: "absolute",
                   bottom: WEB_LAUNCHER_SIZE + 12,
@@ -5768,10 +5835,10 @@ ${screenContext}`;
                 }
               }
             ) : null,
-            isLoading ? /* @__PURE__ */ jsxs(
+            isLoading && !isOpen ? /* @__PURE__ */ jsxs(
               "div",
               {
-                "data-mobileai-ignore": "true",
+                "data-ai-ignore": "true",
                 style: {
                   position: "absolute",
                   bottom: WEB_LAUNCHER_SIZE + 12,
@@ -5921,7 +5988,7 @@ ${screenContext}`;
                   position: "relative"
                 },
                 children: [
-                  isLoading ? /* @__PURE__ */ jsx(WebLoadingDots, { size: 28, color: "#fff" }) : /* @__PURE__ */ jsx(WebAIBadge, { size: 28 }),
+                  isLoading && isOpen ? /* @__PURE__ */ jsx(WebLoadingDots, { size: 28, color: "#fff" }) : /* @__PURE__ */ jsx(WebAIBadge, { size: 28 }),
                   displayUnread > 0 ? /* @__PURE__ */ jsxs(
                     "span",
                     {

@@ -29,6 +29,7 @@ import { ENDPOINTS } from '../../config/endpoints.js';
 import { float32ToInt16Base64, base64ToFloat32 } from '../../utils/audioUtils.js';
 import { logger } from '../../utils/logger.js';
 import { WebPlatformAdapter } from '../core/WebPlatformAdapter.js';
+import { ScreenMapRecorder } from '../core/ScreenMapRecorder.js';
 import { ServerAgentClient } from '../core/ServerAgentClient.js';
 import { webBlockDefinitions } from '../blocks.js';
 import { RichContentRendererWeb } from './RichContentRendererWeb.js';
@@ -1930,7 +1931,7 @@ export function AIAgent({
     if (!isOpen || !target) return;
     const timer = setTimeout(() => {
       target.scrollTop = target.scrollHeight;
-    }, 30);
+    }, 80);
     return () => clearTimeout(timer);
   }, [
     isLoading,
@@ -1996,6 +1997,78 @@ export function AIAgent({
       }),
     [captureScreenshot, confirmSelectors, ignoreSelectors, pathname, routerAdapter, scanRoot],
   );
+  // Screen-map training recorder. Dormant unless this page was opened by the
+  // dashboard "Train" popup with a valid record token (in the URL hash, or kept
+  // in sessionStorage across same-tab MPA navigations). Captures screens + nav
+  // edges and streams them to the dashboard opener over postMessage.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const SOURCE = 'twomilia-screenmap';
+    const STORE_TOKEN = 'twm_screenmap_token';
+    const STORE_ORIGIN = 'twm_screenmap_origin';
+    let token = null;
+    let dashboardOrigin = null;
+    try {
+      const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+      const params = new URLSearchParams(hash);
+      token = params.get('twm_rec');
+      dashboardOrigin = params.get('twm_origin');
+      if (token) {
+        window.sessionStorage.setItem(STORE_TOKEN, token);
+        if (dashboardOrigin) window.sessionStorage.setItem(STORE_ORIGIN, dashboardOrigin);
+      } else {
+        token = window.sessionStorage.getItem(STORE_TOKEN);
+        dashboardOrigin = window.sessionStorage.getItem(STORE_ORIGIN);
+      }
+    } catch {
+      // sessionStorage may be unavailable
+    }
+    if (!token || !dashboardOrigin) return undefined;
+    const post = (type, extra) => {
+      try {
+        if (window.opener) window.opener.postMessage({ source: SOURCE, token, type, ...extra }, dashboardOrigin);
+      } catch {
+        // opener may be gone
+      }
+    };
+    const clearToken = () => {
+      try {
+        window.sessionStorage.removeItem(STORE_TOKEN);
+        window.sessionStorage.removeItem(STORE_ORIGIN);
+      } catch {
+        // ignore
+      }
+    };
+    const recorder = new ScreenMapRecorder({
+      adapter: platformAdapter,
+      sessionId: token,
+      onUpdate: (map) => post('MAP_UPDATE', { map }),
+      // Fired by the banner's "Finish & save" button.
+      onDone: () => { post('DONE', { map: recorder.getMap() }); clearToken(); },
+    });
+    // Auto-start: show the instruction banner + begin capturing the instant the
+    // popup loads in record mode — never wait on a dashboard handshake.
+    recorder.start();
+    const onMessage = (event) => {
+      if (event.origin !== dashboardOrigin) return;
+      const data = event.data;
+      if (!data || data.source !== SOURCE || data.token !== token) return;
+      if (data.type === 'START') {
+        recorder.start(); // idempotent
+      } else if (data.type === 'STOP') {
+        post('DONE', { map: recorder.getMap() });
+        recorder.clearSession();
+        recorder.stop();
+        clearToken();
+      }
+    };
+    window.addEventListener('message', onMessage);
+    post('READY');
+    return () => {
+      window.removeEventListener('message', onMessage);
+      recorder.stop();
+    };
+  }, [platformAdapter]);
   // Keep the highlight glued to its target while it is visible. The rect is captured
   // once when the guide is shown; without this, scrolling (page or any nested scroll
   // container) or a resize leaves the fixed-position border behind at stale viewport
@@ -2690,7 +2763,7 @@ export function AIAgent({
       // and re-gates approvals (the prior task's "Allow" must not carry over).
       clearResumeTask(persistenceKey);
       workflowApprovedRef.current = false;
-      setStatusText('Thinking...');
+      setStatusText('Looking at your screen...');
       setLocalUnread(0);
       setIsOpen(true);
       logger.info(
@@ -3447,7 +3520,9 @@ export function AIAgent({
   const minimizedPillText = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const message = messages[i];
-      if (message?.role === 'assistant') {
+      // Skip approval/ask prompts (promptKind set) — the pill should surface the
+      // last actual chat reply, not a lingering "May I tap …?" thinking prompt.
+      if (message?.role === 'assistant' && !message.promptKind) {
         const text = message.previewText || richContentToPlainText(message.content) || '';
         if (text) return text;
       }
@@ -3456,7 +3531,9 @@ export function AIAgent({
   }, [messages, statusText]);
   const showProactive = !isOpen && !renderMinimized && proactiveStage !== 'hidden' && !proactiveDismissedRef.current;
   const latestClosedPreview = useMemo(() => {
-    const latestAssistantMessage = [...messages].reverse().find((message) => message.role !== 'user');
+    const latestAssistantMessage = [...messages]
+      .reverse()
+      .find((message) => message.role !== 'user' && !message.promptKind);
     if (!latestAssistantMessage) return 'New message';
     const content = latestAssistantMessage.previewText || latestAssistantMessage.content;
     const preview = Array.isArray(content)
@@ -4795,7 +4872,7 @@ export function AIAgent({
           <div data-twomilia-dir={resolvedDirection} dir={resolvedDirection} style={{ display: 'contents' }}>
           {guide ? (
             <div
-              data-mobileai-ignore="true"
+              data-ai-ignore="true"
               style={{
                 position: 'fixed',
                 inset: 0,
@@ -4877,7 +4954,7 @@ export function AIAgent({
           ) : null}
           {voicePermissionIssue ? (
             <div
-              data-mobileai-ignore="true"
+              data-ai-ignore="true"
               style={{
                 position: 'fixed',
                 inset: 0,
@@ -5046,7 +5123,7 @@ export function AIAgent({
           ) : null}
           {csatPrompt && supportMode?.csat ? (
             <div
-              data-mobileai-ignore="true"
+              data-ai-ignore="true"
               style={{
                 position: 'fixed',
                 inset: 0,
@@ -5073,7 +5150,7 @@ export function AIAgent({
           {showChat ? (
             isOpen && !renderMinimized ? (
               <div
-                data-mobileai-ignore="true"
+                data-ai-ignore="true"
                 ref={popupRef}
                 style={{
                   position: 'fixed',
@@ -5102,9 +5179,7 @@ export function AIAgent({
                   visible={
                     isLoading &&
                     !pendingPrompt &&
-                    !!statusText &&
-                    statusText !== 'Thinking...' &&
-                    statusText !== 'Working on it…'
+                    !!statusText
                   }
                   statusText={statusText}
                   onCancel={
@@ -5725,7 +5800,7 @@ export function AIAgent({
               </div>
             ) : (
               <div
-                data-mobileai-ignore="true"
+                data-ai-ignore="true"
                 style={{
                   position: 'fixed',
                   insetInlineEnd: popupPosition ? 'auto' : 20,
@@ -5738,7 +5813,7 @@ export function AIAgent({
                 {discoveryVisible && !renderMinimized && !isLoading && !showProactive ? (
                   <div
                     className="tw-discovery"
-                    data-mobileai-ignore="true"
+                    data-ai-ignore="true"
                     role="button"
                     tabIndex={0}
                     onClick={dismissDiscoveryTooltip}
@@ -5832,7 +5907,7 @@ export function AIAgent({
                 ) : null}
                 {showProactive && proactiveStage === 'badge' ? (
                   <div
-                    data-mobileai-ignore="true"
+                    data-ai-ignore="true"
                     style={{
                       position: 'absolute',
                       bottom: WEB_LAUNCHER_SIZE + 12,
@@ -5913,9 +5988,9 @@ export function AIAgent({
                     }}
                   />
                 ) : null}
-                {isLoading ? (
+                {isLoading && !isOpen ? (
                   <div
-                    data-mobileai-ignore="true"
+                    data-ai-ignore="true"
                     style={{
                       position: 'absolute',
                       bottom: WEB_LAUNCHER_SIZE + 12,
@@ -6051,7 +6126,7 @@ export function AIAgent({
                     position: 'relative',
                   }}
                 >
-                  {isLoading ? <WebLoadingDots size={28} color="#fff" /> : <WebAIBadge size={28} />}
+                  {isLoading && isOpen ? <WebLoadingDots size={28} color="#fff" /> : <WebAIBadge size={28} />}
                   {displayUnread > 0 ? (
                     <span
                       aria-hidden="true"
