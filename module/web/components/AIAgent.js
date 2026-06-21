@@ -3228,6 +3228,7 @@ ${screenContext}`;
   const displayUnread = totalUnread + localUnread;
   const renderMinimized = isOpen && minimized && !forceExpandDuringRun && !pendingPrompt;
   const minimizedPillText = useMemo(() => {
+    if (isLoading) return statusText || "Thinking\u2026";
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const message = messages[i];
       if (message?.role === "assistant" && !message.promptKind) {
@@ -3236,7 +3237,7 @@ ${screenContext}`;
       }
     }
     return statusText || "Working on it\u2026";
-  }, [messages, statusText]);
+  }, [isLoading, messages, statusText]);
   const showProactive = !isOpen && !renderMinimized && proactiveStage !== "hidden" && !proactiveDismissedRef.current;
   const latestClosedPreview = useMemo(() => {
     const latestAssistantMessage = [...messages].reverse().find((message) => message.role !== "user" && !message.promptKind);

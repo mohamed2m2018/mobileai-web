@@ -3515,20 +3515,21 @@ export function AIAgent({
   // Collapse the open panel to a status pill while the agent acts on the page,
   // unless the user re-expanded it or an approval/question is pending.
   const renderMinimized = isOpen && minimized && !forceExpandDuringRun && !pendingPrompt;
-  // The collapsed pill surfaces the agent's latest reply (RN-style), so the user
-  // can follow along without re-expanding; falls back to the live status text.
+  // While the agent is actively working, the pill shows the LIVE thinking/status (what
+  // it's doing right now) — not a stale last reply or a mid-run finding. Only once the
+  // run is idle does it fall back to the last real chat reply (approval/ask prompts,
+  // promptKind, are never surfaced here — the panel expands for those).
   const minimizedPillText = useMemo(() => {
+    if (isLoading) return statusText || 'Thinking…';
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const message = messages[i];
-      // Skip approval/ask prompts (promptKind set) — the pill should surface the
-      // last actual chat reply, not a lingering "May I tap …?" thinking prompt.
       if (message?.role === 'assistant' && !message.promptKind) {
         const text = message.previewText || richContentToPlainText(message.content) || '';
         if (text) return text;
       }
     }
     return statusText || 'Working on it…';
-  }, [messages, statusText]);
+  }, [isLoading, messages, statusText]);
   const showProactive = !isOpen && !renderMinimized && proactiveStage !== 'hidden' && !proactiveDismissedRef.current;
   const latestClosedPreview = useMemo(() => {
     const latestAssistantMessage = [...messages]
