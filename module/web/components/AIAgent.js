@@ -2526,7 +2526,7 @@ function AIAgent({
       activeGoalRef.current = trimmed || displayText;
       clearResumeTask(persistenceKey);
       workflowApprovedRef.current = false;
-      setStatusText("Looking at your screen...");
+      setStatusText("Thinking...");
       setLocalUnread(0);
       setIsOpen(true);
       logger.info(

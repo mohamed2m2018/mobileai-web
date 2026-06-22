@@ -2759,7 +2759,10 @@ export function AIAgent({
       // and re-gates approvals (the prior task's "Allow" must not carry over).
       clearResumeTask(persistenceKey);
       workflowApprovedRef.current = false;
-      setStatusText('Looking at your screen...');
+      // Neutral until the server's first real status arrives — the agent may just
+      // answer from knowledge without ever reading the screen, so don't claim
+      // "Looking at your screen…" up front.
+      setStatusText('Thinking...');
       setLocalUnread(0);
       setIsOpen(true);
       logger.info(
