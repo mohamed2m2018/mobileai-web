@@ -334,6 +334,8 @@ export class WebPlatformAdapter {
         return this.longPress(intent.index);
       case 'type':
         return this.typeText(intent.index, intent.text, intent.submit);
+      case 'press_enter':
+        return this.pressEnter(intent.index);
       case 'scroll':
         return this.scroll(intent.direction, intent.amount, intent.containerIndex);
       case 'adjust_slider':
@@ -776,6 +778,22 @@ export class WebPlatformAdapter {
     } catch {
       return false;
     }
+  }
+  // Press Enter on a text input to submit a search/form. A standalone action because
+  // the model reasons sequentially ("type… then press Enter") and reliably reaches for
+  // this verb, whereas it ignored the optional submit param on type().
+  async pressEnter(index) {
+    const resolved = this.resolveInteractiveElement(index, 'type');
+    if (!resolved.ok) return resolved.message;
+    const { index: resolvedIndex, label, node } = resolved;
+    if (!node) return `❌ Element with index ${resolvedIndex} not found.`;
+    this.scrollNodeIntoView(node);
+    await this.showActionHighlight(node, 'type');
+    node.focus();
+    const ok = this.submitFromNode(node);
+    return ok
+      ? `✅ Pressed Enter on [${resolvedIndex}] "${label}" to submit.`
+      : `⚠️ Could not submit [${resolvedIndex}] "${label}".`;
   }
   async scroll(direction, amount, containerIndex) {
     const root = this.options.getRoot();
