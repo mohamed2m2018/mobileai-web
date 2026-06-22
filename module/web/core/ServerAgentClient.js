@@ -288,6 +288,20 @@ export class ServerAgentClient {
       output = `❌ ${toolName} failed: ${err?.message || 'unknown error'}`;
     }
 
+    // Let any SPA navigation triggered by the action settle BEFORE snapshotting, so the
+    // agent reasons over the final screen instead of a transient one that goes stale by
+    // the next step (the STALE_TARGET churn). Bounded + best-effort — never blocks the
+    // result, and resolves fast when nothing navigated.
+    try {
+      if (typeof this.adapter.waitForStable === 'function') {
+        await this._withTimeout(
+          Promise.resolve().then(() => this.adapter.waitForStable()),
+          ACTION_TIMEOUT_MS,
+          null,
+        );
+      }
+    } catch { /* settle is best-effort */ }
+
     let freshSnapshot;
     try {
       freshSnapshot = this.adapter.getScreenSnapshot();

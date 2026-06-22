@@ -362,6 +362,30 @@ export class WebPlatformAdapter {
         return '❌ Unsupported action intent.';
     }
   }
+  // Wait for the page to SETTLE after an action before the next snapshot is taken.
+  // Without this, a navigating tap/press_enter on a fast SPA (e.g. noon) snapshots a
+  // transient mid-navigation screen; the agent reasons over it, and by the time its
+  // next action fires the route has changed → STALE_TARGET, and a wasted re-read step.
+  // Settled = the URL (which IS the screenName) has stopped changing for a quiet window
+  // AND the document is ready. Returns fast when nothing navigated; capped so it can
+  // never hang the step.
+  async waitForStable(maxMs = 1800) {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const win = window, doc = document, start = Date.now();
+    const QUIET_MS = 250;
+    let lastUrl = win.location.href;
+    let lastChange = Date.now();
+    await new Promise((resolve) => {
+      const tick = () => {
+        const now = Date.now();
+        if (win.location.href !== lastUrl) { lastUrl = win.location.href; lastChange = now; }
+        const settled = now - lastChange >= QUIET_MS && doc.readyState === 'complete';
+        if (settled || now - start >= maxMs) resolve();
+        else setTimeout(tick, 50);
+      };
+      setTimeout(tick, 50);
+    });
+  }
   getCurrentScreenName() {
     if (this.options.getCurrentScreenName) {
       return this.options.getCurrentScreenName();
