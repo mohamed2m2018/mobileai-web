@@ -840,13 +840,21 @@ export class WebPlatformAdapter {
       // "Could not find a scrollable target" even though the page scrolls fine.
       target = findScrollableTarget(element, win) || PageControllerWeb.findNearestScrollableContainer(element) || win;
     } else if (isHTMLElementLike(doc.activeElement) && !isInsideAgentUI(doc.activeElement)) {
-      // Only honor the focused element's scroll container when it belongs to the
-      // host page — never the agent's own chat widget. When the widget has focus
-      // (it usually does right after an action), its scrollable panel must not
-      // capture a page scroll; fall back to the window so the page/article moves.
-      const candidate = findScrollableTarget(doc.activeElement, win);
-      if (candidate && !isInsideAgentUI(candidate)) {
-        target = candidate;
+      // Default to the WINDOW (the main page). Only divert to the focused element's
+      // scroll container when the window genuinely CANNOT scroll the requested
+      // direction — e.g. content lives in a modal/inner panel. Otherwise the focused
+      // element is often a control in a SMALL sidebar (e.g. a price-filter input on a
+      // results page); diverting there scrolled the 943px sidebar to its bottom in one
+      // step while the product list never moved — the agent then "scroll-looped" on a
+      // page that was scrolling nothing. Keep the window unless it's maxed out.
+      const wPos = getScrollPosition(win);
+      const wLim = getScrollLimits(win, doc);
+      const windowCanScroll = direction === 'down' ? wPos.top < wLim.top - 1 : wPos.top > 1;
+      if (!windowCanScroll) {
+        const candidate = findScrollableTarget(doc.activeElement, win);
+        if (candidate && !isInsideAgentUI(candidate)) {
+          target = candidate;
+        }
       }
     }
     if (!target) {
