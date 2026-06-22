@@ -333,7 +333,7 @@ export class WebPlatformAdapter {
       case 'long_press':
         return this.longPress(intent.index);
       case 'type':
-        return this.typeText(intent.index, intent.text);
+        return this.typeText(intent.index, intent.text, intent.submit);
       case 'scroll':
         return this.scroll(intent.direction, intent.amount, intent.containerIndex);
       case 'adjust_slider':
@@ -723,7 +723,7 @@ export class WebPlatformAdapter {
       bubbles: true
     }));
   }
-  async typeText(index, text) {
+  async typeText(index, text, submit) {
     const resolved = this.resolveInteractiveElement(index, 'type');
     if (!resolved.ok) return resolved.message;
     const { index: resolvedIndex, label, node } = resolved;
@@ -739,7 +739,8 @@ export class WebPlatformAdapter {
       node.focus();
       this.setNativeValue(node, text);
       this.dispatchTextInputEvents(node, text);
-      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"`;
+      const submitted = submit ? this.submitFromNode(node) : false;
+      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and pressed Enter to submit' : ''}`;
     }
     if (node.isContentEditable) {
       this.scrollNodeIntoView(node);
@@ -747,9 +748,34 @@ export class WebPlatformAdapter {
       node.focus();
       node.textContent = text;
       this.dispatchTextInputEvents(node, text);
-      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"`;
+      const submitted = submit ? this.submitFromNode(node) : false;
+      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and pressed Enter to submit' : ''}`;
     }
     return `❌ Element [${resolvedIndex}] "${label}" is not a typeable text input.`;
+  }
+  // Submit the form/field the agent just typed into — pressing Enter the way a user
+  // would. Invoked ONLY when the agent passes submit:true (it decides, based on its
+  // goal — no brittle guessing about which inputs are "searches"). Dispatches a full
+  // Enter key sequence (for SPA keydown/keyup handlers) AND requestSubmit()s the owning
+  // form, because a synthetic Enter does NOT trigger native form submission on its own.
+  submitFromNode(node) {
+    try {
+      const view = node.ownerDocument?.defaultView || (typeof window !== 'undefined' ? window : null);
+      if (view && view.KeyboardEvent) {
+        for (const evtType of ['keydown', 'keypress', 'keyup']) {
+          node.dispatchEvent(new view.KeyboardEvent(evtType, {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+          }));
+        }
+      }
+      const form = node.form || (typeof node.closest === 'function' ? node.closest('form') : null);
+      if (form && typeof form.requestSubmit === 'function') {
+        try { form.requestSubmit(); } catch { try { form.submit(); } catch { /* ignore */ } }
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
   async scroll(direction, amount, containerIndex) {
     const root = this.options.getRoot();
