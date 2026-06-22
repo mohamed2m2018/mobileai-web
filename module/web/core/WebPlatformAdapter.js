@@ -810,7 +810,11 @@ export class WebPlatformAdapter {
         return `❌ Element with index ${containerIndex} not found.`;
       }
       await this.showActionHighlight(element, 'scroll');
-      target = findScrollableTarget(element, win) || PageControllerWeb.findNearestScrollableContainer(element);
+      // Fall back to the WINDOW when the indexed element has no overflow-scroll
+      // ancestor. Many sites (e.g. noon) scroll the product list with the window, not
+      // an inner container — so resolving a containerIndex to null used to fail with
+      // "Could not find a scrollable target" even though the page scrolls fine.
+      target = findScrollableTarget(element, win) || PageControllerWeb.findNearestScrollableContainer(element) || win;
     } else if (isHTMLElementLike(doc.activeElement) && !isInsideAgentUI(doc.activeElement)) {
       // Only honor the focused element's scroll container when it belongs to the
       // host page — never the agent's own chat widget. When the widget has focus
@@ -822,7 +826,8 @@ export class WebPlatformAdapter {
       }
     }
     if (!target) {
-      return '❌ Could not find a scrollable target.';
+      // Last resort: the window always exists and usually scrolls the page.
+      target = win;
     }
     const topDirection = direction === 'down' ? 1 : -1;
     const before = getScrollPosition(target);
