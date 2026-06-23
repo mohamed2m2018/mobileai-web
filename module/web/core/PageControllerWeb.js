@@ -1352,15 +1352,15 @@ export class PageControllerWeb {
       if (entry.props?.topLayer === false) {
         hints.push('covered');
       }
-      // nearby exists where the label alone is insufficient: a weak/icon label, or a
-      // form control whose accessible name lives in adjacent text (a field's caption,
-      // the section it sits under). For a strong-labeled button/link it's redundant
-      // context the LLM doesn't need — dropping it there is a measurable per-step prompt
-      // cut on label-rich screens with no loss of grounding.
-      const nearbyHelps = isWeakLabel(entry.label, node)
-        || isInputElement(node) || isTextAreaElement(node) || isSelectElement(node);
-      if (typeof entry.props?.nearbyText === 'string' && entry.props.nearbyText && nearbyHelps) {
-        hints.push(`nearby="${truncateText(entry.props.nearbyText, 90)}"`);
+      // nearby = the visible on-screen text around the control (adjacent labels, the
+      // calendar month above a bare-number date cell, the caption beside a field). It is
+      // the agent's GROUNDING and is NEVER trimmed: gating it by label "strength" silently
+      // dropped the month context from numeric date cells ("15"/"17" aren't "weak"), and
+      // the agent could no longer pick a check-out date — it looped on the check-in cell.
+      // On-screen text always ships. (Only the selector hint — a CSS path, NOT visible
+      // text and never read by the model — stays dropped, below.)
+      if (typeof entry.props?.nearbyText === 'string' && entry.props.nearbyText) {
+        hints.push(`nearby="${truncateText(entry.props.nearbyText, 100)}"`);
       }
       const scrollData = entry.props?.scrollData;
       if (scrollData) {

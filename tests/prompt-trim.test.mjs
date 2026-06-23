@@ -37,22 +37,22 @@ test("elementsText never emits selector= (the agent acts by index, not CSS)", ()
   });
 });
 
-test("nearby is kept for form controls, dropped for strong-labeled buttons", () => {
+test("on-screen context for a bare-number date cell is never trimmed", () => {
+  // Regression guard: gating nearby by label "strength" dropped the month context from
+  // bare-number calendar cells ("15"/"17") — the agent could no longer pick a check-out
+  // date and looped on the check-in cell. On-screen text is grounding and always ships.
   withDom(`
-    <form>
-      <label for="qty">Quantity per box</label>
-      <select id="qty"><option>1</option><option>2</option></select>
-      <div>Shipping options for your order</div>
-      <button>Continue to payment</button>
-    </form>
+    <section>
+      <h2>July 2026</h2>
+      <p>Select your check-out date</p>
+      <button>16</button><button>17</button><button>18</button>
+    </section>
   `, (dom) => {
     const controller = new PageControllerWeb(dom.window.document);
     const t = controller.buildScreenSnapshot("/p", ["/p"]).elementsText;
-    // The select (form control) keeps its nearby context...
-    const selectLine = t.split("\n").find((l) => /<picker>/.test(l)) || "";
-    assert.match(selectLine, /nearby="/, "form control should keep nearby");
-    // ...the strong-labeled button does not carry a redundant nearby.
-    const btnLine = t.split("\n").find((l) => /Continue to payment/.test(l)) || "";
-    assert.doesNotMatch(btnLine, /nearby="/, "strong-labeled button should not carry nearby");
+    assert.doesNotMatch(t, /selector="/, "selector (a CSS path, not on-screen text) stays dropped");
+    const cell17 = t.split("\n").find((l) => /<pressable>17/.test(l)) || "";
+    assert.match(cell17, /nearby="/, "numeric date cell must keep its on-screen context (the month)");
+    assert.match(cell17, /July 2026/, "the disambiguating month must be present");
   });
 });
