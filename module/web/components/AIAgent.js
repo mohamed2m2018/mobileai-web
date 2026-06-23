@@ -2601,7 +2601,10 @@ function AIAgent({
           resumeGoal,
           toUserHistory(messagesRef.current),
           void 0,
-          { ...serverConfig, workflowApproved: workflowApprovedRef.current, conversationId: conversationIdRef.current || localConversationKeyRef.current }
+          // resume: true → carry the progress + approval buffer (keyed by conversationId)
+          // instead of clearing it. Without this the resumed run restarts the task and
+          // re-asks approval (the re-search loop).
+          { ...serverConfig, resume: true, workflowApproved: workflowApprovedRef.current, conversationId: conversationIdRef.current || localConversationKeyRef.current }
         );
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({

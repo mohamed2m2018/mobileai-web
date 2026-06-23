@@ -26,32 +26,51 @@ function frameAsResumedGoal(goal) {
   );
 }
 
-// Progress carried across an MPA reload. A navigating action tears down the socket and
-// the page reloads into a brand-new client at Step 0; chatHistory survives but the
-// intermediate ACTIONS do not, so the resumed run re-derives the task and loops
-// (re-search, re-select…). We persist the action outcome lines in sessionStorage keyed
-// to the task GOAL: a resume of the same goal carries them (server tells the agent
-// what's already done); a different goal (new task) naturally starts a fresh buffer.
+// State carried across an MPA reload. A navigating action tears down the socket and the
+// page reloads into a brand-new client at Step 0; chatHistory survives but the
+// intermediate ACTIONS and the workflow APPROVAL do not, so the resumed run re-derives
+// the task and loops (re-search, re-select…) and re-asks "may I?". We persist the action
+// outcome lines + the granted approval in sessionStorage keyed to the CONVERSATION id —
+// which is stable across the reload AND the resume's goal-wrapping. (Keying by the goal
+// string was the bug: resumeTask sends a wrapped "[Resuming…] Original request: X" goal
+// that never matched the stored key, so nothing was ever carried.)
 const PROGRESS_KEY = 'twomilia-agent-progress';
 const PROGRESS_TTL_MS = 3 * 60 * 1000;
 const PROGRESS_CAP = 25;
-function loadProgress(goal) {
-  if (typeof window === 'undefined' || !window.sessionStorage) return [];
+function loadBuffer(convId) {
+  if (typeof window === 'undefined' || !window.sessionStorage || !convId) return null;
   try {
     const raw = window.sessionStorage.getItem(PROGRESS_KEY);
-    if (!raw) return [];
+    if (!raw) return null;
     const p = JSON.parse(raw);
-    if (!p || p.goal !== goal || typeof p.ts !== 'number' || (Date.now() - p.ts) > PROGRESS_TTL_MS) return [];
-    return Array.isArray(p.lines) ? p.lines.filter(s => typeof s === 'string') : [];
-  } catch { return []; }
+    if (!p || p.convId !== convId || typeof p.ts !== 'number' || (Date.now() - p.ts) > PROGRESS_TTL_MS) return null;
+    return {
+      lines: Array.isArray(p.lines) ? p.lines.filter(s => typeof s === 'string') : [],
+      workflowApproved: p.workflowApproved === true,
+    };
+  } catch { return null; }
 }
-function appendProgress(goal, line) {
-  if (typeof window === 'undefined' || !window.sessionStorage || !goal || !line) return;
+function saveBuffer(convId, buf) {
+  if (typeof window === 'undefined' || !window.sessionStorage || !convId) return;
   try {
-    const lines = loadProgress(goal);          // [] when the stored goal differs → fresh buffer for this goal
-    lines.push(String(line));
-    window.sessionStorage.setItem(PROGRESS_KEY, JSON.stringify({ goal, ts: Date.now(), lines: lines.slice(-PROGRESS_CAP) }));
-  } catch { /* sessionStorage full/blocked — progress carry is best-effort */ }
+    window.sessionStorage.setItem(PROGRESS_KEY, JSON.stringify({
+      convId, ts: Date.now(),
+      lines: (buf.lines || []).slice(-PROGRESS_CAP),
+      workflowApproved: buf.workflowApproved === true,
+    }));
+  } catch { /* sessionStorage full/blocked — carry is best-effort */ }
+}
+function appendProgress(convId, line) {
+  if (!convId || !line) return;
+  const buf = loadBuffer(convId) || { lines: [], workflowApproved: false };
+  buf.lines.push(String(line));
+  saveBuffer(convId, buf);
+}
+function markWorkflowApproved(convId) {
+  if (!convId) return;
+  const buf = loadBuffer(convId) || { lines: [], workflowApproved: false };
+  buf.workflowApproved = true;
+  saveBuffer(convId, buf);
 }
 function clearProgress() {
   if (typeof window === 'undefined' || !window.sessionStorage) return;
@@ -105,10 +124,12 @@ export class ServerAgentClient {
   async execute(userMessage, chatHistory, userImages, config) {
     this._supersedePrevious();
     this._aborted = false;
-    // Track the task goal so executed actions accumulate under it (see appendProgress),
-    // and load any progress carried across an MPA reload of the SAME goal.
-    this._taskGoal = userMessage;
-    const carriedProgress = loadProgress(userMessage);
+    // Key all carried state by the stable CONVERSATION id (survives the reload + the
+    // resume's goal-wrapping). On a fresh user message (not a resume), drop any stale
+    // buffer so a new task starts clean; on a RESUME (or a mid-run reconnect) the buffer
+    // saved by the pre-reload/pre-drop run is read per-connection in ws.onopen below.
+    this._convId = config?.conversationId || null;
+    if (config?.resume !== true) clearProgress();
 
     const wsUrl = `${this.serverUrl}?key=${encodeURIComponent(this.analyticsKey)}`;
     // Auto-reconnect on an UNEXPECTED close — the socket died before a terminal
@@ -146,6 +167,9 @@ export class ServerAgentClient {
         ws.onopen = () => {
           if (this._ws !== ws) return;
           try {
+            // Read the carry buffer fresh per connection — covers both an MPA-reload
+            // resume and a mid-run socket reconnect (it has accumulated this run's actions).
+            const buf = loadBuffer(this._convId);
             const startMsg = {
               type: 'start',
               // On a reconnect (attempt > 0) resume as a continuation so a mid-run
@@ -155,12 +179,14 @@ export class ServerAgentClient {
               // Group the run's server-emitted analytics events under this conversation.
               conversationId: config?.conversationId,
               chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
-              // Carried across an MPA reload+resume: a workflow approval the user
-              // already granted, so the resumed server session doesn't re-prompt.
-              workflowApproved: config?.workflowApproved === true,
+              // Carried across an MPA reload+resume: a workflow approval the user already
+              // granted, so the resumed server session doesn't re-ask "may I?". Trust
+              // EITHER the caller's flag OR the approval persisted in the carry buffer
+              // (the buffer is the robust path — survives even if host-side ref timing missed it).
+              workflowApproved: config?.workflowApproved === true || buf?.workflowApproved === true,
               // Actions already performed this task before the reload — so the resumed
               // run continues instead of restarting the goal (re-search/re-select loop).
-              priorProgress: carriedProgress,
+              priorProgress: buf?.lines || [],
               screenState: {
                 screenName: snapshot.screenName,
                 availableScreens: snapshot.availableScreens,
@@ -361,7 +387,7 @@ export class ServerAgentClient {
 
     // Record the outcome so it survives an MPA reload and the resumed run can continue
     // from here instead of restarting the task.
-    appendProgress(this._taskGoal, String(output));
+    appendProgress(this._convId, String(output));
 
     this._send({
       type: 'action_result',
@@ -409,6 +435,9 @@ export class ServerAgentClient {
       const asString = typeof response === 'string' ? response : null;
       const approvalToken = response?.approvalToken
         ?? (asString === '__APPROVAL_GRANTED__' || asString === '__APPROVAL_REJECTED__' ? asString : undefined);
+      // Persist a granted workflow approval in the carry buffer so a reload mid-task
+      // resumes WITHOUT re-asking "may I?" — robust to host-side ref timing.
+      if (approvalToken === '__APPROVAL_GRANTED__') markWorkflowApproved(this._convId);
       this._send({
         type: 'user_response',
         response: response?.text ?? response?.response ?? asString,
