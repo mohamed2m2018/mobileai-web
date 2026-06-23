@@ -1352,16 +1352,26 @@ export class PageControllerWeb {
       if (entry.props?.topLayer === false) {
         hints.push('covered');
       }
-      if (typeof entry.props?.nearbyText === 'string' && entry.props.nearbyText) {
-        hints.push(`nearby="${truncateText(entry.props.nearbyText, 100)}"`);
+      // nearby exists where the label alone is insufficient: a weak/icon label, or a
+      // form control whose accessible name lives in adjacent text (a field's caption,
+      // the section it sits under). For a strong-labeled button/link it's redundant
+      // context the LLM doesn't need — dropping it there is a measurable per-step prompt
+      // cut on label-rich screens with no loss of grounding.
+      const nearbyHelps = isWeakLabel(entry.label, node)
+        || isInputElement(node) || isTextAreaElement(node) || isSelectElement(node);
+      if (typeof entry.props?.nearbyText === 'string' && entry.props.nearbyText && nearbyHelps) {
+        hints.push(`nearby="${truncateText(entry.props.nearbyText, 90)}"`);
       }
       const scrollData = entry.props?.scrollData;
       if (scrollData) {
         const scrollHint = ['up', 'down', 'left', 'right'].map(direction => typeof scrollData[direction] === 'number' && scrollData[direction] > 0 ? `${direction}=${Math.round(scrollData[direction])}` : '').filter(Boolean).join(', ');
         if (scrollHint) hints.push(`scroll="${scrollHint}"`);
       }
-      const selector = typeof entry.props?.selector === 'string' ? truncateText(entry.props.selector, 80) : '';
-      if (selector) hints.push(`selector="${selector}"`);
+      // selector is deliberately NOT emitted to the model: the agent acts by [index]
+      // (the client resolves index→node), and the server gate keys off label/nearby/
+      // value — never the CSS selector. Emitting it per element was pure prompt bloat
+      // (~80 chars × every control) billed uncached on each screen change. props.selector
+      // is still kept on the element for any server-side use.
       const suffix = hints.length > 0 ? ` ${hints.join(' ')}` : '';
       const newPrefix = entry.props?.isNew === true ? '*' : '';
       // 120→280: product-card labels carry the PRICE after the name + rating (measured
