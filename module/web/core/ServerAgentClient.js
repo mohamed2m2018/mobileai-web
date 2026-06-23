@@ -26,6 +26,38 @@ function frameAsResumedGoal(goal) {
   );
 }
 
+// Progress carried across an MPA reload. A navigating action tears down the socket and
+// the page reloads into a brand-new client at Step 0; chatHistory survives but the
+// intermediate ACTIONS do not, so the resumed run re-derives the task and loops
+// (re-search, re-select…). We persist the action outcome lines in sessionStorage keyed
+// to the task GOAL: a resume of the same goal carries them (server tells the agent
+// what's already done); a different goal (new task) naturally starts a fresh buffer.
+const PROGRESS_KEY = 'twomilia-agent-progress';
+const PROGRESS_TTL_MS = 3 * 60 * 1000;
+const PROGRESS_CAP = 25;
+function loadProgress(goal) {
+  if (typeof window === 'undefined' || !window.sessionStorage) return [];
+  try {
+    const raw = window.sessionStorage.getItem(PROGRESS_KEY);
+    if (!raw) return [];
+    const p = JSON.parse(raw);
+    if (!p || p.goal !== goal || typeof p.ts !== 'number' || (Date.now() - p.ts) > PROGRESS_TTL_MS) return [];
+    return Array.isArray(p.lines) ? p.lines.filter(s => typeof s === 'string') : [];
+  } catch { return []; }
+}
+function appendProgress(goal, line) {
+  if (typeof window === 'undefined' || !window.sessionStorage || !goal || !line) return;
+  try {
+    const lines = loadProgress(goal);          // [] when the stored goal differs → fresh buffer for this goal
+    lines.push(String(line));
+    window.sessionStorage.setItem(PROGRESS_KEY, JSON.stringify({ goal, ts: Date.now(), lines: lines.slice(-PROGRESS_CAP) }));
+  } catch { /* sessionStorage full/blocked — progress carry is best-effort */ }
+}
+function clearProgress() {
+  if (typeof window === 'undefined' || !window.sessionStorage) return;
+  try { window.sessionStorage.removeItem(PROGRESS_KEY); } catch { /* ignore */ }
+}
+
 export class ServerAgentClient {
   constructor(proxyUrl, analyticsKey, platformAdapter, callbacks) {
     this.serverUrl = ServerAgentClient._deriveAgentUrl(proxyUrl);
@@ -73,6 +105,10 @@ export class ServerAgentClient {
   async execute(userMessage, chatHistory, userImages, config) {
     this._supersedePrevious();
     this._aborted = false;
+    // Track the task goal so executed actions accumulate under it (see appendProgress),
+    // and load any progress carried across an MPA reload of the SAME goal.
+    this._taskGoal = userMessage;
+    const carriedProgress = loadProgress(userMessage);
 
     const wsUrl = `${this.serverUrl}?key=${encodeURIComponent(this.analyticsKey)}`;
     // Auto-reconnect on an UNEXPECTED close — the socket died before a terminal
@@ -122,6 +158,9 @@ export class ServerAgentClient {
               // Carried across an MPA reload+resume: a workflow approval the user
               // already granted, so the resumed server session doesn't re-prompt.
               workflowApproved: config?.workflowApproved === true,
+              // Actions already performed this task before the reload — so the resumed
+              // run continues instead of restarting the goal (re-search/re-select loop).
+              priorProgress: carriedProgress,
               screenState: {
                 screenName: snapshot.screenName,
                 availableScreens: snapshot.availableScreens,
@@ -320,6 +359,10 @@ export class ServerAgentClient {
       } catch { /* screenshot is best-effort — never block the result on it */ }
     }
 
+    // Record the outcome so it survives an MPA reload and the resumed run can continue
+    // from here instead of restarting the task.
+    appendProgress(this._taskGoal, String(output));
+
     this._send({
       type: 'action_result',
       output: String(output),
@@ -478,6 +521,8 @@ export class ServerAgentClient {
   }
 
   _handleDone(msg) {
+    // Task finished — drop the carried-progress buffer so the next task starts clean.
+    clearProgress();
     this.callbacks.onActingOnPage?.(false);
     this.callbacks.onStatusUpdate?.('');
     this.callbacks.onTokenUsage?.(msg.tokenUsage);
