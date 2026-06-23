@@ -329,11 +329,11 @@ export class WebPlatformAdapter {
   async executeAction(intent) {
     switch (intent.type) {
       case 'tap':
-        return this.tap(intent.index);
+        return this.tap(intent.index, intent.label);
       case 'long_press':
-        return this.longPress(intent.index);
+        return this.longPress(intent.index, intent.label);
       case 'type':
-        return this.typeText(intent.index, intent.text, intent.submit);
+        return this.typeText(intent.index, intent.text, intent.submit, intent.label);
       case 'press_enter':
         return this.pressEnter(intent.index);
       case 'scroll':
@@ -432,7 +432,25 @@ export class WebPlatformAdapter {
   // matches what was observed) and relocating by signature. Mirrors RN's
   // resolveInteractiveElement. Returns { ok:true, index, label, node } against a
   // FRESH controller, or { ok:false, message }.
-  resolveInteractiveElement(index, actionName) {
+  // Relocate by the model's intended LABEL when the positional index has drifted. The
+  // index is only a hint on a lazy-loading/re-rendering page; the label is the stable
+  // identity. Prefer an exact label match, else a unique substring match; on ties pick
+  // the candidate nearest the model's index hint. Returns null when nothing matches
+  // (e.g. the model targeted a labelless/hallucinated element) so the caller can report.
+  relocateByLabel(elements, intendedLabel, hintIndex) {
+    const want = normalizeTargetText(intendedLabel);
+    if (!want || want.length < 2) return null;
+    const exact = elements.filter(e => normalizeTargetText(e.label) === want);
+    const pool = exact.length ? exact : elements.filter(e => {
+      const l = normalizeTargetText(e.label);
+      return l && l.length >= 2 && (l.includes(want) || want.includes(l));
+    });
+    if (pool.length === 0) return null;
+    if (pool.length === 1) return pool[0];
+    return pool.reduce((best, e) =>
+      Math.abs(e.index - hintIndex) < Math.abs(best.index - hintIndex) ? e : best);
+  }
+  resolveInteractiveElement(index, actionName, intendedLabel) {
     // 1. Capture what the model observed BEFORE re-snapshotting.
     const observedSnapshot = this.lastSnapshot;
     const observedElement = observedSnapshot?.elements.find(entry => entry.index === index);
@@ -456,6 +474,19 @@ export class WebPlatformAdapter {
           index: sameIndexElement.index,
           label: sameIndexElement.label,
           node: this.getController()?.getElement(sameIndexElement.index) || null
+        };
+      }
+      // The positional index drifted (page lazy-loaded / re-rendered). Relocate by the
+      // model's intended LABEL — the stable identity — so the action still lands on the
+      // control the model meant, instead of failing.
+      const byLabel = this.relocateByLabel(elements, intendedLabel, index);
+      if (byLabel) {
+        return {
+          ok: true,
+          index: byLabel.index,
+          label: byLabel.label,
+          node: this.getController()?.getElement(byLabel.index) || null,
+          relocated: true,
         };
       }
       // Concise + diagnostic: the previous message dumped every index and got
@@ -496,6 +527,19 @@ export class WebPlatformAdapter {
         index: relocated.index,
         label: relocated.label,
         node: this.getController()?.getElement(relocated.index) || null
+      };
+    }
+    // Scoring against the observed element was ambiguous/empty — try the model's
+    // intended label as a last resort before declaring stale.
+    const byLabel = this.relocateByLabel(elements, intendedLabel, index);
+    if (byLabel) {
+      logger.info('WebPlatformAdapter', `Relocated ${actionName} [${index}] to "${byLabel.label}" by label`);
+      return {
+        ok: true,
+        index: byLabel.index,
+        label: byLabel.label,
+        node: this.getController()?.getElement(byLabel.index) || null,
+        relocated: true,
       };
     }
     const currentLabel = sameIndexElement ? `"${sameIndexElement.label}"` : 'no current element';
@@ -739,8 +783,8 @@ export class WebPlatformAdapter {
       setTimeout(finish, 800);
     });
   }
-  async tap(index) {
-    const resolved = this.resolveInteractiveElement(index, 'tap');
+  async tap(index, intendedLabel) {
+    const resolved = this.resolveInteractiveElement(index, 'tap', intendedLabel);
     if (!resolved.ok) return resolved.message;
     const { index: resolvedIndex, label, node } = resolved;
     if (!node) {
@@ -751,8 +795,8 @@ export class WebPlatformAdapter {
     this.dispatchPointerSequence(node);
     return `✅ Tapped [${resolvedIndex}] "${label}"`;
   }
-  async longPress(index) {
-    const resolved = this.resolveInteractiveElement(index, 'long_press');
+  async longPress(index, intendedLabel) {
+    const resolved = this.resolveInteractiveElement(index, 'long_press', intendedLabel);
     if (!resolved.ok) return resolved.message;
     const { index: resolvedIndex, label, node } = resolved;
     if (!node) {
@@ -774,8 +818,8 @@ export class WebPlatformAdapter {
       bubbles: true
     }));
   }
-  async typeText(index, text, submit) {
-    const resolved = this.resolveInteractiveElement(index, 'type');
+  async typeText(index, text, submit, intendedLabel) {
+    const resolved = this.resolveInteractiveElement(index, 'type', intendedLabel);
     if (!resolved.ok) return resolved.message;
     const { index: resolvedIndex, label, node } = resolved;
     if (!node) {

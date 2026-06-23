@@ -294,7 +294,7 @@ export class ServerAgentClient {
   }
 
   async _handleAction(msg) {
-    const { toolName, args, reasoning, requestScreenshot } = msg;
+    const { toolName, args, reasoning, requestScreenshot, targetLabel } = msg;
 
     // Note: the overlay label is set by the preceding 'status' message (which the
     // server sends just before this action). Don't overwrite it with a raw
@@ -311,7 +311,7 @@ export class ServerAgentClient {
     // client reconnect-loops Step 0 (the "stuck/pending" bug). Bound every await.
     let output;
     try {
-      const intent = this._buildIntent(toolName, args);
+      const intent = this._buildIntent(toolName, args, targetLabel);
       output = await this._withTimeout(
         Promise.resolve().then(() => this.adapter.executeAction(intent)),
         ACTION_TIMEOUT_MS,
@@ -556,14 +556,14 @@ export class ServerAgentClient {
     this._cleanup();
   }
 
-  _buildIntent(toolName, args) {
+  _buildIntent(toolName, args, targetLabel) {
     switch (toolName) {
       case 'tap':
-        return { type: 'tap', index: args.index };
+        return { type: 'tap', index: args.index, label: targetLabel };
       case 'long_press':
-        return { type: 'long_press', index: args.index };
+        return { type: 'long_press', index: args.index, label: targetLabel };
       case 'type':
-        return { type: 'type', index: args.index, text: args.text };
+        return { type: 'type', index: args.index, text: args.text, label: targetLabel };
       case 'scroll':
         return { type: 'scroll', direction: args.direction, amount: args.amount, containerIndex: args.containerIndex };
       case 'adjust_slider':
