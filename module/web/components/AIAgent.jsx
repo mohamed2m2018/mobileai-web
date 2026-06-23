@@ -1330,6 +1330,10 @@ export function AIAgent({
   const [conversationId, setConversationId] = useState(() => persistedState?.conversationId || null);
   const [isLoading, setIsLoading] = useState(false);
   const isLoadingRef = useRef(false);
+  // Bumped on every send. A superseded send's async finally must NOT reset
+  // isLoading/statusText — that would wipe the new run's feedback (the "no feedback
+  // after stop/resume" bug). Each send captures this; later state writes no-op if stale.
+  const sendSeqRef = useRef(0);
   const activeGoalRef = useRef(null);
   const didResumeRef = useRef(false);
   // Tracks whether the user granted a workflow-covering approval in the current
@@ -1929,10 +1933,17 @@ export function AIAgent({
           ? supportScrollRef.current
           : voiceScrollRef.current;
     if (!isOpen || !target) return;
-    const timer = setTimeout(() => {
-      target.scrollTop = target.scrollHeight;
-    }, 80);
-    return () => clearTimeout(timer);
+    const toBottom = () => { target.scrollTop = target.scrollHeight; };
+    // Double rAF waits for layout to settle (the popup open-animation + message
+    // reflow), then snap to the latest message. The delayed timeouts are fallbacks
+    // for late-settling height (fonts/cards). A single 80ms timer fired before the
+    // content was laid out, so the list opened scrolled to the top.
+    const raf1 = requestAnimationFrame(() => {
+      requestAnimationFrame(toBottom);
+    });
+    const t1 = setTimeout(toBottom, 150);
+    const t2 = setTimeout(toBottom, 350);
+    return () => { cancelAnimationFrame(raf1); clearTimeout(t1); clearTimeout(t2); };
   }, [
     isLoading,
     isOpen,
@@ -2713,8 +2724,20 @@ export function AIAgent({
       } else if (!trimmed && !hasImages) {
         return;
       } else if (isLoading && !hasImages) {
-        return;
+        // A new message supersedes the active run — abort it and start fresh
+        // (mirrors the images path above + the server-side supersede). Without
+        // this, after a rejected approval the run keeps going, isLoading stays
+        // true, and every typed message was silently dropped → "no feedback ever".
+        logger.info('AIAgent', 'User sent a message while loading — superseding current execution');
+        serverClientRef.current?.abort();
+        setIsLoading(false);
+        setStatusText('');
       }
+      // Identity of this send. A newer send bumps sendSeqRef; this one's later
+      // state writes (success + finally) then become no-ops so they can't clobber
+      // the newer run's loading/status state.
+      const mySeq = ++sendSeqRef.current;
+      const isCurrentSend = () => mySeq === sendSeqRef.current;
       const consentGranted = await requestConsent();
       if (!consentGranted) {
         const denied = {
@@ -2775,6 +2798,8 @@ export function AIAgent({
       // client telemetry reaches the backend (CORS fixed). Server is the single owner.
       try {
         const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, { ...serverConfig, conversationId: conversationIdRef.current || localConversationKeyRef.current });
+        // Superseded mid-flight: drop this stale reply, the newer send owns the chat.
+        if (!isCurrentSend()) return;
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2808,13 +2833,18 @@ export function AIAgent({
         logger.warn('AIAgent', `Send did not complete: ${err?.message || err}`);
         // agent_trace failure is emitted server-side (single owner — see above).
       } finally {
-        requestStartedAtRef.current = 0;
-        setIsLoading(false);
-        isLoadingRef.current = false;
-        activeGoalRef.current = null;
-        // The run completed in-page (no reload happened), so no resume is needed.
-        clearResumeTask(persistenceKey);
-        setStatusText('');
+        // Only the CURRENT send tears down loading/status. A superseded send must
+        // leave the newer run's "Thinking…"/isLoading intact — otherwise its async
+        // finally wipes the feedback the user is waiting on.
+        if (isCurrentSend()) {
+          requestStartedAtRef.current = 0;
+          setIsLoading(false);
+          isLoadingRef.current = false;
+          activeGoalRef.current = null;
+          // The run completed in-page (no reload happened), so no resume is needed.
+          clearResumeTask(persistenceKey);
+          setStatusText('');
+        }
       }
     },
     [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, serverClient, serverConfig],

@@ -1070,7 +1070,7 @@ export class PageControllerWeb {
     this.summaryLines = this.buildStructureLines();
     this.analysisComplete = true;
   }
-  walkElement(element, parentId, depth) {
+  walkElement(element, parentId, depth, ancestorAnchorIndexed = false) {
     const win = getNodeWindow(element);
     if (!isHTMLElement(element) || isIgnoredByAgent(element) || !isVisible(element, win, this.config)) {
       return null;
@@ -1096,10 +1096,21 @@ export class PageControllerWeb {
     };
     this.flatTree.push(node);
     const interactiveType = getElementType(element);
-    const shouldIndex = !!interactiveType && (topLayer || !rectIntersectsViewport(element.getBoundingClientRect(), win, {
+    const baseShouldIndex = !!interactiveType && (topLayer || !rectIntersectsViewport(element.getBoundingClientRect(), win, {
       ...this.config,
       viewportMode: 'viewport'
     }));
+    // Suppress redundant inner targets of an already-indexed navigating container (a product
+    // card's <a href>/<button>): its title heading, image, or [role=button] decoration is not a
+    // separate control — these are "pressable" only because they inherit the card's pointer
+    // cursor. Offering one as its own index hands the agent a tap that cannot navigate. Real
+    // nested form controls (a Buy <button>, an <input>, a different <a href>) stay indexed.
+    const tagName = element.tagName.toLowerCase();
+    const isNestedFormControl =
+      tagName === 'button' || tagName === 'input' || tagName === 'select' ||
+      tagName === 'textarea' || element.isContentEditable ||
+      (tagName === 'a' && element.hasAttribute('href'));
+    const shouldIndex = baseShouldIndex && !(ancestorAnchorIndexed && !isNestedFormControl);
     if (shouldIndex) {
       const metadata = {
         nearbyText: getNearbyTextForElement(element, element.ownerDocument, win),
@@ -1142,6 +1153,15 @@ export class PageControllerWeb {
       this.interactiveNodes.set(interactive.index, element);
       node.interactiveIndex = interactive.index;
     }
+    // Once we are inside an indexed navigating container, its passive descendants are
+    // suppressed (above). A container is an <a href>, a <button>, or an explicit
+    // role=button/link that we actually indexed this pass.
+    const elementRole = element.getAttribute('role');
+    const childAncestorAnchor = ancestorAnchorIndexed || (shouldIndex && (
+      tagName === 'button' ||
+      (tagName === 'a' && element.hasAttribute('href')) ||
+      elementRole === 'button' || elementRole === 'link'
+    ));
     element.childNodes.forEach(child => {
       if (child.nodeType === 3) {
         const text = normalizeText(child.textContent || '');
@@ -1155,13 +1175,13 @@ export class PageControllerWeb {
           });
         }
       } else if (child.nodeType === 1 && isHTMLElement(child)) {
-        this.walkElement(child, id, depth + 1);
+        this.walkElement(child, id, depth + 1, childAncestorAnchor);
       }
     });
     if (this.config.traverseShadowRoots && element.shadowRoot) {
       Array.from(element.shadowRoot.childNodes).forEach(child => {
         if (child.nodeType === 1 && isHTMLElement(child)) {
-          this.walkElement(child, id, depth + 1);
+          this.walkElement(child, id, depth + 1, childAncestorAnchor);
         }
       });
     }

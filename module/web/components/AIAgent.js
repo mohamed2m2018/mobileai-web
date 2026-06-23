@@ -1250,6 +1250,7 @@ function AIAgent({
   const [conversationId, setConversationId] = useState(() => persistedState?.conversationId || null);
   const [isLoading, setIsLoading] = useState(false);
   const isLoadingRef = useRef(false);
+  const sendSeqRef = useRef(0);
   const activeGoalRef = useRef(null);
   const didResumeRef = useRef(false);
   const workflowApprovedRef = useRef(false);
@@ -1770,10 +1771,19 @@ function AIAgent({
   useEffect(() => {
     const target = mode === "text" ? messagesScrollRef.current : mode === "human" ? supportScrollRef.current : voiceScrollRef.current;
     if (!isOpen || !target) return;
-    const timer = setTimeout(() => {
+    const toBottom = () => {
       target.scrollTop = target.scrollHeight;
-    }, 80);
-    return () => clearTimeout(timer);
+    };
+    const raf1 = requestAnimationFrame(() => {
+      requestAnimationFrame(toBottom);
+    });
+    const t1 = setTimeout(toBottom, 150);
+    const t2 = setTimeout(toBottom, 350);
+    return () => {
+      cancelAnimationFrame(raf1);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [
     isLoading,
     isOpen,
@@ -2485,8 +2495,13 @@ function AIAgent({
       } else if (!trimmed && !hasImages) {
         return;
       } else if (isLoading && !hasImages) {
-        return;
+        logger.info("AIAgent", "User sent a message while loading \u2014 superseding current execution");
+        serverClientRef.current?.abort();
+        setIsLoading(false);
+        setStatusText("");
       }
+      const mySeq = ++sendSeqRef.current;
+      const isCurrentSend = () => mySeq === sendSeqRef.current;
       const consentGranted = await requestConsent();
       if (!consentGranted) {
         const denied = {
@@ -2536,6 +2551,7 @@ function AIAgent({
       const history = messagesRef.current.concat(userMessage);
       try {
         const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, { ...serverConfig, conversationId: conversationIdRef.current || localConversationKeyRef.current });
+        if (!isCurrentSend()) return;
         const result = normalizeExecutionResult(rawResult);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
@@ -2558,12 +2574,14 @@ function AIAgent({
       } catch (err) {
         logger.warn("AIAgent", `Send did not complete: ${err?.message || err}`);
       } finally {
-        requestStartedAtRef.current = 0;
-        setIsLoading(false);
-        isLoadingRef.current = false;
-        activeGoalRef.current = null;
-        clearResumeTask(persistenceKey);
-        setStatusText("");
+        if (isCurrentSend()) {
+          requestStartedAtRef.current = 0;
+          setIsLoading(false);
+          isLoadingRef.current = false;
+          activeGoalRef.current = null;
+          clearResumeTask(persistenceKey);
+          setStatusText("");
+        }
       }
     },
     [appendUserMessage, isLoading, mode, persistenceKey, requestConsent, serverClient, serverConfig]

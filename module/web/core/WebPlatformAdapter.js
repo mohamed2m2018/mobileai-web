@@ -552,17 +552,34 @@ export class WebPlatformAdapter {
       target.dispatchEvent(new PointerEventCtor('pointerup', pointerOpts));
     }
     target.dispatchEvent(new view.MouseEvent('mouseup', mouseOpts));
-    // Fire the activation click. elementFromPoint may have retargeted to an inner
-    // icon (e.g. an <svg>), and SVGElement has no .click() — fall back to the
-    // resolved node, then to a synthetic bubbling click so icon buttons in any
-    // framework still activate.
-    if (typeof target.click === 'function') {
-      target.click();
+    // Fire the activation click on the element that actually acts. elementFromPoint may
+    // resolve to a passive inner node — a product-card heading or an <svg> icon — whose
+    // bare .click() does nothing AND does not bubble to the wrapping <a href>/<button>, so
+    // the tap silently no-ops (the agent then thinks the screen is frozen). resolveActivationTarget
+    // climbs to the real control so taps navigate / activate.
+    const clickTarget = this.resolveActivationTarget(node, target);
+    if (typeof clickTarget.click === 'function') {
+      clickTarget.click();
     } else if (typeof node.click === 'function') {
       node.click();
     } else {
-      target.dispatchEvent(new view.MouseEvent('click', mouseOpts));
+      clickTarget.dispatchEvent(new view.MouseEvent('click', mouseOpts));
     }
+  }
+  // Resolve which element a tap should activate. A form control (button/input/select/
+  // textarea/contenteditable) acts in place — never hijack it to a parent link. Anything
+  // else (a heading, span, image, or [role=button] decoration) that sits inside a navigating
+  // <a href>/<button> activates that ancestor, because a bare click on the inner element does
+  // not bubble to it. This is the noon product-card case: the card is one big <a href> and the
+  // title heading is indexed separately; tapping the heading must still open the product.
+  resolveActivationTarget(node, target) {
+    const FORM_CONTROL = 'button, input, select, textarea, [contenteditable="true"]';
+    if (node && typeof node.matches === 'function' && node.matches(FORM_CONTROL)) return node;
+    const nav =
+      (node && typeof node.closest === 'function' && node.closest('a[href], button')) ||
+      (target && target !== node && typeof target.closest === 'function' && target.closest('a[href], button'));
+    if (nav) return nav;
+    return target;
   }
   // Long-press == press-and-hold that raises a `contextmenu` (the web/touch
   // equivalent of RN onLongPress). Deliberately omits `click()` so handlers can

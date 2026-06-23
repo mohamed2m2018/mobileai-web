@@ -578,7 +578,7 @@ function ComparisonCardWeb({ title = "Compare options", items = [] }) {
                   ]
                 }
               ),
-              item.summary || item.description ? /* @__PURE__ */ jsx(
+              item.body || item.summary || item.description ? /* @__PURE__ */ jsx(
                 "div",
                 {
                   style: {
@@ -586,7 +586,7 @@ function ComparisonCardWeb({ title = "Compare options", items = [] }) {
                     color: theme.colors.secondaryText,
                     lineHeight: 1.5
                   },
-                  children: item.summary || item.description
+                  children: item.body || item.summary || item.description
                 }
               ) : null
             ]

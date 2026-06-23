@@ -539,7 +539,7 @@ export function ComparisonCardWeb({ title = 'Compare options', items = [] }) {
                 </div>
               ) : null}
             </div>
-            {item.summary || item.description ? (
+            {item.body || item.summary || item.description ? (
               <div
                 style={{
                   fontSize: theme.typography.bodySize,
@@ -547,7 +547,7 @@ export function ComparisonCardWeb({ title = 'Compare options', items = [] }) {
                   lineHeight: 1.5,
                 }}
               >
-                {item.summary || item.description}
+                {item.body || item.summary || item.description}
               </div>
             ) : null}
           </div>
