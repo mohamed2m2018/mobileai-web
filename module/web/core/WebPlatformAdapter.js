@@ -458,9 +458,15 @@ export class WebPlatformAdapter {
           node: this.getController()?.getElement(sameIndexElement.index) || null
         };
       }
+      // Concise + diagnostic: the previous message dumped every index and got
+      // truncated in logs (hiding the real counts). Report the current range and BOTH
+      // counts so prod logs reveal index drift (observed 240 → current 19 = the page
+      // re-rendered) vs a hallucinated index (observed had no such index). Also steer
+      // the model to re-pick by LABEL against the fresh list instead of a stale index.
+      const observedCount = observedSnapshot?.elements?.length ?? 0;
       return {
         ok: false,
-        message: `❌ Element with index ${index} not found. Available indexes: ${elements.map(entry => entry.index).join(', ')}`
+        message: `❌ Element [${index}] not found — the screen now has ${elements.length} interactive elements (indexes 0–${Math.max(0, elements.length - 1)}); your snapshot listed ${observedCount}. The list shifts as the page loads/re-renders. Re-read the CURRENT elements and pick the target by its LABEL, not the old index.`
       };
     }
     // 5. Same-index element still matches the observed one → use the fresh node.
