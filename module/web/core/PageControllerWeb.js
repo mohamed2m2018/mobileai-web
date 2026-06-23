@@ -216,6 +216,19 @@ function getLabelFromAria(element, doc) {
   return labelledBy.split(/\s+/).map(id => doc.getElementById(id)?.textContent?.trim() || '').filter(Boolean).join(' ').trim();
 }
 function getTextContent(element) {
+  // textContent includes the text of nested <style>/<script> nodes — e.g. the
+  // @keyframes animation block noon injects into every product card — which is noise
+  // that bloats the label and pushes real content (like the price) past the truncation
+  // limit. Strip those nodes first (they are not visible content) before normalizing.
+  if (element && typeof element.querySelector === 'function' && element.querySelector('style, script')) {
+    try {
+      const clone = element.cloneNode(true);
+      clone.querySelectorAll('style, script').forEach((n) => n.remove());
+      return normalizeText(clone.textContent);
+    } catch {
+      // fall through to the raw read
+    }
+  }
   return normalizeText(element.textContent);
 }
 function getDirectText(element) {
@@ -1316,7 +1329,11 @@ export class PageControllerWeb {
       if (selector) hints.push(`selector="${selector}"`);
       const suffix = hints.length > 0 ? ` ${hints.join(' ')}` : '';
       const newPrefix = entry.props?.isNew === true ? '*' : '';
-      lines.push(`${newPrefix}[${entry.index}]<${entry.type}>${truncateText(entry.label || 'Unlabeled element', 120)}</>${suffix}`);
+      // 120→280: product-card labels carry the PRICE after the name + rating (measured
+      // at char ~56–205 on noon), so a 120-char cap silently dropped the price for
+      // longer-named items and the agent reported "I don't see prices". 280 keeps name
+      // + rating + price + discount; short labels are unaffected.
+      lines.push(`${newPrefix}[${entry.index}]<${entry.type}>${truncateText(entry.label || 'Unlabeled element', 280)}</>${suffix}`);
     });
     return lines;
   }
