@@ -359,10 +359,17 @@ export class ServerAgentClient {
         grantsWorkflowApproval: msg.grantsWorkflowApproval,
       });
 
+      // onAskUser resolves an approval with the token as a bare STRING (RN-style
+      // contract). Forward it in BOTH `response` (legacy) and `approvalToken` so the
+      // server's fail-closed gate reads a real token instead of undefined — otherwise a
+      // "Don't allow" (REJECTED) looks like no-token and the action dispatches anyway.
+      const asString = typeof response === 'string' ? response : null;
+      const approvalToken = response?.approvalToken
+        ?? (asString === '__APPROVAL_GRANTED__' || asString === '__APPROVAL_REJECTED__' ? asString : undefined);
       this._send({
         type: 'user_response',
-        response: response?.text ?? response?.response ?? (typeof response === 'string' ? response : null),
-        approvalToken: response?.approvalToken,
+        response: response?.text ?? response?.response ?? asString,
+        approvalToken,
       });
     } catch {
       this._send({
@@ -522,6 +529,8 @@ export class ServerAgentClient {
         return { type: 'set_date', index: args.index, date: args.date };
       case 'dismiss_keyboard':
         return { type: 'dismiss_keyboard' };
+      case 'dismiss_modal':
+        return { type: 'dismiss_modal' };
       case 'navigate':
         return { type: 'navigate', screen: args.screen, params: args.params };
       case 'guide_user':

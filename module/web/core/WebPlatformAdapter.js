@@ -346,6 +346,8 @@ export class WebPlatformAdapter {
         return this.setDate(intent.index, intent.date);
       case 'dismiss_keyboard':
         return this.dismissKeyboard();
+      case 'dismiss_modal':
+        return this.dismissModal();
       case 'guide_user':
         return this.guideUser(intent.index, intent.message, intent.autoRemoveAfterMs, intent.action);
       case 'simplify_zone':
@@ -1010,6 +1012,64 @@ export class WebPlatformAdapter {
       active.blur();
     }
     return '✅ Dismissed active input focus.';
+  }
+  // Close an open modal / dialog / popup. The agent previously had NO way to do this:
+  // a corner close "X" frequently fails the top-layer hit-test and never enters the
+  // interactive set (see isInOpenModal in PageControllerWeb), and a synthetic backdrop
+  // click rarely satisfies a target-gated handler. Escape is the universal, framework-
+  // agnostic close path (native <dialog>, Radix, headless-ui, MUI, Bootstrap, etc.), so
+  // dispatch a real Escape key sequence to the modal + active element + document, and
+  // call <dialog>.close() directly when the modal is a native dialog. Best-effort and
+  // never throws; reports whether a dialog still appears open afterwards.
+  async dismissModal() {
+    const root = this.options.getRoot?.();
+    const doc = isDocumentNode(root) ? root : root?.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+    if (!doc || !win) return '❌ Could not access the page to dismiss a modal.';
+    const MODAL_SELECTOR = '[aria-modal="true"], [role="dialog"], dialog[open]';
+    const isVisibleEl = (el) => {
+      try {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+        const s = win.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+      } catch { return true; }
+    };
+    const openModals = () => Array.from(doc.querySelectorAll(MODAL_SELECTOR))
+      .filter(el => isHTMLElementLike(el) && isVisibleEl(el));
+    const before = openModals();
+    // Topmost when stacked = last in document order.
+    const modal = before[before.length - 1] || null;
+
+    // Native <dialog open> closes deterministically.
+    if (modal && modal.tagName?.toLowerCase() === 'dialog' && typeof modal.close === 'function') {
+      try { modal.close(); } catch { /* fall through to Escape */ }
+    }
+
+    // Real Escape key sequence to the modal, the focused element, and the document —
+    // covers libraries that listen on the dialog, on the active descendant, or globally.
+    const targets = [];
+    const active = doc.activeElement;
+    if (modal) targets.push(modal);
+    if (isHTMLElementLike(active) && active !== modal) targets.push(active);
+    targets.push(doc.body || doc.documentElement);
+    for (const target of targets) {
+      if (!target || typeof target.dispatchEvent !== 'function' || !win.KeyboardEvent) continue;
+      for (const evtType of ['keydown', 'keyup']) {
+        try {
+          target.dispatchEvent(new win.KeyboardEvent(evtType, {
+            key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true,
+          }));
+        } catch { /* a target that can't receive events — skip */ }
+      }
+    }
+
+    // Let the close transition settle, then report honestly.
+    try { if (typeof this.waitForStable === 'function') await this.waitForStable(600); } catch { /* best-effort */ }
+    if (before.length === 0) return 'ℹ️ No open modal/dialog was found to dismiss.';
+    return openModals().length < before.length || openModals().length === 0
+      ? '✅ Closed the open modal/dialog.'
+      : '⚠️ Sent Escape to the modal but a dialog still appears open. Try tapping its visible "X" or Close button, or click outside it.';
   }
   async guideUser(index, message, autoRemoveAfterMs, action) {
     const resolved = this.resolveInteractiveElement(index, 'guide_user');

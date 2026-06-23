@@ -181,6 +181,15 @@ function isVisible(element, win, config = DEFAULT_CONFIG) {
 function modeRequiresViewport(config) {
   return getViewportMode(config) !== 'full';
 }
+// True when `element` sits inside an OPEN modal/dialog overlay (aria-modal,
+// role=dialog, or a native <dialog open>). Such an overlay IS the page's top layer,
+// so its own controls must index even when a full-screen backdrop/scrim wins the
+// elementFromPoint hit-test below (hidden dialogs are already pruned upstream by
+// isVisible, so only a genuinely-visible dialog reaches here).
+function isInOpenModal(element) {
+  if (!element || typeof element.closest !== 'function') return false;
+  return !!element.closest('[aria-modal="true"], [role="dialog"], dialog[open]');
+}
 function isTopElement(element, win, config = DEFAULT_CONFIG) {
   if (!win || typeof element.getBoundingClientRect !== 'function') return true;
   const rect = getEffectiveBoundingRect(element);
@@ -191,6 +200,12 @@ function isTopElement(element, win, config = DEFAULT_CONFIG) {
   })) {
     return getViewportMode(config) === 'full';
   }
+  // A control inside an open modal overlays the page by definition. A backdrop/scrim
+  // sibling (or the panel's own ::before) commonly covers the control's hit-test
+  // center — most visibly a corner close "X" — so elementFromPoint returns the
+  // backdrop and the control is wrongly dropped from the interactive set ("I can see
+  // the dialog but there's no X to tap"). Trust the modal semantics, not the point.
+  if (isInOpenModal(element)) return true;
   const centerX = Math.min(win.innerWidth - 1, Math.max(0, rect.left + rect.width / 2));
   const centerY = Math.min(win.innerHeight - 1, Math.max(0, rect.top + rect.height / 2));
   try {
