@@ -357,13 +357,18 @@ export class ServerAgentClient {
     // agent reasons over the final screen instead of a transient one that goes stale by
     // the next step (the STALE_TARGET churn). Bounded + best-effort — never blocks the
     // result, and resolves fast when nothing navigated.
+    // pageBusy = the page never settled (waitForStable timed out → still loading). The
+    // server's dead-action guard reads this so an unchanged screen is NOT counted as a
+    // dead loop while a slow page is still loading.
+    let pageBusy = false;
     try {
       if (typeof this.adapter.waitForStable === 'function') {
-        await this._withTimeout(
+        const settled = await this._withTimeout(
           Promise.resolve().then(() => this.adapter.waitForStable()),
           ACTION_TIMEOUT_MS,
-          null,
+          true, // outer-timeout fallback: assume settled (don't over-trigger the guard)
         );
+        pageBusy = settled === false;
       }
     } catch { /* settle is best-effort */ }
 
@@ -406,6 +411,7 @@ export class ServerAgentClient {
         })),
       },
       screenshot,
+      pageBusy,
     });
   }
 

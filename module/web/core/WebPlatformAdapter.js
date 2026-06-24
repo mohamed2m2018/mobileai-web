@@ -5,6 +5,7 @@ import { globalBlockRegistry } from "../../core/BlockRegistry.js";
 import { globalZoneRegistry } from "../../core/ZoneRegistry.js";
 import { logger } from "../../utils/logger.js";
 import { PageControllerWeb } from "./PageControllerWeb.js";
+import { waitForPageStable } from "./waitForStable.js";
 function getNodeWindow(node) {
   return node?.ownerDocument?.defaultView || null;
 }
@@ -371,22 +372,13 @@ export class WebPlatformAdapter {
   // Settled = the URL (which IS the screenName) has stopped changing for a quiet window
   // AND the document is ready. Returns fast when nothing navigated; capped so it can
   // never hang the step.
+  // Returns TRUE when the page reached a settled state (readyState complete + URL stable),
+  // FALSE when it hit the maxMs timeout while still loading. The server's dead-action guard
+  // uses this: an unchanged screen is only a dead loop if the page actually settled — never
+  // while it's still loading. Logic lives in waitForStable.js (framework-free, unit-tested).
   async waitForStable(maxMs = 1800) {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    const win = window, doc = document, start = Date.now();
-    const QUIET_MS = 250;
-    let lastUrl = win.location.href;
-    let lastChange = Date.now();
-    await new Promise((resolve) => {
-      const tick = () => {
-        const now = Date.now();
-        if (win.location.href !== lastUrl) { lastUrl = win.location.href; lastChange = now; }
-        const settled = now - lastChange >= QUIET_MS && doc.readyState === 'complete';
-        if (settled || now - start >= maxMs) resolve();
-        else setTimeout(tick, 50);
-      };
-      setTimeout(tick, 50);
-    });
+    if (typeof window === 'undefined' || typeof document === 'undefined') return true;
+    return waitForPageStable(window, document, maxMs);
   }
   getCurrentScreenName() {
     if (this.options.getCurrentScreenName) {
