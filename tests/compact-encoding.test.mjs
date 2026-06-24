@@ -34,6 +34,7 @@ const HTML = `<!doctype html><html><body>
 <section aria-label="Results">
  <a href="/egypt-en/p-soundcore-q11i-12345?o=abc&utm_source=ggl" class="product">Soundcore Q11i Headphones</a>
  <div class="product"><a href="/egypt-en/p-sodo-999">SODO Wireless</a><span>990 EGP</span></div>
+ <div class="product"><a href="/egypt-en/p-anker-egp">Anker Q20i</a><span>EGP 1,299</span></div>
  <a href="/egypt-en/search?f[brand]=anker&page=2">Anker brand</a>
  <a href="https://external.example.com/deal">See external deal</a>
  <a href="#reviews">Jump to reviews</a>
@@ -79,9 +80,12 @@ test("link is a structural intent — query data kept, tracking dropped, externa
   assert.doesNotMatch(t, /href="\/egypt-en\/p-soundcore/, "no raw 100-char tracking href emitted");
 });
 
-test("on-screen price + nearby text are never trimmed", () => {
+test("on-screen price + nearby text are never trimmed (currency in either order)", () => {
   const t = snapshot(true).lines.join("\n");
-  assert.match(t, /SODO Wireless 990 ?EGP/, "price beside a card is pulled into the label");
+  assert.match(t, /SODO Wireless 990 ?EGP/, "number-first price pulled into the label");
+  // Currency-FIRST (EGP 1,299) is the norm on Egyptian/Gulf sites — the old regex dropped it,
+  // so the agent hunted for the price via read_more and the give-up guard surrendered the run.
+  assert.match(t, /Anker Q20i[^\t\n]*EGP\s?1,299/, "currency-first price is pulled into the label");
 });
 
 test("kill-switch: compactScreen:false restores the verbose [idx]<type> format", () => {

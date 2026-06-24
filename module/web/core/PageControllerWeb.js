@@ -1430,8 +1430,16 @@ export class PageControllerWeb {
   // lossless for what the agent acts on (idx unchanged → tap/type still route).
   buildInteractiveLinesCompact() {
     const origin = (this.win && this.win.location && this.win.location.origin) || '';
-    // price token, to pull into a label that lacks it (and to avoid double-listing via nearby)
-    const priceOf = (s) => { const m = String(s || '').match(/[$£€]\s?[\d.,]{2,}|[\d.,]{2,}\s?(EGP|USD|SAR|AED|GBP|ج\.م)/i); return m ? m[0].replace(/\s+/g, '') : ''; };
+    // Price token, to pull into a label that lacks it. STRUCTURAL currency normalization: a
+    // currency MARKER (symbol or ISO/local code) adjacent to a number, in EITHER order — so
+    // currency-FIRST formats ('EGP 1,299', 'SAR 350', 'ج.م 500', 'AED 99', '₹1,299') are caught,
+    // not just symbol-prefix ('$99') or number-then-code ('990 EGP'). Currency-first is the norm
+    // on noon/Egyptian/Gulf sites; the old regex dropped it → the price never reached the label →
+    // the agent hunted for it via read_more. The list is currencies (domain-inherent), not a
+    // per-site string match.
+    const CUR = '[$£€₹]|EGP|USD|SAR|AED|GBP|EUR|QAR|KWD|BHD|OMR|JOD|INR|PKR|TRY|ر\\.س|د\\.إ|ج\\.م|ر\\.ق';
+    const PRICE_RE = new RegExp(`(?:${CUR})\\s?\\d[\\d.,]{1,}|\\d[\\d.,]{1,}\\s?(?:${CUR})`, 'i');
+    const priceOf = (s) => { const m = String(s || '').match(PRICE_RE); return m ? m[0].replace(/\s+/g, '') : ''; };
     // STRUCTURAL link intent — decoded filter/sort/query params (tracking dropped), external /
     // in-page markers. No content guessing of product/cart; suppress otherwise so the label
     // speaks. Per [[no_static_fixes]]: emit real URL structure, not a guessed taxonomy.
@@ -1570,7 +1578,15 @@ export class PageControllerWeb {
       const fullText = normalizeText(getTextContent(node));
       if (fullText && fullText !== entry.label) parts.push(`full text: ${truncateText(fullText, maxChars)}`);
     }
-    return { found: true, text: parts.join('\n').slice(0, maxChars) };
+    // Element detail is the SAME bytes every call — reading it again surfaces nothing new. Tell
+    // the model so explicitly (a data exhaustion signal) so it converges to an ACTION instead of
+    // re-reading the element and looping. exhausted:true lets the caller flag it too.
+    const body = parts.join('\n').slice(0, maxChars);
+    return {
+      found: true,
+      exhausted: true,
+      text: `${body}\n(This is the COMPLETE detail for this element — there is nothing more to read. If the info you need is not shown here, ACT now: tap to open it, choose a different element, or answer with what you have. Do not read this element again.)`,
+    };
   }
   collectInteractives() {
     this.analyze();
