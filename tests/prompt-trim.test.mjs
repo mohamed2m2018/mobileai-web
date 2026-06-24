@@ -51,8 +51,9 @@ test("on-screen context for a bare-number date cell is never trimmed", () => {
     const controller = new PageControllerWeb(dom.window.document);
     const t = controller.buildScreenSnapshot("/p", ["/p"]).elementsText;
     assert.doesNotMatch(t, /selector="/, "selector (a CSS path, not on-screen text) stays dropped");
-    const cell17 = t.split("\n").find((l) => /<pressable>17/.test(l)) || "";
-    assert.match(cell17, /nearby="/, "numeric date cell must keep its on-screen context (the month)");
+    // compact TSV: row is `idx⇥-⇥17⇥⇥near:…` — on-screen context lives in the near: flag.
+    const cell17 = t.split("\n").find((l) => /\t17\t/.test(l)) || "";
+    assert.match(cell17, /near:/, "numeric date cell must keep its on-screen context (the month)");
     assert.match(cell17, /July 2026/, "the disambiguating month must be present");
   });
 });

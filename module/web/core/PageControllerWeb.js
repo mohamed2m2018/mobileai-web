@@ -1333,6 +1333,15 @@ export class PageControllerWeb {
     return lines;
   }
   buildInteractiveLines() {
+    // COMPACT screen encoding (Part A) — default on; host can disable via config.compactScreen
+    // === false (kill-switch). Cuts the uncached per-step screen ~2× by replacing the verbose
+    // `[idx]<type>label</> href="…136-char tracking URL…" region="…"` line with a TSV row
+    // `idx⇥kind⇥label⇥link⇥flags`: the href becomes a short STRUCTURAL intent (decoded
+    // filter/sort/query params + external/in-page markers, tracking junk dropped — NO content
+    // guessing), kind carries native form constraints, price is pulled into the label. On-screen
+    // `nearby` text is KEPT (calendar month hints etc. — never trim visible text).
+    const compact = this.config?.compactScreen !== false;
+    if (compact) return this.buildInteractiveLinesCompact();
     const lines = ['Interactive elements:'];
     const visibleEntries = [];
     const otherEntries = [];
@@ -1415,6 +1424,93 @@ export class PageControllerWeb {
     this.fullInteractiveLines = elementLines;
     lines.push(...elementLines.slice(0, INTERACTIVE_SEND_CAP));
     return lines;
+  }
+
+  // Compact TSV encoding: `idx⇥kind⇥label⇥link⇥flags`. ~2× smaller than the verbose format,
+  // lossless for what the agent acts on (idx unchanged → tap/type still route).
+  buildInteractiveLinesCompact() {
+    const origin = (this.win && this.win.location && this.win.location.origin) || '';
+    // price token, to pull into a label that lacks it (and to avoid double-listing via nearby)
+    const priceOf = (s) => { const m = String(s || '').match(/[$£€]\s?[\d.,]{2,}|[\d.,]{2,}\s?(EGP|USD|SAR|AED|GBP|ج\.م)/i); return m ? m[0].replace(/\s+/g, '') : ''; };
+    // STRUCTURAL link intent — decoded filter/sort/query params (tracking dropped), external /
+    // in-page markers. No content guessing of product/cart; suppress otherwise so the label
+    // speaks. Per [[no_static_fixes]]: emit real URL structure, not a guessed taxonomy.
+    const TRACK = /^(utm[_-]|gclid|fbclid|_ga|^ref$|origintype|originalquery|^o$|^mc|^sid$|^cid$|^trk|spm|^src$)/i;
+    const linkIntent = (href) => {
+      if (!href) return '';
+      if (href.startsWith('#')) return '#in-page';
+      let u; try { u = new URL(href, origin || 'https://x'); } catch { return ''; }
+      const parts = [];
+      for (const [k, v] of u.searchParams) {
+        const dk = decodeURIComponent(k);
+        if (TRACK.test(dk) || !v) continue;
+        parts.push(`${dk.replace(/[\[\]]/g, '')}=${decodeURIComponent(v)}`.slice(0, 28));
+        if (parts.length >= 3) break;
+      }
+      const ext = origin && u.origin && u.origin !== origin ? '↗' : '';
+      if (parts.length) return `${ext}?${parts.join('&')}`.slice(0, 50);
+      return ext;
+    };
+    // kind code with NATIVE form constraints read structurally (no static type-list).
+    const kindCode = (node) => {
+      if (!isHTMLElement(node)) return '-';
+      const tag = (node.tagName || '').toLowerCase();
+      if (tag === 'select') {
+        const opts = Array.from(node.options || []).map(o => (o.text || o.value || '').trim()).filter(Boolean);
+        return `k${node.value ? '=' + truncateText(node.value, 24) : ''}[${opts.map(o => truncateText(o, 24)).join('|')}]`;
+      }
+      const itype = (node.type || (tag === 'textarea' ? 'textarea' : '')).toLowerCase();
+      if ((tag === 'input' && /^(checkbox|radio)$/.test(itype)) || node.getAttribute('role') === 'switch') {
+        return `s:${node.checked ? 'on' : 'off'}`;
+      }
+      if (tag === 'textarea' || (tag === 'input' && !/^(button|submit|reset|image)$/.test(itype || 'text'))) {
+        const f = [];
+        if (node.required) f.push('req');
+        if (node.min !== '' && node.min != null) f.push(`min=${node.min}`);
+        if (node.max !== '' && node.max != null) f.push(`max=${node.max}`);
+        if (node.maxLength > 0) f.push(`len<=${node.maxLength}`);
+        if (node.pattern) f.push(`pat=${truncateText(node.pattern, 20)}`);
+        const val = (typeof node.value === 'string' && node.value.trim()) ? ` val=${truncateText(node.value, 40)}` : '';
+        return `i:${itype || 'text'}${f.length ? '(' + f.join(',') + ')' : ''}${val}`;
+      }
+      return '-';
+    };
+    const visibleEntries = [], otherEntries = [];
+    this.interactives.forEach(entry => {
+      const node = entry.props?.domNode;
+      if (isHTMLElement(node) && elementIntersectsViewport(node, getNodeWindow(node), STRUCTURE_VIEWPORT_CONFIG)) visibleEntries.push(entry);
+      else otherEntries.push(entry);
+    });
+    const elementLines = [];
+    [...visibleEntries, ...otherEntries].forEach(entry => {
+      const node = entry.props?.domNode;
+      const idx = `${entry.props?.isNew === true ? '*' : ''}${entry.index}`;
+      const kind = kindCode(node);
+      let label = truncateText(entry.label || 'Unlabeled', 280);
+      if (!priceOf(label)) { const p = priceOf(entry.props?.nearbyText); if (p) label += ' ' + p; }
+      const link = isAnchorElement(node) ? linkIntent(normalizeText(node.getAttribute('href') || '')) : '';
+      const flags = [];
+      if (isHTMLElement(node) && (node.disabled === true || node.getAttribute('aria-disabled') === 'true')) flags.push('disabled');
+      if (entry.props?.topLayer === false) flags.push('covered');
+      const cur = isHTMLElement(node) ? node.getAttribute('aria-current') : null;
+      if (cur && cur !== 'false') flags.push('current');
+      const fieldError = (isInputElement(node) || isTextAreaElement(node) || isSelectElement(node)) ? getFieldError(node, node.ownerDocument) : '';
+      if (fieldError) flags.push(`ERR:${truncateText(fieldError, 80)}`);
+      const sd = entry.props?.scrollData;
+      if (sd) { const sh = ['up', 'down', 'left', 'right'].map(d => typeof sd[d] === 'number' && sd[d] > 0 ? `${d}=${Math.round(sd[d])}` : '').filter(Boolean).join(','); if (sh) flags.push(`scroll:${sh}`); }
+      // KEEP nearby on-screen text that isn't already in the label (calendar month hints,
+      // adjacent captions) — never trim visible text. Drop it only when it just echoes the
+      // label or the same price.
+      const nb = entry.props?.nearbyText;
+      if (typeof nb === 'string' && nb && !label.includes(nb.slice(0, 18)) && (!priceOf(nb) || priceOf(nb) !== priceOf(label))) {
+        flags.push(`near:${truncateText(nb, 90)}`);
+      }
+      elementLines.push([idx, kind, label, link, flags.join(' ')].join('\t'));
+    });
+    this.fullInteractiveLines = elementLines;
+    // Legend lives in the cached system prompt (<screen_state>) — keep the per-step header tiny.
+    const header = 'Interactive elements (idx⇥kind⇥label⇥link⇥flags):';
+    return [header, ...elementLines.slice(0, INTERACTIVE_SEND_CAP)];
   }
 
   // ─── read_more support ────────────────────────────────────────────────────

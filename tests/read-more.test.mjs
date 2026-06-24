@@ -35,7 +35,8 @@ test("300-element page: sends ~100 interactive lines + a '[+N more]' marker", ()
   try {
     const c = new PageControllerWeb(dom.window.document.body);
     const snap = c.buildScreenSnapshot("Test", []);
-    const interactiveLines = (snap.elementsText.match(/^\*?\[\d+\]</gm) || []).length;
+    // compact TSV format: each interactive row is `idx⇥kind⇥…`
+    const interactiveLines = (snap.elementsText.match(/^\*?\d+\t/gm) || []).length;
     assert.ok(interactiveLines <= 101 && interactiveLines >= 90, `sent ~100 interactive lines, got ${interactiveLines}`);
     assert.match(snap.elementsText, /\[\+.*more interactive control/, "has a page-level truncation marker");
     assert.match(snap.elementsText, /read_more\(\)/, "marker tells the model to call read_more()");
@@ -53,7 +54,7 @@ test("getMoreStructure pages the overflow with correct indices; getInteractive r
     const page1 = c.getMoreStructure(0);
     assert.ok(page1.total > 0, "there is overflow to page");
     assert.ok(page1.text.length > 0, "first overflow page returns text");
-    assert.match(page1.text, /\[1\d\d\]/, "overflow carries real indices >= 100");
+    assert.match(page1.text, /(^|\n)\*?1\d\d\t/, "overflow carries real indices >= 100 (compact TSV)");
     // a revealed index still resolves to a live node (tappable)
     const revealed = c.getInteractive(250);
     assert.ok(revealed, "getInteractive(250) resolves the revealed control");
