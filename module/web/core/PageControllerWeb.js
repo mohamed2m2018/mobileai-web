@@ -17,6 +17,14 @@ const STRUCTURE_VIEWPORT_CONFIG = {
   viewportExpansion: 240
 };
 const MAX_STRUCTURE_LINES = 120;
+// We BUILD structure up to a higher ceiling but SEND only the first MAX_STRUCTURE_LINES;
+// the remainder is stored for read_more (build-high, send-lean). Building more costs no
+// tokens — only what's sent is billed.
+const STRUCTURE_BUILD_CEILING = 600;
+// Interactive element LINES sent in the snapshot. All elements are still collected (index-
+// stable) and resolvable; the overflow is paged via read_more so a 300-control page isn't
+// silently blind to 200 of them.
+const INTERACTIVE_SEND_CAP = 100;
 const BROAD_CONTAINER_KINDS = new Set(['main', 'section', 'article', 'aside', 'dialog', 'header', 'footer']);
 const seenInteractiveElements = new WeakSet();
 function isHTMLElement(value) {
@@ -1045,6 +1053,10 @@ export class PageControllerWeb {
   interactives = [];
   interactiveNodes = new Map();
   summaryLines = [];
+  // Full (uncapped) lists built during analyze(); the snapshot SENDS only the first
+  // MAX_STRUCTURE_LINES / INTERACTIVE_SEND_CAP, the rest is paged via getMoreStructure.
+  fullStructureLines = [];
+  fullInteractiveLines = [];
   analysisComplete = false;
   rootNodeId = null;
   constructor(root, config = {}) {
@@ -1246,12 +1258,12 @@ export class PageControllerWeb {
     const fallbackStructureLines = [];
     const emitted = new Set();
     const emitStructureLine = (target, node, depth) => {
-      if (target.length >= MAX_STRUCTURE_LINES || emitted.has(node.id)) return;
+      if (target.length >= STRUCTURE_BUILD_CEILING || emitted.has(node.id)) return;
       emitted.add(node.id);
       target.push(`${'  '.repeat(Math.max(0, depth))}- ${node.summary}`);
     };
     const walk = (node, depth, parentInViewport = false) => {
-      if ((viewportStructureLines.length >= MAX_STRUCTURE_LINES && fallbackStructureLines.length >= MAX_STRUCTURE_LINES) || !node) return;
+      if ((viewportStructureLines.length >= STRUCTURE_BUILD_CEILING && fallbackStructureLines.length >= STRUCTURE_BUILD_CEILING) || !node) return;
       const nodeInViewport = node.kind === 'element' ? elementIntersectsViewport(node.element, getNodeWindow(node.element), STRUCTURE_VIEWPORT_CONFIG) : parentInViewport;
       if (node.kind === 'element') {
         const summary = node.summary;
@@ -1259,7 +1271,7 @@ export class PageControllerWeb {
         if (shouldEmit) {
           if (nodeInViewport && !BROAD_CONTAINER_KINDS.has(node.semanticKind)) {
             emitStructureLine(viewportStructureLines, node, depth);
-          } else if (fallbackStructureLines.length < MAX_STRUCTURE_LINES && !emitted.has(node.id)) {
+          } else if (fallbackStructureLines.length < STRUCTURE_BUILD_CEILING && !emitted.has(node.id)) {
             fallbackStructureLines.push(`${'  '.repeat(Math.max(0, depth))}- ${summary}`);
           }
         }
@@ -1271,9 +1283,9 @@ export class PageControllerWeb {
         // emit anything non-trivial. MAX_STRUCTURE_LINES still bounds the total.
       } else if (node.kind === 'text' && node.text.length >= (nodeInViewport ? 2 : 48)) {
         const line = `${'  '.repeat(Math.max(0, depth))}- Text: ${truncateText(node.text, 160)}`;
-        if (nodeInViewport && viewportStructureLines.length < MAX_STRUCTURE_LINES) {
+        if (nodeInViewport && viewportStructureLines.length < STRUCTURE_BUILD_CEILING) {
           viewportStructureLines.push(line);
-        } else if (fallbackStructureLines.length < MAX_STRUCTURE_LINES) {
+        } else if (fallbackStructureLines.length < STRUCTURE_BUILD_CEILING) {
           fallbackStructureLines.push(line);
         }
       }
@@ -1290,16 +1302,33 @@ export class PageControllerWeb {
         lines.push(`- ${metric}`);
       });
     }
-    const structureLines = viewportStructureLines.length > 0 ? viewportStructureLines : fallbackStructureLines;
-    if (structureLines.length > 0) {
+    // Build-high, send-lean: the FULL structure (viewport-first, then off-screen fallback)
+    // is stored for read_more paging; only the first MAX_STRUCTURE_LINES are sent.
+    const fullStructure = [...viewportStructureLines, ...fallbackStructureLines];
+    this.fullStructureLines = fullStructure;
+    const sentStructure = fullStructure.slice(0, MAX_STRUCTURE_LINES);
+    if (sentStructure.length > 0) {
       lines.push('');
       lines.push(viewportStructureLines.length > 0 ? 'Visible viewport structure:' : 'Visible structure:');
-      lines.push(...structureLines);
+      lines.push(...sentStructure);
     }
+    // buildInteractiveLines stores the full element list on this.fullInteractiveLines and
+    // returns the header + first INTERACTIVE_SEND_CAP lines.
     const interactiveLines = this.buildInteractiveLines();
     if (interactiveLines.length > 1) {
       lines.push('');
       lines.push(...interactiveLines);
+    }
+    // Truncation marker — NO silent drop. Anything the caps trimmed is still on the page and
+    // retrievable via read_more WITHOUT scrolling.
+    const structureOverflow = Math.max(0, fullStructure.length - MAX_STRUCTURE_LINES);
+    const interactiveOverflow = Math.max(0, (this.fullInteractiveLines?.length || 0) - INTERACTIVE_SEND_CAP);
+    if (structureOverflow > 0 || interactiveOverflow > 0) {
+      const parts = [];
+      if (interactiveOverflow > 0) parts.push(`${interactiveOverflow} more interactive control${interactiveOverflow === 1 ? '' : 's'}`);
+      if (structureOverflow > 0) parts.push(`${structureOverflow} more content line${structureOverflow === 1 ? '' : 's'}`);
+      lines.push('');
+      lines.push(`[+${parts.join(' and ')} below — already loaded, not shown. Call read_more() to read them WITHOUT scrolling. Scroll only loads NEW content not yet on the page. For a dense page, prefer search/filter to narrow first.]`);
     }
     return lines;
   }
@@ -1315,7 +1344,8 @@ export class PageControllerWeb {
         otherEntries.push(entry);
       }
     });
-    [...visibleEntries, ...otherEntries].slice(0, 100).forEach(entry => {
+    const elementLines = [];
+    [...visibleEntries, ...otherEntries].forEach(entry => {
       const node = entry.props?.domNode;
       const hints = [];
       if (isAnchorElement(node)) {
@@ -1378,9 +1408,73 @@ export class PageControllerWeb {
       // at char ~56–205 on noon), so a 120-char cap silently dropped the price for
       // longer-named items and the agent reported "I don't see prices". 280 keeps name
       // + rating + price + discount; short labels are unaffected.
-      lines.push(`${newPrefix}[${entry.index}]<${entry.type}>${truncateText(entry.label || 'Unlabeled element', 280)}</>${suffix}`);
+      elementLines.push(`${newPrefix}[${entry.index}]<${entry.type}>${truncateText(entry.label || 'Unlabeled element', 280)}</>${suffix}`);
     });
+    // Store the FULL element list (index-stable) for read_more paging; send only the first
+    // INTERACTIVE_SEND_CAP — the rest is retrievable via read_more(), never silently dropped.
+    this.fullInteractiveLines = elementLines;
+    lines.push(...elementLines.slice(0, INTERACTIVE_SEND_CAP));
     return lines;
+  }
+
+  // ─── read_more support ────────────────────────────────────────────────────
+  // Page the content the snapshot caps trimmed — WITHOUT scrolling. Returns the next
+  // chunk of the combined overflow: hidden interactive controls first (they carry the
+  // real [index] and are actionable), then off-screen content lines. When the offset is
+  // exhausted, hasMore=false and the caller tells the model to scroll for LAZY content
+  // (anything past this is not yet in the DOM).
+  getMoreStructure(offset = 0, chunk = MAX_STRUCTURE_LINES) {
+    this.analyze();
+    const interactiveOverflow = (this.fullInteractiveLines || []).slice(INTERACTIVE_SEND_CAP);
+    const structureOverflow = (this.fullStructureLines || []).slice(MAX_STRUCTURE_LINES);
+    const combined = [];
+    if (interactiveOverflow.length > 0) {
+      combined.push('More interactive controls (already on the page):', ...interactiveOverflow);
+    }
+    if (structureOverflow.length > 0) {
+      combined.push('More page content (already on the page):', ...structureOverflow);
+    }
+    const total = combined.length;
+    const start = Math.max(0, offset);
+    const slice = combined.slice(start, start + chunk);
+    const nextOffset = start + slice.length;
+    const hasMore = nextOffset < total;
+    return {
+      text: slice.join('\n'),
+      nextOffset,
+      hasMore,
+      total,
+      // No more rendered overflow → anything further is genuinely lazy (not yet rendered).
+      exhausted: total === 0 || nextOffset >= total,
+    };
+  }
+
+  // Full detail of ONE element with every internal cap lifted: full label, full nearby,
+  // all <select> options, and the full visible text of its subtree. For when an element's
+  // line was truncated (long label, many options) and the agent needs the rest — again,
+  // no scrolling.
+  getElementDetail(index, maxChars = 4000) {
+    this.analyze();
+    const entry = this.getInteractive(index);
+    if (!entry) return { found: false, text: `No element with index ${index} on the current screen.` };
+    const node = entry.props?.domNode;
+    const parts = [];
+    parts.push(`[${index}]<${entry.type}> full detail:`);
+    if (entry.label) parts.push(`label: ${entry.label}`);
+    const region = isHTMLElement(node) ? getNearestSectionLabel(node, node.ownerDocument) : '';
+    if (region) parts.push(`section: ${region}`);
+    if (typeof entry.props?.nearbyText === 'string' && entry.props.nearbyText) {
+      parts.push(`nearby: ${entry.props.nearbyText}`);
+    }
+    if (isSelectElement(node)) {
+      const opts = Array.from(node.options).map(o => (o.text?.trim() || o.value)).filter(Boolean);
+      if (opts.length) parts.push(`all options (${opts.length}): ${opts.join(' | ')}`);
+    }
+    if (isHTMLElement(node)) {
+      const fullText = normalizeText(getTextContent(node));
+      if (fullText && fullText !== entry.label) parts.push(`full text: ${truncateText(fullText, maxChars)}`);
+    }
+    return { found: true, text: parts.join('\n').slice(0, maxChars) };
   }
   collectInteractives() {
     this.analyze();

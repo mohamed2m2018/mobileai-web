@@ -322,6 +322,13 @@ export class ServerAgentClient {
   async _handleAction(msg) {
     const { toolName, args, reasoning, requestScreenshot, targetLabel } = msg;
 
+    // read_more is a NON-mutating read (page the trimmed content / one element's full
+    // detail) — handle it separately so it doesn't go through executeAction/waitForStable.
+    if (toolName === 'read_more') {
+      await this._handleReadMore(args || {});
+      return;
+    }
+
     // Note: the overlay label is set by the preceding 'status' message (which the
     // server sends just before this action). Don't overwrite it with a raw
     // "toolName..." here — that regressed the friendly "thinking" labels.
@@ -552,6 +559,52 @@ export class ServerAgentClient {
         })),
       },
       screenshot,
+    });
+  }
+
+  // read_more: return trimmed-but-loaded content WITHOUT scrolling. target=index → that
+  // element's full detail; otherwise → next page of the overflow (server tracks offset).
+  // Non-mutating, so the screenState we return is the SAME screen (keeps the server's
+  // cache warm — the whole cost win vs scrolling).
+  async _handleReadMore(args) {
+    let output;
+    try {
+      if (args && args.target != null) {
+        const detail = this.adapter.readElementDetail(Number(args.target));
+        output = detail?.text || `No detail for element ${args.target}.`;
+      } else {
+        const more = this.adapter.readMore(Number(args?.offset) || 0, Number(args?.chunk) || undefined);
+        output = more?.text ? more.text : '';
+        if (!output) {
+          output = '(No more content is loaded on this page. If you expected more, scroll to load it — it is not yet rendered.)';
+        } else if (more.hasMore) {
+          output += '\n\n(More remains — call read_more() again for the next page.)';
+        } else {
+          output += '\n\n(End of loaded content. Anything further is not yet on the page — scroll to load it.)';
+        }
+      }
+    } catch (err) {
+      output = `read_more failed: ${err?.message || 'unknown error'}`;
+    }
+    let freshSnapshot;
+    try { freshSnapshot = this.adapter.getScreenSnapshot(); }
+    catch { freshSnapshot = { screenName: '', availableScreens: [], elementsText: '', elements: [] }; }
+    this._send({
+      type: 'action_result',
+      output: String(output),
+      screenState: {
+        screenName: freshSnapshot.screenName,
+        availableScreens: freshSnapshot.availableScreens,
+        elementsText: freshSnapshot.elementsText,
+        elements: freshSnapshot.elements.map(e => ({
+          index: e.index,
+          type: e.type,
+          label: e.label,
+          requiresConfirmation: e.requiresConfirmation,
+          zoneId: e.zoneId,
+          props: this._safeProps(e.props),
+        })),
+      },
     });
   }
 

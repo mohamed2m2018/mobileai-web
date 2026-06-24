@@ -327,6 +327,33 @@ export class WebPlatformAdapter {
     if (!this.options.captureScreenshot) return undefined;
     return this.options.captureScreenshot();
   }
+  // read_more: page the content the snapshot caps trimmed (hidden controls + off-screen
+  // text), WITHOUT scrolling. Non-mutating — builds a fresh controller on the current DOM.
+  readMore(offset = 0, chunk = undefined) {
+    try {
+      const controller = new PageControllerWeb(this.options.getRoot(), {
+        ignoreSelectors: this.options.ignoreSelectors,
+        confirmSelectors: this.options.confirmSelectors,
+      });
+      return controller.getMoreStructure(offset, chunk);
+    } catch (err) {
+      logger.warn('WebPlatformAdapter', `readMore failed: ${err?.message}`);
+      return { text: '', nextOffset: offset, hasMore: false, total: 0, exhausted: true };
+    }
+  }
+  // read_more(index): full detail of one element (all options, full label/nearby/text).
+  readElementDetail(index) {
+    try {
+      const controller = new PageControllerWeb(this.options.getRoot(), {
+        ignoreSelectors: this.options.ignoreSelectors,
+        confirmSelectors: this.options.confirmSelectors,
+      });
+      return controller.getElementDetail(index);
+    } catch (err) {
+      logger.warn('WebPlatformAdapter', `readElementDetail failed: ${err?.message}`);
+      return { found: false, text: `Could not read element ${index}.` };
+    }
+  }
   async executeAction(intent) {
     switch (intent.type) {
       case 'tap':
