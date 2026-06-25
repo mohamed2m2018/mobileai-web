@@ -1361,6 +1361,10 @@ export function AIAgent({
   // Holds the OPEN prompt's resolver so a run that ends (done/cleanup) can withdraw an orphaned
   // approval (the stray "Allow") fail-closed — resolved as REJECTED, never granted.
   const pendingResolveRef = useRef(null);
+  // Id of the OPEN prompt's chat bubble. When the prompt resolves/cancels/withdraws, its
+  // Allow/Don't-allow buttons disappear with pendingPrompt — remove the bubble too so a
+  // buttonless question doesn't orphan in the transcript.
+  const pendingPromptIdRef = useRef(null);
   // U2 — styled in-panel AI consent (replaces window.confirm). Holds the pending
   // promise resolver so the Allow / Don't-Allow buttons settle the same promise
   // the old window.confirm path returned. Mirrors RN AgentChatBar consentVisible.
@@ -1728,6 +1732,12 @@ export function AIAgent({
       }
       setPendingPrompt(null);
       pendingResolveRef.current = null;
+      // Remove the answered approval question bubble (its buttons are gone with pendingPrompt)
+      // so it doesn't orphan. The user's Allow/Don't-allow reply (separate id) stays.
+      if (pending.messageId) {
+        setMessages((prev) => prev.filter((m) => m.id !== pending.messageId));
+      }
+      pendingPromptIdRef.current = null;
       pending.resolve(token);
     },
     [appendUserMessage, pendingPrompt],
@@ -2604,8 +2614,9 @@ export function AIAgent({
               promptKind: kind === 'approval' ? 'approval' : undefined,
             });
             setMessages((prev) => [...prev, promptMessage]);
-            setPendingPrompt({ question, kind, resolve });
+            setPendingPrompt({ question, kind, resolve, messageId: promptMessage.id });
             pendingResolveRef.current = resolve;
+            pendingPromptIdRef.current = promptMessage.id;
             setMode('text');
             setLocalUnread(0);
             setIsOpen(true);
@@ -2617,6 +2628,12 @@ export function AIAgent({
           if (r) {
             pendingResolveRef.current = null;
             r(APPROVAL_REJECTED_TOKEN);
+          }
+          // Withdraw the orphaned approval bubble from the transcript on run-end.
+          const pid = pendingPromptIdRef.current;
+          pendingPromptIdRef.current = null;
+          if (pid) {
+            setMessages((prev) => prev.filter((m) => m.id !== pid));
           }
           setPendingPrompt(null);
         },
@@ -3120,6 +3137,11 @@ export function AIAgent({
       if (pendingPrompt) {
         const pending = pendingPrompt;
         setPendingPrompt(null);
+        // Drop the approval question bubble too so it doesn't orphan after Stop.
+        if (pending.kind === 'approval' && pending.messageId) {
+          setMessages((prev) => prev.filter((m) => m.id !== pending.messageId));
+        }
+        pendingPromptIdRef.current = null;
         setInput('');
         try {
           pending.resolve?.(ASK_USER_CANCELLED_TOKEN);

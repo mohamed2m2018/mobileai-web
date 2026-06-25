@@ -53,6 +53,24 @@ function pushLooseBlockFallbackNodes(input, nodes, seen) {
     return;
   }
   const valuePattern = `(?:"((?:\\\\.|[^"\\\\])*)"|'((?:\\\\.|[^'\\\\])*)')`;
+
+  // Recover FactCard facts (label/value pairs) from a malformed block so they still
+  // render as rows instead of being dropped to a title-only text node. Per-object and
+  // order-independent (label-then-value or value-then-label).
+  const facts = [];
+  const factsBlock = new RegExp(`["']facts["']\\s*:\\s*\\[([\\s\\S]*?)\\]`).exec(input);
+  if (factsBlock && factsBlock[1]) {
+    const objPattern = /\{([\s\S]*?)\}/g;
+    let obj;
+    while ((obj = objPattern.exec(factsBlock[1])) !== null) {
+      const labelM = new RegExp(`["']label["']\\s*:\\s*${valuePattern}`).exec(obj[1]);
+      const valueM = new RegExp(`["']value["']\\s*:\\s*${valuePattern}`).exec(obj[1]);
+      const label = labelM ? decodeLooseStringValue(readLooseStringMatch(labelM, 1)).trim() : '';
+      const value = valueM ? decodeLooseStringValue(readLooseStringMatch(valueM, 1)).trim() : '';
+      if (label && value) facts.push({ label, value });
+    }
+  }
+
   const propPattern = new RegExp(`["'](title|subtitle|headline|body|text|description)["']\\s*:\\s*${valuePattern}`, 'g');
   const parts = [];
   const localSeen = new Set();
@@ -64,6 +82,19 @@ function pushLooseBlockFallbackNodes(input, nodes, seen) {
       parts.push(decoded);
     }
   }
+
+  // Facts recovered → rebuild a real FactCard so the label/value rows render.
+  if (facts.length > 0) {
+    const title = parts[0] || 'Details';
+    const body = parts.slice(1).join('\n').trim() || undefined;
+    const dedupeKey = `factcard:${title}:${facts.map((f) => `${f.label}=${f.value}`).join('|')}`;
+    if (!seen.has(dedupeKey)) {
+      seen.add(dedupeKey);
+      nodes.push({ type: 'block', blockType: 'FactCard', props: { title, body, facts }, id: `block-${nodes.length}` });
+    }
+    return;
+  }
+
   const content = parts.join('\n').trim();
   if (content && !seen.has(content)) {
     seen.add(content);

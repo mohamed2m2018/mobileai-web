@@ -1271,6 +1271,7 @@ function AIAgent({
   const isOpenRef = useRef(persistedState?.isOpen ?? defaultOpen);
   const [pendingPrompt, setPendingPrompt] = useState(null);
   const pendingResolveRef = useRef(null);
+  const pendingPromptIdRef = useRef(null);
   const [consentRequest, setConsentRequest] = useState(null);
   const [guide, setGuide] = useState(null);
   const [actingOnPage, setActingOnPage] = useState(false);
@@ -1590,6 +1591,10 @@ function AIAgent({
       }
       setPendingPrompt(null);
       pendingResolveRef.current = null;
+      if (pending.messageId) {
+        setMessages((prev) => prev.filter((m) => m.id !== pending.messageId));
+      }
+      pendingPromptIdRef.current = null;
       pending.resolve(token);
     },
     [appendUserMessage, pendingPrompt]
@@ -2388,8 +2393,9 @@ function AIAgent({
           promptKind: kind === "approval" ? "approval" : void 0
         });
         setMessages((prev) => [...prev, promptMessage]);
-        setPendingPrompt({ question, kind, resolve });
+        setPendingPrompt({ question, kind, resolve, messageId: promptMessage.id });
         pendingResolveRef.current = resolve;
+        pendingPromptIdRef.current = promptMessage.id;
         setMode("text");
         setLocalUnread(0);
         setIsOpen(true);
@@ -2401,6 +2407,11 @@ function AIAgent({
         if (r) {
           pendingResolveRef.current = null;
           r(APPROVAL_REJECTED_TOKEN);
+        }
+        const pid = pendingPromptIdRef.current;
+        pendingPromptIdRef.current = null;
+        if (pid) {
+          setMessages((prev) => prev.filter((m) => m.id !== pid));
         }
         setPendingPrompt(null);
       }
@@ -2802,6 +2813,10 @@ function AIAgent({
       if (pendingPrompt) {
         const pending = pendingPrompt;
         setPendingPrompt(null);
+        if (pending.kind === "approval" && pending.messageId) {
+          setMessages((prev) => prev.filter((m) => m.id !== pending.messageId));
+        }
+        pendingPromptIdRef.current = null;
         setInput("");
         try {
           pending.resolve?.(ASK_USER_CANCELLED_TOKEN);
