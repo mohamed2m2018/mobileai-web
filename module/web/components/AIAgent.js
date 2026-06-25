@@ -1771,18 +1771,32 @@ function AIAgent({
   useEffect(() => {
     const target = mode === "text" ? messagesScrollRef.current : mode === "human" ? supportScrollRef.current : voiceScrollRef.current;
     if (!isOpen || !target) return;
+    let pinned = true;
+    const NEAR = 80;
     const toBottom = () => {
-      target.scrollTop = target.scrollHeight;
+      if (pinned) target.scrollTop = target.scrollHeight;
     };
-    const raf1 = requestAnimationFrame(() => {
-      requestAnimationFrame(toBottom);
-    });
+    const onScroll = () => {
+      pinned = target.scrollHeight - target.scrollTop - target.clientHeight <= NEAR;
+    };
+    target.addEventListener("scroll", onScroll, { passive: true });
+    const raf1 = requestAnimationFrame(() => requestAnimationFrame(toBottom));
     const t1 = setTimeout(toBottom, 150);
     const t2 = setTimeout(toBottom, 350);
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => requestAnimationFrame(toBottom)) : null;
+    const mo = typeof MutationObserver !== "undefined" ? new MutationObserver(() => requestAnimationFrame(toBottom)) : null;
+    if (ro) {
+      ro.observe(target);
+      Array.from(target.children).forEach((c) => ro.observe(c));
+    }
+    if (mo) mo.observe(target, { childList: true, subtree: true, characterData: true });
     return () => {
+      target.removeEventListener("scroll", onScroll);
       cancelAnimationFrame(raf1);
       clearTimeout(t1);
       clearTimeout(t2);
+      if (ro) ro.disconnect();
+      if (mo) mo.disconnect();
     };
   }, [
     isLoading,

@@ -1933,17 +1933,46 @@ export function AIAgent({
           ? supportScrollRef.current
           : voiceScrollRef.current;
     if (!isOpen || !target) return;
-    const toBottom = () => { target.scrollTop = target.scrollHeight; };
-    // Double rAF waits for layout to settle (the popup open-animation + message
-    // reflow), then snap to the latest message. The delayed timeouts are fallbacks
-    // for late-settling height (fonts/cards). A single 80ms timer fired before the
-    // content was laid out, so the list opened scrolled to the top.
-    const raf1 = requestAnimationFrame(() => {
-      requestAnimationFrame(toBottom);
-    });
+    // Snap to the LATEST message and STAY there as content lays out. The panel + its scroll
+    // container mount fresh on open (with a ~0.22s open-animation) and rich result cards
+    // (ComparisonCard/FactCard) render a beat later — so a fixed-timer scroll runs while the
+    // content is still short (scrollHeight ≈ clientHeight), no-ops, and the list opens stuck at
+    // the TOP showing the first message. Timers can't win that race. Instead observe the
+    // container: re-pin to the bottom on every content/size change until the user deliberately
+    // scrolls up to read history.
+    let pinned = true; // glued to the latest message unless the user scrolls away from it
+    const NEAR = 80;
+    const toBottom = () => { if (pinned) target.scrollTop = target.scrollHeight; };
+    const onScroll = () => {
+      pinned = target.scrollHeight - target.scrollTop - target.clientHeight <= NEAR;
+    };
+    target.addEventListener('scroll', onScroll, { passive: true });
+    // Initial snaps (belt-and-suspenders for the common fast case).
+    const raf1 = requestAnimationFrame(() => requestAnimationFrame(toBottom));
     const t1 = setTimeout(toBottom, 150);
     const t2 = setTimeout(toBottom, 350);
-    return () => { cancelAnimationFrame(raf1); clearTimeout(t1); clearTimeout(t2); };
+    // Re-snap as late content grows the list (the real fix for cards/images/animation).
+    const ro =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => requestAnimationFrame(toBottom))
+        : null;
+    const mo =
+      typeof MutationObserver !== 'undefined'
+        ? new MutationObserver(() => requestAnimationFrame(toBottom))
+        : null;
+    if (ro) {
+      ro.observe(target);
+      Array.from(target.children).forEach((c) => ro.observe(c));
+    }
+    if (mo) mo.observe(target, { childList: true, subtree: true, characterData: true });
+    return () => {
+      target.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf1);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      if (ro) ro.disconnect();
+      if (mo) mo.disconnect();
+    };
   }, [
     isLoading,
     isOpen,
