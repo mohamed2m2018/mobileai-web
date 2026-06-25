@@ -1947,36 +1947,33 @@ export function AIAgent({
     // the TOP showing the first message. Timers can't win that race. Instead observe the
     // container: re-pin to the bottom on every content/size change until the user deliberately
     // scrolls up to read history.
-    let pinned = true; // glued to the latest message unless the user scrolls away from it
-    const NEAR = 80;
-    const toBottom = () => { if (pinned) target.scrollTop = target.scrollHeight; };
-    const onScroll = () => {
-      pinned = target.scrollHeight - target.scrollTop - target.clientHeight <= NEAR;
-    };
-    target.addEventListener('scroll', onScroll, { passive: true });
-    // Initial snaps (belt-and-suspenders for the common fast case).
-    const raf1 = requestAnimationFrame(() => requestAnimationFrame(toBottom));
-    const t1 = setTimeout(toBottom, 150);
-    const t2 = setTimeout(toBottom, 350);
-    // Re-snap as late content grows the list (the real fix for cards/images/animation).
-    const ro =
-      typeof ResizeObserver !== 'undefined'
-        ? new ResizeObserver(() => requestAnimationFrame(toBottom))
-        : null;
-    const mo =
-      typeof MutationObserver !== 'undefined'
-        ? new MutationObserver(() => requestAnimationFrame(toBottom))
-        : null;
-    if (ro) {
-      ro.observe(target);
-      Array.from(target.children).forEach((c) => ro.observe(c));
-    }
+    // Force-stick to the latest message while the panel opens + late cards/images lay out. This
+    // is UNCONDITIONAL during the settle window — NO "pinned" flag derived from the scroll event.
+    // (The previous version flipped pinned=false from the scroll event, which ALSO fires on our
+    // OWN programmatic scrollTop change, so when content grew it raced us into giving up → the
+    // list opened stuck at the TOP. That's the bug.) Only a REAL user gesture (wheel-up / touch)
+    // halts the stick, so reading history isn't fought; after ~1.5s the content has settled and
+    // we stop forcing. A new message / reopen re-runs this effect and re-sticks.
+    let stopped = false;
+    const toBottom = () => { if (!stopped) target.scrollTop = target.scrollHeight; };
+    const snap = () => requestAnimationFrame(toBottom);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(snap) : null;
+    const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(snap) : null;
+    const halt = () => { stopped = true; if (ro) ro.disconnect(); if (mo) mo.disconnect(); };
+    const onWheel = (e) => { if (e.deltaY < 0) halt(); }; // scrolling UP = intent to read history
+    target.addEventListener('wheel', onWheel, { passive: true });
+    target.addEventListener('touchmove', halt, { passive: true });
+    const raf1 = requestAnimationFrame(snap);
+    const timers = [40, 100, 200, 350, 550, 800].map((ms) => setTimeout(toBottom, ms));
+    if (ro) { ro.observe(target); Array.from(target.children).forEach((c) => ro.observe(c)); }
     if (mo) mo.observe(target, { childList: true, subtree: true, characterData: true });
+    const autoHalt = setTimeout(halt, 1500);
     return () => {
-      target.removeEventListener('scroll', onScroll);
+      target.removeEventListener('wheel', onWheel);
+      target.removeEventListener('touchmove', halt);
       cancelAnimationFrame(raf1);
-      clearTimeout(t1);
-      clearTimeout(t2);
+      timers.forEach(clearTimeout);
+      clearTimeout(autoHalt);
       if (ro) ro.disconnect();
       if (mo) mo.disconnect();
     };

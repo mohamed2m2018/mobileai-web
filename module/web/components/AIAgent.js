@@ -31,6 +31,7 @@ import { WebPlatformAdapter } from "../core/WebPlatformAdapter.js";
 import { ScreenMapRecorder } from "../core/ScreenMapRecorder.js";
 import { ServerAgentClient } from "../core/ServerAgentClient.js";
 import { webBlockDefinitions } from "../blocks.js";
+import { enrichReplyImages } from "../core/cardImages.js";
 import { RichContentRendererWeb } from "./RichContentRendererWeb.js";
 import { QuickActionsPanelWeb } from "./QuickActionsPanelWeb.js";
 const APPROVAL_GRANTED_TOKEN = "__APPROVAL_GRANTED__";
@@ -1773,30 +1774,37 @@ function AIAgent({
   useEffect(() => {
     const target = mode === "text" ? messagesScrollRef.current : mode === "human" ? supportScrollRef.current : voiceScrollRef.current;
     if (!isOpen || !target) return;
-    let pinned = true;
-    const NEAR = 80;
+    let stopped = false;
     const toBottom = () => {
-      if (pinned) target.scrollTop = target.scrollHeight;
+      if (!stopped) target.scrollTop = target.scrollHeight;
     };
-    const onScroll = () => {
-      pinned = target.scrollHeight - target.scrollTop - target.clientHeight <= NEAR;
+    const snap = () => requestAnimationFrame(toBottom);
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(snap) : null;
+    const mo = typeof MutationObserver !== "undefined" ? new MutationObserver(snap) : null;
+    const halt = () => {
+      stopped = true;
+      if (ro) ro.disconnect();
+      if (mo) mo.disconnect();
     };
-    target.addEventListener("scroll", onScroll, { passive: true });
-    const raf1 = requestAnimationFrame(() => requestAnimationFrame(toBottom));
-    const t1 = setTimeout(toBottom, 150);
-    const t2 = setTimeout(toBottom, 350);
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => requestAnimationFrame(toBottom)) : null;
-    const mo = typeof MutationObserver !== "undefined" ? new MutationObserver(() => requestAnimationFrame(toBottom)) : null;
+    const onWheel = (e) => {
+      if (e.deltaY < 0) halt();
+    };
+    target.addEventListener("wheel", onWheel, { passive: true });
+    target.addEventListener("touchmove", halt, { passive: true });
+    const raf1 = requestAnimationFrame(snap);
+    const timers = [40, 100, 200, 350, 550, 800].map((ms) => setTimeout(toBottom, ms));
     if (ro) {
       ro.observe(target);
       Array.from(target.children).forEach((c) => ro.observe(c));
     }
     if (mo) mo.observe(target, { childList: true, subtree: true, characterData: true });
+    const autoHalt = setTimeout(halt, 1500);
     return () => {
-      target.removeEventListener("scroll", onScroll);
+      target.removeEventListener("wheel", onWheel);
+      target.removeEventListener("touchmove", halt);
       cancelAnimationFrame(raf1);
-      clearTimeout(t1);
-      clearTimeout(t2);
+      timers.forEach(clearTimeout);
+      clearTimeout(autoHalt);
       if (ro) ro.disconnect();
       if (mo) mo.disconnect();
     };
@@ -2580,6 +2588,7 @@ function AIAgent({
         const rawResult = await serverClientRef.current.execute(trimmed || displayText, toUserHistory(history), userImages, { ...serverConfig, conversationId: conversationIdRef.current || localConversationKeyRef.current });
         if (!isCurrentSend()) return;
         const result = normalizeExecutionResult(rawResult);
+        if (result && Array.isArray(result.reply)) result.reply = enrichReplyImages(result.reply, platformAdapter);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
           role: "assistant",
@@ -2634,6 +2643,7 @@ function AIAgent({
           { ...serverConfig, resume: true, workflowApproved: workflowApprovedRef.current, conversationId: conversationIdRef.current || localConversationKeyRef.current }
         );
         const result = normalizeExecutionResult(rawResult);
+        if (result && Array.isArray(result.reply)) result.reply = enrichReplyImages(result.reply, platformAdapter);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
           role: "assistant",
