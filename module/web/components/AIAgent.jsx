@@ -32,10 +32,13 @@ import { WebPlatformAdapter } from '../core/WebPlatformAdapter.js';
 import { ScreenMapRecorder } from '../core/ScreenMapRecorder.js';
 import { ServerAgentClient } from '../core/ServerAgentClient.js';
 import { webBlockDefinitions } from '../blocks.js';
+import { enrichReplyImages } from '../core/cardImages.js';
 import { RichContentRendererWeb } from './RichContentRendererWeb.js';
 import { QuickActionsPanelWeb } from './QuickActionsPanelWeb.js';
 const APPROVAL_GRANTED_TOKEN = '__APPROVAL_GRANTED__';
 const APPROVAL_REJECTED_TOKEN = '__APPROVAL_REJECTED__';
+
+// Product-card images, enriched client-side (zero model-token cost). See core/cardImages.js.
 const ASK_USER_CANCELLED_TOKEN = '__ASK_USER_CANCELLED__';
 const CLOSED_TICKET_STATUSES = new Set(['closed', 'resolved']);
 const DEFAULT_WEB_VOICE_MODEL = 'gemini-3.1-flash-live-preview';
@@ -2845,6 +2848,8 @@ export function AIAgent({
         // Superseded mid-flight: drop this stale reply, the newer send owns the chat.
         if (!isCurrentSend()) return;
         const result = normalizeExecutionResult(rawResult);
+        // Fill product-card images from the live DOM (zero model-token cost).
+        if (result && Array.isArray(result.reply)) result.reply = enrichReplyImages(result.reply, platformAdapter);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
           role: 'assistant',
@@ -2927,6 +2932,8 @@ export function AIAgent({
           { ...serverConfig, resume: true, workflowApproved: workflowApprovedRef.current, conversationId: conversationIdRef.current || localConversationKeyRef.current },
         );
         const result = normalizeExecutionResult(rawResult);
+        // Fill product-card images from the live DOM (zero model-token cost).
+        if (result && Array.isArray(result.reply)) result.reply = enrichReplyImages(result.reply, platformAdapter);
         const assistantMessage = createAIMessage({
           id: `assistant-${Date.now()}`,
           role: 'assistant',
