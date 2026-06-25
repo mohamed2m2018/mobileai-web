@@ -613,6 +613,9 @@ export class ServerAgentClient {
     clearProgress();
     this.callbacks.onActingOnPage?.(false);
     this.callbacks.onStatusUpdate?.('');
+    // Withdraw any approval prompt still open ("May I tap…?" / Allow) — the run ended, so a
+    // stale Allow button is orphaned. Dismissal is fail-closed (resolves it as REJECTED).
+    this.callbacks.onDismissPrompt?.();
     this.callbacks.onTokenUsage?.(msg.tokenUsage);
 
     const result = {
@@ -740,6 +743,8 @@ export class ServerAgentClient {
   }
 
   _cleanup() {
+    // Dismiss any open approval prompt so it can't outlive the session (fail-closed → REJECTED).
+    this.callbacks?.onDismissPrompt?.();
     if (this._ws) {
       if (this._ws.readyState <= 1) {
         this._ws.close();

@@ -29,6 +29,8 @@ const HTML = `<!doctype html><html><body>
  <label>Qty<input id=q type=number min=1 max=10 value=2></label>
  <select id=country><option>Egypt</option><option>UAE</option></select>
  <label><input type=checkbox id=tos> I agree to terms</label>
+ <div role=radio aria-checked=true tabindex=0>Cash on delivery</div>
+ <div role=radio aria-checked=false tabindex=0>Bank transfer</div>
  <button id=sub disabled>Place order</button>
 </form>
 <section aria-label="Results">
@@ -67,6 +69,10 @@ test("native form constraints are serialized structurally (no static type-list)"
   assert.match(t, /len<=60/, "maxLength constraint");
   assert.match(t, /k(=Egypt)?\[Egypt\|UAE\]/, "<select> options listed");
   assert.match(t, /\bs:off\b/, "checkbox state");
+  // CUSTOM selection controls (role=radio + aria-checked) must expose selected state too —
+  // the agent was blind to a custom payment radio's selection and re-tapped it into a surrender.
+  assert.match(t, /s:on\tCash on delivery/, "custom aria-checked=true radio shows s:on");
+  assert.match(t, /s:off\tBank transfer/, "custom aria-checked=false radio shows s:off");
   assert.match(t, /Place order\t[^\n]*disabled/, "disabled (gated) flag on the submit button");
 });
 

@@ -982,6 +982,26 @@ function getFieldError(node, doc) {
   if ((ariaInvalid || msg) && !msg) msg = 'invalid value';
   return msg;
 }
+// Selected/checked state of ANY control, read STRUCTURALLY: native `.checked`, or the standard
+// ARIA state attributes (aria-checked / aria-selected / aria-pressed). Returns 'on' | 'off' |
+// null (= not a selection control). NO class/string lists — just native + ARIA — so a CUSTOM
+// div radio that declares aria-checked is as visible to the agent as a native one. This is what
+// lets the agent SEE that its selection landed instead of re-tapping an already-selected control.
+function getSelectedState(node) {
+  if (!isHTMLElement(node)) return null;
+  const tag = (node.tagName || '').toLowerCase();
+  const itype = (node.type || '').toLowerCase();
+  if (tag === 'input' && /^(checkbox|radio)$/.test(itype)) return node.checked ? 'on' : 'off';
+  for (const attr of ['aria-checked', 'aria-selected', 'aria-pressed']) {
+    const v = node.getAttribute(attr);
+    if (v === 'true' || v === 'mixed') return 'on';
+    if (v === 'false') return 'off';
+  }
+  // NOTE: do NOT fall back to node.checked for arbitrary inputs — .checked is a boolean (false)
+  // on email/number/text inputs too, which would mis-mark them as a toggle and clobber their
+  // i:<type> constraints. Only native checkbox/radio (handled above) + ARIA state count.
+  return null;
+}
 function buildProps(element, metadata) {
   const props = {
     domNode: element,
@@ -998,6 +1018,10 @@ function buildProps(element, metadata) {
     props.scrollable = true;
     props.scrollData = scrollData;
   }
+  // Selection/checked state (native + ARIA) so every render path can show whether a toggle/
+  // radio/option is already chosen — the agent must SEE its select landed, or it re-taps.
+  const selected = getSelectedState(element);
+  if (selected !== null) props.selected = selected === 'on';
   if (isInputElement(element) || isTextAreaElement(element) || isSelectElement(element)) {
     props.value = element.value;
     props.placeholder = 'placeholder' in element ? element.placeholder : undefined;
@@ -1365,6 +1389,9 @@ export class PageControllerWeb {
       if (region) hints.push(`region="${truncateText(region, 48)}"`);
       const current = isHTMLElement(node) ? node.getAttribute('aria-current') : null;
       if (current && current !== 'false') hints.push('current');
+      // Custom (role/aria) selection controls — native checkbox/radio get 'checked' below.
+      const vSel = isHTMLElement(node) && !(isInputElement(node) && /^(checkbox|radio)$/.test(node.type || '')) ? getSelectedState(node) : null;
+      if (vSel !== null) hints.push(vSel === 'on' ? 'selected' : 'not-selected');
       if (isInputElement(node)) {
         if (node.type && node.type !== 'text') hints.push(`inputType="${node.type}"`);
         if (node.type === 'checkbox' || node.type === 'radio') {
@@ -1468,9 +1495,10 @@ export class PageControllerWeb {
         return `k${node.value ? '=' + truncateText(node.value, 24) : ''}[${opts.map(o => truncateText(o, 24)).join('|')}]`;
       }
       const itype = (node.type || (tag === 'textarea' ? 'textarea' : '')).toLowerCase();
-      if ((tag === 'input' && /^(checkbox|radio)$/.test(itype)) || node.getAttribute('role') === 'switch') {
-        return `s:${node.checked ? 'on' : 'off'}`;
-      }
+      // Selection/toggle controls — native OR custom (role/aria). s:on/s:off so the agent can
+      // SEE the choice is already made and stops re-tapping (the payment-radio dead-loop).
+      const sel = getSelectedState(node);
+      if (sel !== null) return `s:${sel}`;
       if (tag === 'textarea' || (tag === 'input' && !/^(button|submit|reset|image)$/.test(itype || 'text'))) {
         const f = [];
         if (node.required) f.push('req');
@@ -1565,6 +1593,8 @@ export class PageControllerWeb {
     const parts = [];
     parts.push(`[${index}]<${entry.type}> full detail:`);
     if (entry.label) parts.push(`label: ${entry.label}`);
+    const selState = getSelectedState(node);
+    if (selState !== null) parts.push(`selected: ${selState === 'on' ? 'yes (already chosen — do not re-tap)' : 'no'}`);
     const region = isHTMLElement(node) ? getNearestSectionLabel(node, node.ownerDocument) : '';
     if (region) parts.push(`section: ${region}`);
     if (typeof entry.props?.nearbyText === 'string' && entry.props.nearbyText) {

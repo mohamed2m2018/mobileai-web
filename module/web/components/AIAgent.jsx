@@ -1355,6 +1355,9 @@ export function AIAgent({
   const localConversationKeyRef = useRef(localConversationKey);
   const isOpenRef = useRef(persistedState?.isOpen ?? defaultOpen);
   const [pendingPrompt, setPendingPrompt] = useState(null);
+  // Holds the OPEN prompt's resolver so a run that ends (done/cleanup) can withdraw an orphaned
+  // approval (the stray "Allow") fail-closed — resolved as REJECTED, never granted.
+  const pendingResolveRef = useRef(null);
   // U2 — styled in-panel AI consent (replaces window.confirm). Holds the pending
   // promise resolver so the Allow / Don't-Allow buttons settle the same promise
   // the old window.confirm path returned. Mirrors RN AgentChatBar consentVisible.
@@ -1721,6 +1724,7 @@ export function AIAgent({
         workflowApprovedRef.current = true;
       }
       setPendingPrompt(null);
+      pendingResolveRef.current = null;
       pending.resolve(token);
     },
     [appendUserMessage, pendingPrompt],
@@ -2601,10 +2605,21 @@ export function AIAgent({
             });
             setMessages((prev) => [...prev, promptMessage]);
             setPendingPrompt({ question, kind, resolve });
+            pendingResolveRef.current = resolve;
             setMode('text');
             setLocalUnread(0);
             setIsOpen(true);
           }),
+        // Withdraw an orphaned approval when the run ends (done/cleanup) — fail-closed: the
+        // open prompt resolves REJECTED, so a stale "Allow" can never grant after the fact.
+        onDismissPrompt: () => {
+          const r = pendingResolveRef.current;
+          if (r) {
+            pendingResolveRef.current = null;
+            r(APPROVAL_REJECTED_TOKEN);
+          }
+          setPendingPrompt(null);
+        },
       }),
     [analyticsKey, onTokenUsage, platformAdapter, proxyUrl],
   );
