@@ -343,21 +343,32 @@ export class ServerAgentClient {
     // if the executor hangs or throws — otherwise the run stalls at this step and the
     // client reconnect-loops Step 0 (the "stuck/pending" bug). Bound every await.
     let output;
-    try {
-      const intent = this._buildIntent(toolName, args, targetLabel);
-      output = await this._withTimeout(
-        Promise.resolve().then(() => this.adapter.executeAction(intent)),
-        ACTION_TIMEOUT_MS,
-        // A timeout means "didn't confirm in time" — NOT "didn't happen". Tell the
-        // agent to verify against the fresh screen below and retry only if needed, so
-        // it recovers the step without blindly re-firing a mutation (double-submit).
-        `⌛ ${toolName} did not confirm within ${Math.round(ACTION_TIMEOUT_MS / 1000)}s. ` +
-          `It may or may not have taken effect — check the CURRENT screen below; if the ` +
-          `intended change is not visible, retry the same action, otherwise continue.`,
-      );
-      if (output == null) output = `✅ ${toolName} executed`;
-    } catch (err) {
-      output = `❌ ${toolName} failed: ${err?.message || 'unknown error'}`;
+    if (toolName === 'wait') {
+      // wait sleeps CLIENT-side, then falls through to waitForStable + a FRESH snapshot below,
+      // so the agent reasons over the SETTLED page (e.g. an SPA route that just finished
+      // hydrating). Previously wait slept server-side and never refetched the screen — so after
+      // a navigation the agent kept seeing the same stale "loading" screen and falsely
+      // concluded the page would not load.
+      const secs = Math.min(Math.max(Number(args?.seconds) || 1, 0), 5);
+      await new Promise((resolve) => setTimeout(resolve, secs * 1000));
+      output = `✅ Waited ${secs}s`;
+    } else {
+      try {
+        const intent = this._buildIntent(toolName, args, targetLabel);
+        output = await this._withTimeout(
+          Promise.resolve().then(() => this.adapter.executeAction(intent)),
+          ACTION_TIMEOUT_MS,
+          // A timeout means "didn't confirm in time" — NOT "didn't happen". Tell the
+          // agent to verify against the fresh screen below and retry only if needed, so
+          // it recovers the step without blindly re-firing a mutation (double-submit).
+          `⌛ ${toolName} did not confirm within ${Math.round(ACTION_TIMEOUT_MS / 1000)}s. ` +
+            `It may or may not have taken effect — check the CURRENT screen below; if the ` +
+            `intended change is not visible, retry the same action, otherwise continue.`,
+        );
+        if (output == null) output = `✅ ${toolName} executed`;
+      } catch (err) {
+        output = `❌ ${toolName} failed: ${err?.message || 'unknown error'}`;
+      }
     }
 
     // Let any SPA navigation triggered by the action settle BEFORE snapshotting, so the
