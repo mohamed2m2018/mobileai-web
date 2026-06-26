@@ -52,5 +52,7 @@ export const ENDPOINTS = {
   /** Live agent escalation (support handoff) */
   get escalation() { return activeBase(); },
   /** AI conversation history — save and retrieve per-user AI chat sessions */
-  get conversations() { return `${activeBase()}/api/v1/conversations`; }
+  get conversations() { return `${activeBase()}/api/v1/conversations`; },
+  /** CSAT/NPS/CES survey responses — persisted + mirrored to support analytics */
+  get surveyResponses() { return `${activeBase()}/api/v1/surveys/responses`; }
 };

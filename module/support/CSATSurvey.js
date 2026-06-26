@@ -10,7 +10,6 @@
  */
 
 import { useState } from 'react';
-import { MobileAI } from "../services/telemetry/index.js";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 
 const EMOJI_OPTIONS = [
@@ -64,7 +63,7 @@ const styles = {
   submitText: { fontSize: '14px', fontWeight: 600 },
 };
 
-export function CSATSurvey({ config, metadata, onDismiss, theme }) {
+export function CSATSurvey({ config, metadata, onDismiss, theme, onPersist }) {
   const [selectedScore, setSelectedScore] = useState(null);
   const [feedback, setFeedback] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -84,17 +83,13 @@ export function CSATSurvey({ config, metadata, onDismiss, theme }) {
   const handleSubmit = () => {
     if (selectedScore === null) return;
     const rating = { score: selectedScore, feedback: feedback.trim() || undefined, metadata };
-    config.onSubmit(rating);
+    // Host-supplied callback (optional).
+    config.onSubmit?.(rating);
+    // Persist to the backend, which is the source of truth for the
+    // csat_response / nps_response / ces_response (+ fcr_achieved) analytics
+    // events — the client no longer emits them itself (would double-count).
+    onPersist?.(rating);
     setSubmitted(true);
-
-    const fcrAchieved = surveyType === 'nps'
-      ? selectedScore >= 9
-      : selectedScore >= 4 || (ratingType === 'thumbs' && selectedScore === 5);
-    const eventName = surveyType === 'nps' ? 'nps_response' : surveyType === 'ces' ? 'ces_response' : 'csat_response';
-    MobileAI.track(eventName, { score: selectedScore, fcrAchieved, ticketId: metadata?.ticketId });
-    if (fcrAchieved) {
-      MobileAI.track('fcr_achieved', { score: selectedScore, ticketId: metadata?.ticketId });
-    }
     setTimeout(onDismiss, 1500);
   };
 
