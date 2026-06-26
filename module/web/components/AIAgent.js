@@ -15,6 +15,7 @@ import {
   fetchConversations,
   fetchConversation
 } from "../../services/ConversationService.js";
+import { submitSurveyResponse } from "../../services/SurveyService.js";
 import { VoiceService } from "../../services/VoiceService.js";
 import { initDeviceId } from "../../services/telemetry/device.js";
 import { TelemetryService, bindTelemetryService } from "../../services/telemetry/index.js";
@@ -5009,6 +5010,17 @@ ${screenContext}`;
               config: supportMode.csat,
               metadata: csatPrompt.metadata,
               onDismiss: () => setCsatPrompt(null),
+              onPersist: (rating) => {
+                submitSurveyResponse({
+                  analyticsKey,
+                  score: rating.score,
+                  feedback: rating.feedback,
+                  deviceId,
+                  userId: userContext?.userId,
+                  ticketId: csatPrompt.metadata?.ticketId,
+                  surveyConfigId: supportMode.csat?.surveyConfigId
+                });
+              },
               theme: {
                 primaryColor: "#0D9373",
                 textColor: "#ffffff",
