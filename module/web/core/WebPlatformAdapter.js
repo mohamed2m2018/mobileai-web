@@ -4,7 +4,6 @@ import React from 'react';
 import { globalBlockRegistry } from "../../core/BlockRegistry.js";
 import { globalZoneRegistry } from "../../core/ZoneRegistry.js";
 import { logger } from "../../utils/logger.js";
-import { findSubmitControl } from "./domSubmit.js";
 import { PageControllerWeb } from "./PageControllerWeb.js";
 import { waitForPageStable } from "./waitForStable.js";
 function getNodeWindow(node) {
@@ -910,7 +909,7 @@ export class WebPlatformAdapter {
       this.setNativeValue(node, text);
       this.dispatchTextInputEvents(node, text);
       const submitted = submit ? this.submitFromNode(node) : false;
-      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and submitted' : (submit ? ' — but it did NOT submit (no form/search button found); TAP the search/submit button to run the search' : '')}`;
+      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and submitted' : (submit ? ' — but it did NOT submit (no form). Do not rely on Enter; TAP a matching autocomplete suggestion or the search button (magnifying-glass) to run the search' : '')}`;
     }
     if (node.isContentEditable) {
       this.scrollNodeIntoView(node);
@@ -919,7 +918,7 @@ export class WebPlatformAdapter {
       node.textContent = text;
       this.dispatchTextInputEvents(node, text);
       const submitted = submit ? this.submitFromNode(node) : false;
-      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and submitted' : (submit ? ' — but it did NOT submit (no form/search button found); TAP the search/submit button to run the search' : '')}`;
+      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and submitted' : (submit ? ' — but it did NOT submit (no form). Do not rely on Enter; TAP a matching autocomplete suggestion or the search button (magnifying-glass) to run the search' : '')}`;
     }
     return `❌ Element [${resolvedIndex}] "${label}" is not a typeable text input.`;
   }
@@ -951,14 +950,11 @@ export class WebPlatformAdapter {
         catch { try { form.submit(); } catch { /* ignore */ } }
         return true;
       }
-      // 3) No form — the common SPA case (the search box submits via a BUTTON, and a synthetic
-      //    Enter is ignored because it isn't a trusted event). Click the submit/search control
-      //    the way a user would.
-      const btn = findSubmitControl(node);
-      if (btn) {
-        try { btn.click(); } catch { /* fall through to false */ return false; }
-        return true;
-      }
+      // 3) No <form>: a synthetic Enter alone does NOT trigger a formless SPA search (not a
+      //    trusted event). Do NOT auto-click a "nearby button" — on real sites that grabs a
+      //    logo/nav/menu control and navigates AWAY (regressed: search Enter → home). Report
+      //    honestly instead so the caller steers the model to tap the actual search button or a
+      //    matching autocomplete suggestion itself — both of which it can see in the element list.
       return false;
     } catch {
       return false;
@@ -978,7 +974,7 @@ export class WebPlatformAdapter {
     const ok = this.submitFromNode(node);
     return ok
       ? `✅ Pressed Enter on [${resolvedIndex}] "${label}" to submit.`
-      : `⚠️ Enter did not submit [${resolvedIndex}] "${label}" — this field has no form and no search button beside it, so pressing Enter does nothing here. Find and TAP the search/submit button (often a magnifying-glass icon) to run the search; do not press Enter again.`;
+      : `⚠️ Enter did NOT run a search on [${resolvedIndex}] "${label}" — this search box has no form, so pressing Enter does nothing here (and can reload the page). Do NOT press Enter again. After typing, the site shows autocomplete SUGGESTIONS — TAP the matching suggestion in the element list, or TAP the search button (magnifying-glass icon). That is how this search runs.`;
   }
   async scroll(direction, amount, containerIndex) {
     const root = this.options.getRoot();
