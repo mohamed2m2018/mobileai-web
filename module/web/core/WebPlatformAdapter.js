@@ -977,8 +977,21 @@ export class WebPlatformAdapter {
           }));
         }
       }
-      // 2) Owning <form> → native submission. A synthetic Enter does NOT trigger the browser's
-      //    implicit form submission, so this is required even for real forms.
+      // 2a) AUTOCOMPLETE / COMBOBOX (Algolia Autocomplete, react-select, etc.): the widget keeps
+      //     its OWN query state, and its wrapping <form> has an EMPTY native input value — so
+      //     submitting the form navigates to the search action with NO query → wrong page / a
+      //     reload to home that tears down the session (the aldiwan.net bug). Do NOT submit the
+      //     form. The synthetic Enter above may trigger the widget; otherwise return false so the
+      //     caller steers the agent to TAP a suggestion (the reliable path for autocompletes).
+      const getAttr = typeof node.getAttribute === 'function' ? (a) => node.getAttribute(a) : () => null;
+      const role = String(getAttr('role') || '').toLowerCase();
+      const isAutocomplete = role === 'combobox'
+        || !!getAttr('aria-autocomplete')
+        || getAttr('aria-expanded') != null
+        || /(^|\s)aa-Input(\s|$)/.test(String(node.className || ''));
+      if (isAutocomplete) return false;
+      // 2b) Plain owning <form> → native submission. A synthetic Enter does NOT trigger the
+      //     browser's implicit form submission, so this is required even for real forms.
       const form = node.form || (typeof node.closest === 'function' ? node.closest('form') : null);
       if (form && (typeof form.requestSubmit === 'function' || typeof form.submit === 'function')) {
         try { form.requestSubmit ? form.requestSubmit() : form.submit(); }
