@@ -178,6 +178,15 @@ export class ServerAgentClient {
               resumed: attempt > 0,
               // Group the run's server-emitted analytics events under this conversation.
               conversationId: config?.conversationId,
+              // Pull-tool capabilities this client can execute (P2b/P3). The server declares
+              // find / get_page_text / look to the model ONLY when advertised here, so we never
+              // get offered a tool we can't run. `look` rides the always-present capture_screenshot
+              // path; find / get_page_text are gated on the adapter actually implementing them.
+              capabilities: [
+                ...(typeof this.adapter.findElements === 'function' ? ['find'] : []),
+                ...(typeof this.adapter.getPageText === 'function' ? ['get_page_text'] : []),
+                'look',
+              ],
               chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
               // Carried across an MPA reload+resume: a workflow approval the user already
               // granted, so the resumed server session doesn't re-ask "may I?". Trust
@@ -326,6 +335,16 @@ export class ServerAgentClient {
     // detail) — handle it separately so it doesn't go through executeAction/waitForStable.
     if (toolName === 'read_more') {
       await this._handleReadMore(args || {});
+      return;
+    }
+    // find / get_page_text are NON-mutating reads (P3) — handle them like read_more, off the
+    // executeAction/waitForStable path. They return the SAME screen (cache stays warm).
+    if (toolName === 'find') {
+      await this._handleFind(args || {});
+      return;
+    }
+    if (toolName === 'get_page_text') {
+      await this._handleGetPageText();
       return;
     }
 
@@ -617,6 +636,68 @@ export class ServerAgentClient {
         })),
       },
     });
+  }
+
+  // Shared NON-mutating read result: snapshot the SAME screen (cache-warm) and return `output`.
+  // Used by find / get_page_text — neither changes the page, so we re-send the current screen.
+  _sendReadResult(output) {
+    let snap;
+    try { snap = this.adapter.getScreenSnapshot(); }
+    catch { snap = { screenName: '', availableScreens: [], elementsText: '', elements: [] }; }
+    this._send({
+      type: 'action_result',
+      output: String(output),
+      screenState: {
+        screenName: snap.screenName,
+        availableScreens: snap.availableScreens,
+        elementsText: snap.elementsText,
+        elements: snap.elements.map(e => ({
+          index: e.index,
+          type: e.type,
+          label: e.label,
+          requiresConfirmation: e.requiresConfirmation,
+          zoneId: e.zoneId,
+          props: this._safeProps(e.props),
+        })),
+      },
+    });
+  }
+
+  // find: natural-language element search over the adapter's FULL in-memory element list.
+  // Returns the matching indices so the model acts by index — no scroll, no full-list dump.
+  async _handleFind(args) {
+    const query = (args && typeof args.query === 'string' ? args.query : '').trim();
+    let output;
+    try {
+      if (!query) {
+        output = 'find needs a query — say what you are looking for.';
+      } else if (typeof this.adapter.findElements === 'function') {
+        const matches = this.adapter.findElements(query) || [];
+        output = matches.length
+          ? `Found ${matches.length} element(s) for "${query}" — act on the index you need:\n`
+            + matches.map(m => `[${m.index}] ${m.type} — ${m.label}`).join('\n')
+          : `No elements matched "${query}". Try different words, scroll to load more content, or read the screen's element list.`;
+      } else {
+        output = 'find is not available on this page.';
+      }
+    } catch (err) {
+      output = `find failed: ${err?.message || 'unknown error'}`;
+    }
+    this._sendReadResult(output);
+  }
+
+  // get_page_text: extract the page's MAIN prose (article / main / body) for answering a
+  // content question — cheaper than paging the structured element list with read_more.
+  async _handleGetPageText() {
+    let output;
+    try {
+      output = typeof this.adapter.getPageText === 'function'
+        ? (this.adapter.getPageText() || '(No readable text content found on this page.)')
+        : '(Reading page text is not available on this page.)';
+    } catch (err) {
+      output = `get_page_text failed: ${err?.message || 'unknown error'}`;
+    }
+    this._sendReadResult(output);
   }
 
   _handleDone(msg) {

@@ -354,6 +354,61 @@ export class WebPlatformAdapter {
       return { found: false, text: `Could not read element ${index}.` };
     }
   }
+  // find: natural-language element search over the FULL (uncapped) interactive list — the same
+  // source read_more pages, so it reaches controls trimmed from the screen skeleton. Returns up
+  // to `limit` best matches as {index,type,label} so the agent acts by index without scrolling
+  // or dumping the whole list. Ranking is generic relevance (token coverage), NOT a hardcoded
+  // label list. Non-mutating.
+  findElements(query, limit = 12) {
+    const q = String(query || '').toLowerCase().trim();
+    if (!q) return [];
+    try {
+      const controller = new PageControllerWeb(this.options.getRoot(), {
+        ignoreSelectors: this.options.ignoreSelectors,
+        confirmSelectors: this.options.confirmSelectors,
+      });
+      const all = controller.collectInteractives() || [];
+      const tokens = q.split(/\s+/).filter(t => t.length > 1);
+      if (!tokens.length) return [];
+      const scored = [];
+      for (const entry of all) {
+        if (!entry || entry.index == null) continue;
+        const hay = [entry.label, entry.type, entry.props?.nearbyText]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (!hay) continue;
+        let score = 0;
+        for (const t of tokens) if (hay.includes(t)) score += 1;
+        if (!score) continue;
+        // Boost a whole-phrase hit, and a hit that lands in the LABEL (vs only nearby text).
+        if (hay.includes(q)) score += tokens.length;
+        if (typeof entry.label === 'string' && entry.label.toLowerCase().includes(q)) score += 1;
+        scored.push({ entry, score });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      return scored.slice(0, limit).map(({ entry }) => ({
+        index: entry.index,
+        type: entry.type || 'element',
+        label: typeof entry.label === 'string' ? entry.label : '',
+      }));
+    } catch (err) {
+      logger.warn('WebPlatformAdapter', `findElements failed: ${err?.message}`);
+      return [];
+    }
+  }
+  // get_page_text: the page's MAIN prose for answering a content question. Delegates to the
+  // controller's getMainText (reuses the dehydrator's semantic extraction). Non-mutating.
+  getPageText(maxChars = 8000) {
+    try {
+      const controller = new PageControllerWeb(this.options.getRoot(), {
+        ignoreSelectors: this.options.ignoreSelectors,
+        confirmSelectors: this.options.confirmSelectors,
+      });
+      return controller.getMainText(maxChars);
+    } catch (err) {
+      logger.warn('WebPlatformAdapter', `getPageText failed: ${err?.message}`);
+      return '';
+    }
+  }
   async executeAction(intent) {
     switch (intent.type) {
       case 'tap':

@@ -1618,6 +1618,21 @@ export class PageControllerWeb {
       text: `${body}\n(This is the COMPLETE detail for this element — there is nothing more to read. If the info you need is not shown here, ACT now: tap to open it, choose a different element, or answer with what you have. Do not read this element again.)`,
     };
   }
+  // get_page_text: the page's MAIN readable prose (P3). Picks the richest main-content
+  // container (main / [role=main] / article) and returns its normalized text, falling back to
+  // the analyzed root. Reuses the SAME normalizer + text extractor the dehydrator uses
+  // (getTextContent drops nested <script>/<style>), so there is no second scraper to maintain.
+  getMainText(maxChars = 8000) {
+    if (!this.doc || !this.base) return '';
+    let container = null;
+    for (const sel of ['main', '[role="main"]', 'article']) {
+      let found = null;
+      try { found = this.base.querySelector?.(sel) || this.doc.querySelector?.(sel); } catch { found = null; }
+      if (found && normalizeText(getTextContent(found)).length > 40) { container = found; break; }
+    }
+    if (!container) container = this.base;
+    return normalizeText(getTextContent(container)).slice(0, maxChars);
+  }
   collectInteractives() {
     this.analyze();
     return this.interactives;
