@@ -4,6 +4,7 @@ import React from 'react';
 import { globalBlockRegistry } from "../../core/BlockRegistry.js";
 import { globalZoneRegistry } from "../../core/ZoneRegistry.js";
 import { logger } from "../../utils/logger.js";
+import { installPageDebug, getConsole, getNetwork } from "./pageDebug.js";
 import { PageControllerWeb } from "./PageControllerWeb.js";
 import { waitForPageStable } from "./waitForStable.js";
 function getNodeWindow(node) {
@@ -287,7 +288,12 @@ export class WebPlatformAdapter {
   lastController = null;
   constructor(options) {
     this.options = options;
+    // Start capturing console + network so read_console/read_network can diagnose silent failures.
+    try { installPageDebug(); } catch { /* never break construction */ }
   }
+  // read_console / read_network: in-page debugging perception (metadata only, secrets redacted).
+  readConsole(limit) { try { return getConsole(limit); } catch (err) { return `read_console failed: ${err?.message || 'unknown'}`; } }
+  readNetwork(limit) { try { return getNetwork(limit); } catch (err) { return `read_network failed: ${err?.message || 'unknown'}`; } }
   getLastScreenSnapshot() {
     return this.lastSnapshot;
   }
@@ -308,6 +314,7 @@ export class WebPlatformAdapter {
       const controller = new PageControllerWeb(this.options.getRoot(), {
         ignoreSelectors: this.options.ignoreSelectors,
         confirmSelectors: this.options.confirmSelectors,
+        interactiveCap: this.options.interactiveCap,
       });
       const snapshot = controller.buildScreenSnapshot(this.getCurrentScreenName(), this.getAvailableScreens());
       this.lastController = controller;
@@ -334,6 +341,7 @@ export class WebPlatformAdapter {
       const controller = new PageControllerWeb(this.options.getRoot(), {
         ignoreSelectors: this.options.ignoreSelectors,
         confirmSelectors: this.options.confirmSelectors,
+        interactiveCap: this.options.interactiveCap,
       });
       return controller.getMoreStructure(offset, chunk);
     } catch (err) {
@@ -347,6 +355,7 @@ export class WebPlatformAdapter {
       const controller = new PageControllerWeb(this.options.getRoot(), {
         ignoreSelectors: this.options.ignoreSelectors,
         confirmSelectors: this.options.confirmSelectors,
+        interactiveCap: this.options.interactiveCap,
       });
       return controller.getElementDetail(index);
     } catch (err) {
@@ -366,6 +375,7 @@ export class WebPlatformAdapter {
       const controller = new PageControllerWeb(this.options.getRoot(), {
         ignoreSelectors: this.options.ignoreSelectors,
         confirmSelectors: this.options.confirmSelectors,
+        interactiveCap: this.options.interactiveCap,
       });
       const all = controller.collectInteractives() || [];
       const tokens = q.split(/\s+/).filter(t => t.length > 1);
@@ -402,6 +412,7 @@ export class WebPlatformAdapter {
       const controller = new PageControllerWeb(this.options.getRoot(), {
         ignoreSelectors: this.options.ignoreSelectors,
         confirmSelectors: this.options.confirmSelectors,
+        interactiveCap: this.options.interactiveCap,
       });
       return controller.getMainText(maxChars);
     } catch (err) {
@@ -419,6 +430,8 @@ export class WebPlatformAdapter {
         return this.typeText(intent.index, intent.text, intent.submit, intent.label);
       case 'press_enter':
         return this.pressEnter(intent.index);
+      case 'tap_at':
+        return this.tapAt(intent.x, intent.y, intent.label);
       case 'scroll':
         return this.scroll(intent.direction, intent.amount, intent.containerIndex);
       case 'adjust_slider':
@@ -868,6 +881,28 @@ export class WebPlatformAdapter {
     await this.showActionHighlight(node, 'tap');
     this.dispatchPointerSequence(node);
     return `✅ Tapped [${resolvedIndex}] "${label}"`;
+  }
+  // tap_at: coordinate-click FALLBACK for a control the agent can SEE (screenshot) but that isn't
+  // in the element list. Hit-test the point, then run the same realistic click sequence tap() uses.
+  async tapAt(x, y, label) {
+    const cx = Number(x);
+    const cy = Number(y);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return `❌ tap_at needs numeric x and y.`;
+    const root = this.options.getRoot?.();
+    const doc = isDocumentNode(root) ? root : (root?.ownerDocument || (typeof document !== 'undefined' ? document : null));
+    if (!doc || typeof doc.elementFromPoint !== 'function') return `❌ tap_at: no document to click into.`;
+    const node = doc.elementFromPoint(cx, cy);
+    if (!node || typeof node.dispatchEvent !== 'function') {
+      return `❌ tap_at: nothing clickable at (${cx}, ${cy}) — it may be off-screen. Scroll or look again, then retry.`;
+    }
+    try {
+      this.scrollNodeIntoView(node);
+      await this.showActionHighlight(node, 'tap');
+      this.dispatchPointerSequence(node);
+      return `✅ Clicked "${label || 'target'}" at (${cx}, ${cy}).`;
+    } catch (err) {
+      return `❌ tap_at failed: ${err?.message || 'unknown error'}`;
+    }
   }
   async longPress(index, intendedLabel) {
     const resolved = this.resolveInteractiveElement(index, 'long_press', intendedLabel);

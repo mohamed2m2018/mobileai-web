@@ -1295,6 +1295,7 @@ export function AIAgent({
   captureScreenshot,
   ignoreSelectors,
   confirmSelectors,
+  interactiveCap,
   persistenceKey = 'twomilia-chat',
   proactiveHelp,
   accentColor,
@@ -2019,6 +2020,7 @@ export function AIAgent({
         captureScreenshot,
         ignoreSelectors,
         confirmSelectors,
+        interactiveCap,
         onGuide: (payload) => {
           if (guideTimerRef.current) {
             clearTimeout(guideTimerRef.current);
@@ -2050,7 +2052,7 @@ export function AIAgent({
           }
         },
       }),
-    [captureScreenshot, confirmSelectors, ignoreSelectors, pathname, routerAdapter, scanRoot],
+    [captureScreenshot, confirmSelectors, ignoreSelectors, interactiveCap, pathname, routerAdapter, scanRoot],
   );
   // Screen-map training recorder. Dormant unless this page was opened by the
   // dashboard "Train" popup with a valid record token (in the URL hash, or kept

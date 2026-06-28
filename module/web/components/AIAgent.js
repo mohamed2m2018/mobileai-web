@@ -1224,6 +1224,7 @@ function AIAgent({
   captureScreenshot,
   ignoreSelectors,
   confirmSelectors,
+  interactiveCap,
   persistenceKey = "twomilia-chat",
   proactiveHelp,
   accentColor,
@@ -1844,6 +1845,7 @@ function AIAgent({
       captureScreenshot,
       ignoreSelectors,
       confirmSelectors,
+      interactiveCap,
       onGuide: (payload) => {
         if (guideTimerRef.current) {
           clearTimeout(guideTimerRef.current);
@@ -1872,7 +1874,7 @@ function AIAgent({
         }
       }
     }),
-    [captureScreenshot, confirmSelectors, ignoreSelectors, pathname, routerAdapter, scanRoot]
+    [captureScreenshot, confirmSelectors, ignoreSelectors, interactiveCap, pathname, routerAdapter, scanRoot]
   );
   useEffect(() => {
     if (typeof window === "undefined") return void 0;

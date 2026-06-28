@@ -185,6 +185,9 @@ export class ServerAgentClient {
               capabilities: [
                 ...(typeof this.adapter.findElements === 'function' ? ['find'] : []),
                 ...(typeof this.adapter.getPageText === 'function' ? ['get_page_text'] : []),
+                ...(typeof this.adapter.readConsole === 'function' ? ['read_console'] : []),
+                ...(typeof this.adapter.readNetwork === 'function' ? ['read_network'] : []),
+                ...(typeof this.adapter.tapAt === 'function' ? ['tap_at'] : []),
                 'look',
               ],
               chatHistory: Array.isArray(chatHistory) ? chatHistory : [],
@@ -345,6 +348,16 @@ export class ServerAgentClient {
     }
     if (toolName === 'get_page_text') {
       await this._handleGetPageText();
+      return;
+    }
+    if (toolName === 'read_console') {
+      this._sendReadResult(typeof this.adapter.readConsole === 'function'
+        ? this.adapter.readConsole(args?.limit) : '(console reading is not available on this page.)');
+      return;
+    }
+    if (toolName === 'read_network') {
+      this._sendReadResult(typeof this.adapter.readNetwork === 'function'
+        ? this.adapter.readNetwork(args?.limit) : '(network reading is not available on this page.)');
       return;
     }
 
@@ -771,6 +784,8 @@ export class ServerAgentClient {
         return { type: 'render_block', zoneId: args.zoneId, blockType: args.blockType, props: args.props, lifecycle: args.lifecycle };
       case 'capture_screenshot':
         return { type: 'capture_screenshot' };
+      case 'tap_at':
+        return { type: 'tap_at', x: args.x, y: args.y, label: args.label || targetLabel };
       default:
         return { type: toolName, ...args };
     }

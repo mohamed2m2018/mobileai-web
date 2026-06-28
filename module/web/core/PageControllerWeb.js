@@ -1094,6 +1094,13 @@ export class PageControllerWeb {
     };
     setConfiguredIgnoreSelector(this.config.ignoreSelectors);
   }
+  // How many interactive lines to SEND per snapshot (the rest is paged via read_more/find).
+  // Default 100; a host can lower it (config.interactiveCap) to ship a thin "pull" skeleton and
+  // let the agent fetch detail on demand (Chrome-style). Floor 5 so the screen is never useless.
+  _sendCap() {
+    const c = this.config?.interactiveCap;
+    return (typeof c === 'number' && c >= 5) ? Math.floor(c) : INTERACTIVE_SEND_CAP;
+  }
   static findNearestScrollableContainer(element) {
     let current = element?.parentElement || null;
     while (current) {
@@ -1346,7 +1353,7 @@ export class PageControllerWeb {
     // Truncation marker — NO silent drop. Anything the caps trimmed is still on the page and
     // retrievable via read_more WITHOUT scrolling.
     const structureOverflow = Math.max(0, fullStructure.length - MAX_STRUCTURE_LINES);
-    const interactiveOverflow = Math.max(0, (this.fullInteractiveLines?.length || 0) - INTERACTIVE_SEND_CAP);
+    const interactiveOverflow = Math.max(0, (this.fullInteractiveLines?.length || 0) - this._sendCap());
     if (structureOverflow > 0 || interactiveOverflow > 0) {
       const parts = [];
       if (interactiveOverflow > 0) parts.push(`${interactiveOverflow} more interactive control${interactiveOverflow === 1 ? '' : 's'}`);
@@ -1449,7 +1456,7 @@ export class PageControllerWeb {
     // Store the FULL element list (index-stable) for read_more paging; send only the first
     // INTERACTIVE_SEND_CAP — the rest is retrievable via read_more(), never silently dropped.
     this.fullInteractiveLines = elementLines;
-    lines.push(...elementLines.slice(0, INTERACTIVE_SEND_CAP));
+    lines.push(...elementLines.slice(0, this._sendCap()));
     return lines;
   }
 
@@ -1546,7 +1553,7 @@ export class PageControllerWeb {
     this.fullInteractiveLines = elementLines;
     // Legend lives in the cached system prompt (<screen_state>) — keep the per-step header tiny.
     const header = 'Interactive elements (idx⇥kind⇥label⇥link⇥flags):';
-    return [header, ...elementLines.slice(0, INTERACTIVE_SEND_CAP)];
+    return [header, ...elementLines.slice(0, this._sendCap())];
   }
 
   // ─── read_more support ────────────────────────────────────────────────────
@@ -1557,7 +1564,7 @@ export class PageControllerWeb {
   // (anything past this is not yet in the DOM).
   getMoreStructure(offset = 0, chunk = MAX_STRUCTURE_LINES) {
     this.analyze();
-    const interactiveOverflow = (this.fullInteractiveLines || []).slice(INTERACTIVE_SEND_CAP);
+    const interactiveOverflow = (this.fullInteractiveLines || []).slice(this._sendCap());
     const structureOverflow = (this.fullStructureLines || []).slice(MAX_STRUCTURE_LINES);
     const combined = [];
     if (interactiveOverflow.length > 0) {
