@@ -4,6 +4,7 @@ import React from 'react';
 import { globalBlockRegistry } from "../../core/BlockRegistry.js";
 import { globalZoneRegistry } from "../../core/ZoneRegistry.js";
 import { logger } from "../../utils/logger.js";
+import { findSubmitControl } from "./domSubmit.js";
 import { PageControllerWeb } from "./PageControllerWeb.js";
 import { waitForPageStable } from "./waitForStable.js";
 function getNodeWindow(node) {
@@ -909,7 +910,7 @@ export class WebPlatformAdapter {
       this.setNativeValue(node, text);
       this.dispatchTextInputEvents(node, text);
       const submitted = submit ? this.submitFromNode(node) : false;
-      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and pressed Enter to submit' : ''}`;
+      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and submitted' : (submit ? ' — but it did NOT submit (no form/search button found); TAP the search/submit button to run the search' : '')}`;
     }
     if (node.isContentEditable) {
       this.scrollNodeIntoView(node);
@@ -918,7 +919,7 @@ export class WebPlatformAdapter {
       node.textContent = text;
       this.dispatchTextInputEvents(node, text);
       const submitted = submit ? this.submitFromNode(node) : false;
-      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and pressed Enter to submit' : ''}`;
+      return `✅ Typed "${text}" into [${resolvedIndex}] "${label}"${submitted ? ' and submitted' : (submit ? ' — but it did NOT submit (no form/search button found); TAP the search/submit button to run the search' : '')}`;
     }
     return `❌ Element [${resolvedIndex}] "${label}" is not a typeable text input.`;
   }
@@ -927,9 +928,14 @@ export class WebPlatformAdapter {
   // goal — no brittle guessing about which inputs are "searches"). Dispatches a full
   // Enter key sequence (for SPA keydown/keyup handlers) AND requestSubmit()s the owning
   // form, because a synthetic Enter does NOT trigger native form submission on its own.
+  // Returns true ONLY when a real submission path was taken (form submit OR a submit/search
+  // button click). A formless search box where we could only fire a synthetic Enter returns
+  // false — the caller then steers the model to tap the search button, instead of falsely
+  // claiming success and looping on a no-op Enter.
   submitFromNode(node) {
     try {
       const view = node.ownerDocument?.defaultView || (typeof window !== 'undefined' ? window : null);
+      // 1) Synthetic Enter key sequence — fires SPA inputs that search on keydown/keyup.
       if (view && view.KeyboardEvent) {
         for (const evtType of ['keydown', 'keypress', 'keyup']) {
           node.dispatchEvent(new view.KeyboardEvent(evtType, {
@@ -937,11 +943,23 @@ export class WebPlatformAdapter {
           }));
         }
       }
+      // 2) Owning <form> → native submission. A synthetic Enter does NOT trigger the browser's
+      //    implicit form submission, so this is required even for real forms.
       const form = node.form || (typeof node.closest === 'function' ? node.closest('form') : null);
-      if (form && typeof form.requestSubmit === 'function') {
-        try { form.requestSubmit(); } catch { try { form.submit(); } catch { /* ignore */ } }
+      if (form && (typeof form.requestSubmit === 'function' || typeof form.submit === 'function')) {
+        try { form.requestSubmit ? form.requestSubmit() : form.submit(); }
+        catch { try { form.submit(); } catch { /* ignore */ } }
+        return true;
       }
-      return true;
+      // 3) No form — the common SPA case (the search box submits via a BUTTON, and a synthetic
+      //    Enter is ignored because it isn't a trusted event). Click the submit/search control
+      //    the way a user would.
+      const btn = findSubmitControl(node);
+      if (btn) {
+        try { btn.click(); } catch { /* fall through to false */ return false; }
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
@@ -960,7 +978,7 @@ export class WebPlatformAdapter {
     const ok = this.submitFromNode(node);
     return ok
       ? `✅ Pressed Enter on [${resolvedIndex}] "${label}" to submit.`
-      : `⚠️ Could not submit [${resolvedIndex}] "${label}".`;
+      : `⚠️ Enter did not submit [${resolvedIndex}] "${label}" — this field has no form and no search button beside it, so pressing Enter does nothing here. Find and TAP the search/submit button (often a magnifying-glass icon) to run the search; do not press Enter again.`;
   }
   async scroll(direction, amount, containerIndex) {
     const root = this.options.getRoot();
