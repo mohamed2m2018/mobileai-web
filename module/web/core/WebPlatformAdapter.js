@@ -979,6 +979,50 @@ export class WebPlatformAdapter {
   // button click). A formless search box where we could only fire a synthetic Enter returns
   // false — the caller then steers the model to tap the search button, instead of falsely
   // claiming success and looping on a no-op Enter.
+  // Locate the button that RUNS the search for a given input, tightly scoped so we never
+  // grab a logo/nav/menu control (the "search Enter → home" regression). Two structural
+  // scopes, safest first:
+  //   1) The owning <form>'s real submit control (button[type=submit] / input[type=submit|image]
+  //      / a bare <button> which defaults to type=submit in a form). Purely structural.
+  //   2) Formless: within a TIGHT container around the input ([role=search], the closest form,
+  //      or a search-wrapper), a control that SELF-identifies as search/submit via its OWN
+  //      attributes (id/name/title/aria-label/type/class/value). Bounded so it can't reach an
+  //      unrelated nav/logo elsewhere on the page.
+  // Returns the element to click, or null. Clicking it (vs form.submit()) runs the SPA/postback
+  // click handler that actually performs the search, without a native GET reload to home.
+  findSubmitControl(node) {
+    try {
+      const form = node.form || (typeof node.closest === 'function' ? node.closest('form') : null);
+      if (form && typeof form.querySelector === 'function') {
+        const explicit = form.querySelector('button[type="submit"], input[type="submit"], input[type="image"]');
+        if (explicit && explicit !== node) return explicit;
+        const bare = Array.from(form.querySelectorAll('button')).find((b) => {
+          const t = (b.getAttribute('type') || '').toLowerCase();
+          return b !== node && (t === '' || t === 'submit');
+        });
+        if (bare) return bare;
+      }
+      const container = (typeof node.closest === 'function'
+        && (node.closest('[role="search"]') || node.closest('form') || node.closest('[class*="search"]')))
+        || node.parentElement?.parentElement
+        || node.parentElement;
+      if (container && typeof container.querySelectorAll === 'function') {
+        const SUBMIT_SIG = /search|submit|magnif|بحث/i; // control's OWN self-declared purpose
+        const cands = Array.from(container.querySelectorAll(
+          'button, [role="button"], a[role="button"], input[type="button"], input[type="image"], input[type="submit"], span[role="button"]'));
+        for (const el of cands) {
+          if (el === node) continue;
+          const sig = [el.id, el.getAttribute?.('name'), el.getAttribute?.('title'),
+            el.getAttribute?.('aria-label'), el.getAttribute?.('type'), el.className,
+            el.getAttribute?.('value')].filter(Boolean).join(' ');
+          if (SUBMIT_SIG.test(sig)) return el;
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
   submitFromNode(node) {
     try {
       const view = node.ownerDocument?.defaultView || (typeof window !== 'undefined' ? window : null);
@@ -990,12 +1034,22 @@ export class WebPlatformAdapter {
           }));
         }
       }
-      // 2a) AUTOCOMPLETE / COMBOBOX (Algolia Autocomplete, react-select, etc.): the widget keeps
-      //     its OWN query state, and its wrapping <form> has an EMPTY native input value — so
-      //     submitting the form navigates to the search action with NO query → wrong page / a
-      //     reload to home that tears down the session (the aldiwan.net bug). Do NOT submit the
-      //     form. The synthetic Enter above may trigger the widget; otherwise return false so the
-      //     caller steers the agent to TAP a suggestion (the reliable path for autocompletes).
+      // 2) Prefer CLICKING the search/submit BUTTON. Most search widgets — autocomplete combo-
+      //    boxes AND .NET LinkButton postbacks (id=lbtn_Search) — run the search from the
+      //    button's OWN click handler, not a form submit event. A real pointer/click on it
+      //    performs the search WITHOUT form.submit()'s native GET that reloaded to home (the
+      //    formless-search regression). findSubmitControl is tightly scoped so it can't grab a
+      //    nav/logo. If the click navigates (postback/results), the reload-resume path carries
+      //    progress and the run continues.
+      const submitBtn = this.findSubmitControl(node);
+      if (submitBtn) {
+        this.dispatchPointerSequence(submitBtn);
+        return true;
+      }
+      // 3) AUTOCOMPLETE / COMBOBOX with no clickable submit button (Algolia, react-select, etc.):
+      //    its wrapping <form> often has an EMPTY native value, so submitting it navigates with NO
+      //    query → wrong page / home reload. The synthetic Enter above may have run it; otherwise
+      //    return false so the caller steers the agent to TAP a suggestion (the reliable path).
       const getAttr = typeof node.getAttribute === 'function' ? (a) => node.getAttribute(a) : () => null;
       const role = String(getAttr('role') || '').toLowerCase();
       const isAutocomplete = role === 'combobox'
@@ -1003,19 +1057,14 @@ export class WebPlatformAdapter {
         || getAttr('aria-expanded') != null
         || /(^|\s)aa-Input(\s|$)/.test(String(node.className || ''));
       if (isAutocomplete) return false;
-      // 2b) Plain owning <form> → native submission. A synthetic Enter does NOT trigger the
-      //     browser's implicit form submission, so this is required even for real forms.
+      // 4) Plain owning <form>, no explicit submit button found → native submission as a last
+      //    resort. A synthetic Enter does NOT trigger the browser's implicit form submission.
       const form = node.form || (typeof node.closest === 'function' ? node.closest('form') : null);
       if (form && (typeof form.requestSubmit === 'function' || typeof form.submit === 'function')) {
         try { form.requestSubmit ? form.requestSubmit() : form.submit(); }
         catch { try { form.submit(); } catch { /* ignore */ } }
         return true;
       }
-      // 3) No <form>: a synthetic Enter alone does NOT trigger a formless SPA search (not a
-      //    trusted event). Do NOT auto-click a "nearby button" — on real sites that grabs a
-      //    logo/nav/menu control and navigates AWAY (regressed: search Enter → home). Report
-      //    honestly instead so the caller steers the model to tap the actual search button or a
-      //    matching autocomplete suggestion itself — both of which it can see in the element list.
       return false;
     } catch {
       return false;
