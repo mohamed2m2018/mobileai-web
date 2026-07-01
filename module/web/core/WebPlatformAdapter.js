@@ -383,7 +383,20 @@ export class WebPlatformAdapter {
       const scored = [];
       for (const entry of all) {
         if (!entry || entry.index == null) continue;
-        const hay = [entry.label, entry.type, entry.props?.nearbyText]
+        // Include the element's IDENTIFYING attributes, not just the visible label. An
+        // icon-only control (e.g. a magnifying-glass search button with id="lbtn_Search",
+        // no text/aria label) is otherwise unmatchable — the model queried "search button"/
+        // "lbtn_Search" 5× and find returned nothing, so it looped. id/name/title/aria-label/
+        // placeholder/alt carry the real signal ("search" lives in the id here). Read straight
+        // off the collected DOM node (props.domNode) — no dehydrator change needed. These are
+        // low-noise identifiers (NOT class, which is full of utility tokens that mis-match).
+        const node = entry.props?.domNode;
+        const attrText = node && typeof node.getAttribute === 'function'
+          ? [node.id, node.getAttribute('name'), node.getAttribute('title'),
+             node.getAttribute('aria-label'), node.getAttribute('placeholder'),
+             node.getAttribute('alt'), node.getAttribute('value')].filter(Boolean).join(' ')
+          : '';
+        const hay = [entry.label, entry.type, entry.props?.nearbyText, attrText]
           .filter(Boolean).join(' ').toLowerCase();
         if (!hay) continue;
         let score = 0;

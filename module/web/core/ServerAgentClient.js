@@ -689,7 +689,7 @@ export class ServerAgentClient {
         output = matches.length
           ? `Found ${matches.length} element(s) for "${query}" — act on the index you need:\n`
             + matches.map(m => `[${m.index}] ${m.type} — ${m.label}`).join('\n')
-          : `No elements matched "${query}". Try different words, scroll to load more content, or read the screen's element list.`;
+          : `No elements matched "${query}". Do NOT just rephrase and call find again — re-searching the same screen rarely helps. Instead: read the visible element list for the control and act on it directly, or scroll to load more content. If you're trying to run a search, the submit may be an icon button — tap the search field, then tap the nearby search/magnifier button (or the element list's search control).`;
       } else {
         output = 'find is not available on this page.';
       }
